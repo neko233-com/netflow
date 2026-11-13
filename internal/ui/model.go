@@ -423,7 +423,7 @@ func (m *Model) setProxy(on bool) {
 
 func (m *Model) setTUN(on bool) {
 	if on && !m.Home.TUNAvailable {
-		m.Notice = "TUN 模式需要服务模式，请先安装服务"
+		m.Notice = "TUN 暂不可用：需要特权服务或管理员权限"
 		m.Home.TUN = false
 		return
 	}

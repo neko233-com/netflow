@@ -2,9 +2,37 @@ package tun
 
 import (
 	"errors"
+	"fmt"
 
 	"go.yaml.in/yaml/v3"
 )
+
+// Compose applies the user's explicit TUN choice to an in-memory profile.
+// The optional device name isolates NetFlow from other applications' adapters.
+func Compose(data []byte, enabled bool, device string) ([]byte, error) {
+	if !enabled {
+		return EnsureDisabled(data)
+	}
+	var config map[string]any
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("配置 YAML 无效: %w", err)
+	}
+	if config == nil {
+		return nil, errors.New("配置必须是 YAML 映射")
+	}
+	if raw, ok := config["tun"]; ok && raw != nil {
+		if _, ok := raw.(map[string]any); !ok {
+			return nil, errors.New("TUN 配置必须是 YAML 映射")
+		}
+	}
+	result := Use(config, true)
+	if device != "" {
+		block := mapAny(result["tun"])
+		block["device"] = device
+		result["tun"] = block
+	}
+	return yaml.Marshal(result)
+}
 
 // EnsureDisabled prevents a subscription from opening a TUN device when the
 // application has no permission to manage it. It leaves the input untouched

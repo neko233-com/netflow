@@ -222,6 +222,10 @@ func (a *App) previewSources(items []profile.CatalogItem, before, after rewrite.
 		if id != active {
 			base = profile.EnsureMixedPort(base, 7897)
 		}
+		base, err = a.applyProfileTUN(base)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 		base, err = a.applyProfileDNS(base, id)
 		if err != nil {
 			return nil, nil, nil, err

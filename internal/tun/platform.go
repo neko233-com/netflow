@@ -1,6 +1,17 @@
 package tun
 
-import "os"
+import (
+	"os"
+	"runtime"
+)
+
+// DeviceName keeps the Windows adapter distinct from other Mihomo clients.
+func DeviceName() string {
+	if runtime.GOOS == "windows" {
+		return "NetFlow"
+	}
+	return ""
+}
 
 // Helper is the privileged side Verge calls a service helper.
 // Available is false when the process must not open a TUN device.
@@ -28,6 +39,9 @@ type gated struct {
 }
 
 func (g *gated) Available() bool { return g != nil && g.allow }
+
+// CheckHost refuses obvious conflicts before the kernel can change routes.
+func (g *gated) CheckHost() error { return checkHost() }
 
 func (g *gated) Current() (bool, error) {
 	if g == nil || g.inner == nil {

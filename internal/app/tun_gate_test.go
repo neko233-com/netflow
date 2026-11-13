@@ -51,7 +51,7 @@ func TestTUNSwitchWithoutServiceLeavesProxy(t *testing.T) {
 	if a.model.Home.TUN || blocked.on {
 		t.Fatalf("tun on model %v controller %v", a.model.Home.TUN, blocked.on)
 	}
-	if !tt.HasText("TUN 模式需要服务模式，请先安装服务") {
+	if !tt.HasText("TUN 暂不可用：需要特权服务或管理员权限") {
 		t.Fatalf("notice %q texts %q", a.model.Notice, tt.Texts())
 	}
 	if !a.model.Home.SystemProxy {

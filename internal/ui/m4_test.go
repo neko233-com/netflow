@@ -179,7 +179,7 @@ func TestTUNToggleNeedsService(t *testing.T) {
 	if err := tt.Click("tun-row"); err != nil {
 		t.Fatal(err)
 	}
-	if m.Home.TUN || calls != 0 || !tt.HasText("TUN 模式需要服务模式，请先安装服务") {
+	if m.Home.TUN || calls != 0 || !tt.HasText("TUN 暂不可用：需要特权服务或管理员权限") {
 		t.Fatalf("tun %v calls %d notice %q", m.Home.TUN, calls, m.Notice)
 	}
 
@@ -217,7 +217,7 @@ func TestTUNToggleNeedsService(t *testing.T) {
 	if err := ht.Click("switch-虚拟网卡模式"); err != nil {
 		t.Fatal(err)
 	}
-	if home.Home.TUN || calls != 0 || !ht.HasText("TUN 模式需要服务模式，请先安装服务") {
+	if home.Home.TUN || calls != 0 || !ht.HasText("TUN 暂不可用：需要特权服务或管理员权限") {
 		t.Fatalf("home tun %v calls %d notice %q", home.Home.TUN, calls, home.Notice)
 	}
 }

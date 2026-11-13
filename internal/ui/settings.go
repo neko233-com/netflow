@@ -45,12 +45,6 @@ func (m *Model) systemSettings(c *mygoui.Context, pal Palette) {
 				m.Dialogs.TUN = true
 			}
 		})
-		proxyOn := m.Home.SystemProxy
-		m.switchLine(c, pal, "系统代理", &proxyOn, "sysproxy-row", func(on bool) { m.setProxy(on) }, func() {
-			if gearButton(c, pal, "系统代理", "sysproxy-gear") {
-				m.Dialogs.Sysproxy = true
-			}
-		})
 		m.switchLine(c, pal, "开机自启", &m.Prefs.AutoLaunch, "launch-row", m.setAutoLaunch, nil)
 		m.switchLine(c, pal, "静默启动", &m.Prefs.SilentStart, "silent-row", func(bool) { m.savePrefs() }, func() {
 			helpMark(c, pal, "help-silent", "程序启动时以后台模式运行，不显示程序面板")

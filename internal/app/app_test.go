@@ -137,7 +137,7 @@ func TestSetTUNRollsBack(t *testing.T) {
 	}
 }
 
-func TestSetTUNWritesVergeDefaultsWithoutDevice(t *testing.T) {
+func TestSetTUNRefusesWhenCoreStopped(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte("mode: rule\nmixed-port: 7897\nipv6: false\n"), 0o644); err != nil {
@@ -152,22 +152,19 @@ func TestSetTUNWritesVergeDefaultsWithoutDevice(t *testing.T) {
 		Core:  core.New(),
 	})
 	a.dir = dir
-	if err := a.SetTUN(true); err != nil {
-		t.Fatal(err)
+	if err := a.SetTUN(true); err == nil {
+		t.Fatal("TUN enabled with stopped core")
 	}
 	on, err := mem.Current()
-	if err != nil || !on {
+	if err != nil || on {
 		t.Fatalf("memory tun %v %v", on, err)
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(body)
-	for _, want := range []string{"enable: true", "mips", "auto-route: true", "any:53", "fake-ip", "198.18.0.1/16"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("missing %q\n%s", want, text)
-		}
+	if strings.Contains(string(body), "enable: true") {
+		t.Fatal("stopped core modified the config")
 	}
 	if a.core.Status().Running {
 		t.Fatal("writing tun config started the kernel")

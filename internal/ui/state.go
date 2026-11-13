@@ -372,7 +372,6 @@ func TrayEvents() []LanguageChoice {
 	return []LanguageChoice{
 		{"main_window", "显示主窗口"},
 		{"tray_menu", "显示托盘菜单"},
-		{"system_proxy", "系统代理"},
 		{"tun", "虚拟网卡模式"},
 		{"disable", "禁用"},
 	}

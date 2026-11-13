@@ -284,74 +284,38 @@ func (m *Model) cycleNodeSort() {
 }
 
 func (m *Model) networkCard(c *mygoui.Context, pal Palette) mygoui.Element {
-	return card(c, pal, "网络设置", "网", TonePrimary, nil, func() {
-		mygoui.Row(c).Gap(8).Children(func() {
-			if modeFace(c, pal, "系统代理", "tab-system", tabID(m.NetTab), false, m.Home.SystemProxy) {
-				m.NetTab = 0
-			}
-			if modeFace(c, pal, "虚拟网卡模式", "tab-tun", tabID(m.NetTab), false, m.Home.TUN && m.Home.TUNAvailable) {
-				m.NetTab = 1
-			}
-		})
+	return card(c, pal, "虚拟网卡", "网", TonePrimary, nil, func() {
 		desc, tip := m.networkDesc()
 		mygoui.Row(c).Padding(8).Radius(4).AlignItems(mygoui.Center).Label("net-desc").Children(func() {
 			mygoui.Text(c, desc).FontSize(12).TextColor(pal.TextMuted).Grow(1)
 			helpMark(c, pal, "help-net", tip)
 		})
-		on := m.Home.SystemProxy
-		label := "系统代理"
-		if m.NetTab == 1 {
-			on = m.Home.TUN
-			label = "虚拟网卡模式"
-		}
+		on := m.Home.TUN
 		mygoui.Row(c).Padding(8).Radius(8).Background(pal.Primary.Alpha(0.04)).AlignItems(mygoui.Center).Children(func() {
 			state := "关"
 			if on {
 				state = "开"
 			}
-			mygoui.Text(c, state+"  "+label).FontSize(15).FontWeight(500).Grow(1)
-			if textButton(c, pal, "设置", label, "net-gear") {
-				if m.NetTab == 0 {
-					m.Dialogs.Sysproxy = true
-				} else {
-					m.Dialogs.TUN = true
-				}
+			mygoui.Text(c, state+"  虚拟网卡模式").FontSize(15).FontWeight(500).Grow(1)
+			if textButton(c, pal, "设置", "虚拟网卡模式", "net-gear") {
+				m.Dialogs.TUN = true
 			}
-			sw := mygoui.Switch(c, &on).Label("switch-" + label)
-			if sw.Changed() {
-				if m.NetTab == 0 {
-					m.setProxy(on)
-				} else {
-					m.setTUN(on)
-				}
+			if mygoui.Switch(c, &on).Label("switch-虚拟网卡模式").Changed() {
+				m.setTUN(on)
 			}
 		})
 	})
 }
 
-func tabID(tab int) string {
-	if tab == 1 {
-		return "tab-tun"
-	}
-	return "tab-system"
-}
-
 func (m *Model) networkDesc() (string, string) {
-	if m.NetTab == 1 {
-		tip := "TUN 模式可以接管所有应用流量，适用于特殊不遵循系统代理设置的应用"
-		if !m.Home.TUNAvailable {
-			return "TUN 模式需要服务模式，请先安装服务", tip
-		}
-		if m.Home.TUN {
-			return "TUN 模式已启用，应用将通过虚拟网卡访问网络", tip
-		}
-		return "TUN 模式已关闭，适用于特殊应用", tip
+	tip := "TUN 模式通过虚拟网卡接管流量。启动前请关闭其他可能冲突的虚拟网卡。"
+	if !m.Home.TUNAvailable {
+		return "TUN 暂不可用：需要特权服务或管理员权限", tip
 	}
-	tip := "修改操作系统的代理设置，如果开启失败，可手动修改操作系统的代理设置"
-	if m.Home.SystemProxy {
-		return "系统代理已启用，您的应用将通过代理访问网络", tip
+	if m.Home.TUN {
+		return "TUN 模式已启用", tip
 	}
-	return "系统代理已关闭，建议大多数用户打开此选项", tip
+	return "TUN 模式已关闭", tip
 }
 
 func (m *Model) modeCard(c *mygoui.Context, pal Palette) mygoui.Element {
@@ -543,7 +507,7 @@ func (m *Model) clashCard(c *mygoui.Context, pal Palette) mygoui.Element {
 	return card(c, pal, "Clash 信息", "C", ToneWarning, nil, func() {
 		rows := [][2]string{
 			{"内核版本", orDash(m.Home.Version)},
-			{"系统代理地址", m.proxyAddr()},
+			{"本地监听地址", m.proxyAddr()},
 			{"混合代理端口", itoa(nonZero(m.Home.MixedPort, 7897))},
 			{"运行时间", FormatUptime(m.Home.Uptime)},
 			{"规则数量", itoa(m.Home.Rules)},

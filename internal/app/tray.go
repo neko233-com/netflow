@@ -97,11 +97,6 @@ func BuildTrayMenu(s TraySnapshot, act TrayActions) *mygo.Menu {
 	}
 	items = append(items,
 		mygo.Separator(),
-		checkItem("system-proxy", "系统代理", s.SystemProxy, func(on bool) {
-			if act.SetProxy != nil {
-				act.SetProxy(on)
-			}
-		}),
 		tunItem(s, act),
 		mygo.Separator(),
 		checkItem("lite", "轻量模式", s.Lightweight, func(on bool) {

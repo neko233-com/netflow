@@ -20,20 +20,19 @@ func TestTrayOrderHasNoDelayTest(t *testing.T) {
 	if strings.Contains(joined, "测试延迟") || strings.Contains(joined, "延迟测试") {
 		t.Fatalf("delay test returned to the tray:\n%s", joined)
 	}
-	want := []string{"仪表板", "出站模式 (规则)", "规则模式", "全局模式", "直连模式", "订阅", "示例", "代理", "Proxy", "香港 01", "系统代理", "TUN 模式", "轻量模式", "打开目录", "配置目录", "内核目录", "日志目录", "应用日志", "内核日志", "更多", "复制环境变量", "关闭全部连接", "重启内核", "重启应用", "NetFlow 版本 v0.2.1", "退出 ⌘Q"}
+	want := []string{"仪表板", "出站模式 (规则)", "规则模式", "全局模式", "直连模式", "订阅", "示例", "代理", "Proxy", "香港 01", "TUN 模式", "轻量模式", "打开目录", "配置目录", "内核目录", "日志目录", "应用日志", "内核日志", "更多", "复制环境变量", "关闭全部连接", "重启内核", "重启应用", "NetFlow 版本 v0.2.1", "退出 ⌘Q"}
 	for _, label := range want {
 		if !strings.Contains(joined, label) {
 			t.Errorf("missing %q\n%s", label, joined)
 		}
 	}
 	top := topLabels(menu.Items())
-	order := []string{"仪表板", "出站模式 (规则)", "订阅", "代理", "系统代理", "TUN 模式", "轻量模式", "打开目录", "更多", "退出 ⌘Q"}
+	order := []string{"仪表板", "出站模式 (规则)", "订阅", "代理", "TUN 模式", "轻量模式", "打开目录", "更多", "退出 ⌘Q"}
 	if strings.Join(top, "|") != strings.Join(order, "|") {
 		t.Fatalf("order %v", top)
 	}
-	proxy := menu.ItemByID("system-proxy")
-	if proxy == nil || !proxy.Checked {
-		t.Fatal("system proxy should be checked")
+	if menu.ItemByID("system-proxy") != nil {
+		t.Fatal("system proxy switch must not be exposed")
 	}
 }
 

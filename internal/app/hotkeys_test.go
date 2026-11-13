@@ -55,7 +55,7 @@ func TestHotkeysRollbackOnConflictAndPersistenceFailure(t *testing.T) {
 	if err := a.applyHotkeys(next); err != nil {
 		t.Fatal(err)
 	}
-	if len(shortcuts.registered) != 3 || a.model.Prefs.HotkeyProxy != "Ctrl+Shift+B" {
+	if len(shortcuts.registered) != 2 || a.model.Prefs.HotkeyProxy != "Ctrl+Shift+B" {
 		t.Fatal("shortcuts not committed")
 	}
 	a.releaseHotkeys()

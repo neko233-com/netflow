@@ -9,12 +9,11 @@ import (
 
 func TestSystemSettingsRestoreSwitchAfterFailure(t *testing.T) {
 	m := NewModel(HomeState{Running: true, TUNAvailable: true})
-	m.Hooks.SetSystemProxy = func(bool) error { return errors.New("proxy denied") }
 	m.Hooks.SetTUN = func(bool) error { return errors.New("tun denied") }
 	m.Hooks.SetAutoLaunch = func(bool) error { return errors.New("startup denied") }
 	m.Router.Replace("/settings")
 	tt := mygoui.NewTester(m.View, WindowWidth, WindowHeight)
-	for _, id := range []string{"sysproxy-row", "tun-row", "launch-row"} {
+	for _, id := range []string{"tun-row", "launch-row"} {
 		if err := tt.Click(id); err != nil {
 			t.Fatal(err)
 		}

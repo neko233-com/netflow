@@ -27,7 +27,7 @@ func TestTrayMenuPreview(t *testing.T) {
 		for i := 0; i < 5 && tt.FramePending(); i++ {
 			tt.Advance(time.Second)
 		}
-		for _, label := range []string{"仪表板", "出站模式 (规则)", "订阅", "系统代理", "TUN 模式", "退出 ⌘Q", "规则模式", "全局模式", "直连模式"} {
+		for _, label := range []string{"仪表板", "出站模式 (规则)", "订阅", "TUN 模式", "退出 ⌘Q", "规则模式", "全局模式", "直连模式"} {
 			if !tt.HasText(label) {
 				t.Errorf("%s menu missing %q", theme.name, label)
 			}

@@ -174,8 +174,6 @@ func (a *App) trayClick() {
 		if a.tray != nil {
 			a.tray.PopUpMenu()
 		}
-	case "system_proxy":
-		_ = a.SetSystemProxy(!a.settings.SystemProxy)
 	case "tun":
 		_ = a.SetTUN(!a.settings.TUN)
 	case "disable":

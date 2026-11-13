@@ -138,15 +138,28 @@ func (a *App) Prepare() error {
 		if err != nil {
 			return err
 		}
-		if settings.SystemProxy != active {
-			settings.SystemProxy = active
+		if active {
+			restore, ok := a.proxy.(interface{ Restore() error })
+			if !ok {
+				return errors.New("无法恢复旧版 NetFlow 系统代理设置")
+			}
+			if err := restore.Restore(); err != nil {
+				return fmt.Errorf("恢复旧版 NetFlow 系统代理设置: %w", err)
+			}
+		}
+		if settings.SystemProxy {
+			settings.SystemProxy = false
 			if err := a.store.Save(settings); err != nil {
 				return err
 			}
 		}
 	}
 	a.settings = settings
-	if settings.TUN && !a.tunAllowed() {
+	var tunPreflightErr error
+	if settings.TUN && a.tunAllowed() {
+		tunPreflightErr = a.checkTUNHost()
+	}
+	if settings.TUN && (!a.tunAllowed() || tunPreflightErr != nil) {
 		settings.TUN = false
 		if err := a.store.Save(settings); err != nil {
 			return fmt.Errorf("关闭不可用的 TUN 设置: %w", err)
@@ -157,6 +170,9 @@ func (a *App) Prepare() error {
 	osName, osVersion := sysinfo.Current()
 	a.model = ui.NewModel(ui.HomeState{ConfigDir: dir, Version: core.Version(), OS: osName, OSVersion: osVersion})
 	a.applySettings()
+	if tunPreflightErr != nil {
+		a.model.Notice = "虚拟网卡未启动: " + tunPreflightErr.Error()
+	}
 	for _, page := range ui.Pages() {
 		if page.Path == a.model.Prefs.StartPage {
 			a.model.Router.Replace(page.Path)
@@ -178,12 +194,10 @@ func (a *App) Prepare() error {
 		return fmt.Errorf("读取内核选项: %w", err)
 	}
 	a.core.SetTransformer(func(base []byte, profileID string) ([]byte, error) {
-		if !a.tunAllowed() {
-			var err error
-			base, err = tun.EnsureDisabled(base)
-			if err != nil {
-				return nil, err
-			}
+		var tunErr error
+		base, tunErr = a.applyProfileTUN(base)
+		if tunErr != nil {
+			return nil, tunErr
 		}
 		var dnsErr error
 		base, dnsErr = a.applyProfileDNS(base, profileID)
@@ -205,7 +219,25 @@ func (a *App) Prepare() error {
 	if err := a.installCurrentProfile(); err != nil {
 		a.model.Notice = err.Error()
 	}
-	if err := a.core.Start(dir); err != nil {
+	startErr := a.core.Start(dir)
+	if startErr != nil && a.settings.TUN {
+		a.settings.TUN, settings.TUN = false, false
+		if a.tun != nil {
+			_ = a.tun.Set(false)
+		}
+		saveErr := a.store.Save(a.settings)
+		fallbackErr := a.core.Start(dir)
+		if fallbackErr == nil {
+			a.model.Notice = "虚拟网卡启动失败，已退回关闭状态: " + startErr.Error()
+			if saveErr != nil {
+				a.model.Notice += "；保存恢复状态失败: " + saveErr.Error()
+			}
+			startErr = nil
+		} else {
+			startErr = errors.Join(startErr, fmt.Errorf("关闭虚拟网卡后启动失败: %w", fallbackErr), saveErr)
+		}
+	}
+	if startErr != nil {
 		if settings.SystemProxy {
 			if restore, ok := a.proxy.(interface{ Restore() error }); ok {
 				if restoreErr := restore.Restore(); restoreErr == nil {
@@ -221,9 +253,9 @@ func (a *App) Prepare() error {
 		a.model.Home.Version = core.Version()
 		a.model.Home.Running = false
 		a.model.Home.ConfigDir = dir
-		a.model.Home.Error = err.Error()
+		a.model.Home.Error = startErr.Error()
 		a.model.Home.SystemProxy = settings.SystemProxy
-		a.model.Home.TUN = settings.TUN
+		a.model.Home.TUN = false
 		a.bindHooks()
 		return nil
 	}
@@ -373,6 +405,14 @@ func (a *App) SetTUN(on bool) error {
 		}
 		return tun.ErrNeedService
 	}
+	if on {
+		if err := a.checkTUNHost(); err != nil {
+			return err
+		}
+	}
+	if !a.serviceReady() {
+		return a.setDirectTUN(on)
+	}
 	if err := a.applyTUNFile(on); err != nil {
 		return err
 	}
@@ -403,6 +443,59 @@ func (a *App) SetTUN(on bool) error {
 	return nil
 }
 
+func (a *App) applyProfileTUN(base []byte) ([]byte, error) {
+	if a.settings.TUN && tunCIBlocked() {
+		return nil, tun.ErrNeedService
+	}
+	if a.settings.TUN && !a.tunAllowed() {
+		return nil, tun.ErrNeedService
+	}
+	return tun.Compose(base, a.settings.TUN, tun.DeviceName())
+}
+
+func (a *App) setDirectTUN(on bool) error {
+	if a == nil || a.core == nil || !a.core.Status().Running || a.store == nil {
+		return errors.New("内核未运行，无法更改虚拟网卡模式")
+	}
+	if on && tunCIBlocked() {
+		return tun.ErrNeedService
+	}
+	previous := a.settings.TUN
+	if previous == on && a.core.Status().TUN == on {
+		return nil
+	}
+	if a.tun != nil {
+		if err := a.tun.Set(on); err != nil {
+			return err
+		}
+	}
+	a.settings.TUN = on
+	rollback := func(cause error) error {
+		a.settings.TUN = previous
+		var errorsFound []error
+		if a.tun != nil {
+			if err := a.tun.Set(previous); err != nil {
+				errorsFound = append(errorsFound, err)
+			}
+		}
+		if err := a.core.Reload(); err != nil {
+			errorsFound = append(errorsFound, err)
+		}
+		if len(errorsFound) > 0 {
+			return errors.Join(cause, fmt.Errorf("恢复虚拟网卡配置失败: %w", errors.Join(errorsFound...)))
+		}
+		return cause
+	}
+	if err := a.core.Reload(); err != nil {
+		return rollback(err)
+	}
+	if err := a.store.Save(a.settings); err != nil {
+		return rollback(err)
+	}
+	a.refreshHome()
+	return nil
+}
+
 func (a *App) applyTUNFile(on bool) error {
 	if a == nil || a.dir == "" {
 		return nil
@@ -424,6 +517,15 @@ func (a *App) applyTUNFile(on bool) error {
 	}
 	if a.core != nil && a.core.Status().Running {
 		return a.core.Reload()
+	}
+	return nil
+}
+
+// checkTUNHost is implemented by the platform controller; injected test
+// controllers do not inspect or change the host network.
+func (a *App) checkTUNHost() error {
+	if checker, ok := a.tun.(interface{ CheckHost() error }); ok {
+		return checker.CheckHost()
 	}
 	return nil
 }
@@ -544,7 +646,10 @@ func (a *App) refreshHome() {
 	}
 	h.ConfigDir = a.dir
 	h.SystemProxy = a.settings.SystemProxy
-	h.TUN = a.settings.TUN
+	h.TUN = st.TUN
+	if a.serviceReady() {
+		h.TUN = a.settings.TUN
+	}
 	h.TUNAvailable = a.tunAllowed()
 	if a.serviceReady() {
 		a.model.ServiceInstalled = true
@@ -562,7 +667,7 @@ func (a *App) refreshHome() {
 	}
 	a.model.Home = h
 	a.model.Prefs.SystemProxy = a.settings.SystemProxy
-	a.model.Prefs.TUN = a.settings.TUN
+	a.model.Prefs.TUN = h.TUN
 	if a.win != nil {
 		a.win.Invalidate()
 	}

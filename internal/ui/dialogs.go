@@ -513,7 +513,6 @@ func (m *Model) hotkeyBody(c *mygoui.Context, pal Palette) {
 		{"规则模式", &p.HotkeyRule},
 		{"全局模式", &p.HotkeyGlobal},
 		{"直连模式", &p.HotkeyDirect},
-		{"切换系统代理", &p.HotkeyProxy},
 		{"切换 TUN 模式", &p.HotkeyTUN},
 		{"轻量模式", &p.HotkeyLite},
 		{"重新激活订阅", &p.HotkeyProfiles},

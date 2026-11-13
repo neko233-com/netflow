@@ -22,7 +22,7 @@ func (a *App) configureHotkeys(p ui.Prefs, persist bool) error {
 	if a.shortcuts == nil {
 		return errors.New("快捷键服务不可用")
 	}
-	entries := []hotkeyBinding{{p.HotkeyDash, "dashboard"}, {p.HotkeyRule, "rule"}, {p.HotkeyGlobal, "global"}, {p.HotkeyDirect, "direct"}, {p.HotkeyProxy, "proxy"}, {p.HotkeyTUN, "tun"}, {p.HotkeyLite, "lite"}, {p.HotkeyProfiles, "profile"}}
+	entries := []hotkeyBinding{{p.HotkeyDash, "dashboard"}, {p.HotkeyRule, "rule"}, {p.HotkeyGlobal, "global"}, {p.HotkeyDirect, "direct"}, {p.HotkeyTUN, "tun"}, {p.HotkeyLite, "lite"}, {p.HotkeyProfiles, "profile"}}
 	desired := make(map[string]hotkeyBinding)
 	var ordered []string
 	for _, entry := range entries {
@@ -103,8 +103,6 @@ func (a *App) invokeHotkey(key string) {
 		a.showMain()
 	case "rule", "global", "direct":
 		err = a.SetMode(binding.action)
-	case "proxy":
-		err = a.SetSystemProxy(!a.settings.SystemProxy)
 	case "tun":
 		err = a.SetTUN(!a.settings.TUN)
 	case "lite":

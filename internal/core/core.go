@@ -35,6 +35,7 @@ type Status struct {
 	AllowLAN     bool
 	IPv6         bool
 	UnifiedDelay bool
+	TUN          bool
 	LogLevel     string
 	Mode         string
 	ConfigDir    string
@@ -167,6 +168,7 @@ func (c *Core) Status() Status {
 	st.AllowLAN = general.AllowLan
 	st.IPv6 = general.IPv6
 	st.UnifiedDelay = general.UnifiedDelay
+	st.TUN = general.Tun.Enable
 	st.LogLevel = general.LogLevel.String()
 	st.Mode = general.Mode.String()
 	return st
@@ -232,6 +234,9 @@ func (c *Core) apply() error {
 		return fmt.Errorf("apply config: %w", err)
 	}
 	actual := executor.GetGeneral()
+	if err := verifyTUNState(cfg.General.Tun.Enable, actual.Tun.Enable); err != nil {
+		return err
+	}
 	for _, port := range []struct {
 		name      string
 		want, got int
@@ -245,6 +250,16 @@ func (c *Core) apply() error {
 	}
 	startExternalController(cfg.Controller.ExternalController, cfg.Controller.Secret, cfg.General.LogLevel == log.DEBUG)
 	c.effective = append(c.effective[:0], data...)
+	return nil
+}
+
+func verifyTUNState(wanted, actual bool) error {
+	if wanted && !actual {
+		return errors.New("虚拟网卡启动失败，请检查管理员权限、驱动及日志")
+	}
+	if !wanted && actual {
+		return errors.New("虚拟网卡未能关闭")
+	}
 	return nil
 }
 

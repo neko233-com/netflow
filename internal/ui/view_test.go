@@ -33,7 +33,7 @@ func demoHome() HomeState {
 func TestHomeShowsKernelStatus(t *testing.T) {
 	m := NewModel(demoHome())
 	tt := mygoui.NewTester(m.View, WindowWidth, WindowHeight)
-	for _, text := range []string{"首页", "内核版本", "1.19.33", "混合代理端口", "7897", "运行时间", "0:00:00", "规则数量", "当前节点", "网络设置", "代理模式", "流量统计", "网站测试", "Apple", "IP 信息", "Clash 信息", "系统信息"} {
+	for _, text := range []string{"首页", "内核版本", "1.19.33", "混合代理端口", "7897", "运行时间", "0:00:00", "规则数量", "当前节点", "虚拟网卡", "代理模式", "流量统计", "网站测试", "Apple", "IP 信息", "Clash 信息", "系统信息"} {
 		if !tt.HasText(text) {
 			t.Errorf("home missing %q", text)
 		}
