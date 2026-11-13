@@ -1,7 +1,7 @@
 # Release checks
 
 Run `pwsh -File scripts/build-release.ps1` from Windows after updating the
-version in `mygo.json` and `internal/ui/pages.go`. It uses the MyGo CLI to
+version in `mygo.json`. It uses the MyGo CLI to
 build Windows amd64 and macOS arm64, checks the binary formats and macOS
 minimum version, makes portable ZIPs with Unix executable permissions, and
 calculates SHA-256 checksums. WiX Toolset 3.14 is required for the per-user MSI.

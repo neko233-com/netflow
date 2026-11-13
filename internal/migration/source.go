@@ -60,13 +60,16 @@ type vergeItem struct {
 	Option   vergeOption      `yaml:"option,omitempty"`
 }
 type Source struct {
-	index     vergeIndex
-	files     map[string][]byte
-	dns       []byte
-	dnsFlags  map[string]bool
-	dnsHosts  []byte
-	originDir string
-	itemByID  map[string]int
+	index            vergeIndex
+	files            map[string][]byte
+	dns              []byte
+	dnsFlags         map[string]bool
+	dnsHosts         []byte
+	originDir        string
+	itemByID         map[string]int
+	providers        map[string]providerSource
+	profileProviders map[string][]profile.VergeProvider
+	providerWarnings map[string]bool
 }
 
 type PreviewProfile struct {
@@ -125,20 +128,16 @@ func ReadVerge(source string) (*Source, error) {
 		if err != nil {
 			return nil, err
 		}
+		safeRoot, err := os.OpenRoot(root)
+		if err != nil {
+			return nil, err
+		}
+		defer safeRoot.Close()
 		read := func(rel string, required bool) error {
-			p := filepath.Join(root, filepath.FromSlash(rel))
-			resolved, e := filepath.EvalSymlinks(p)
+			f, e := safeRoot.Open(filepath.FromSlash(rel))
 			if errors.Is(e, os.ErrNotExist) && !required {
 				return nil
 			}
-			if e != nil {
-				return e
-			}
-			inside, e := filepath.Rel(root, resolved)
-			if e != nil || inside == ".." || filepath.IsAbs(inside) || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
-				return errors.New("迁移源文件越过目录边界")
-			}
-			f, e := os.Open(resolved)
 			if e != nil {
 				return e
 			}
@@ -355,6 +354,9 @@ func ReadVerge(source string) (*Source, error) {
 			}
 		}
 	}
+	if err := s.readProviders(source); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -366,28 +368,6 @@ func (s *Source) Preview() Preview {
 			continue
 		}
 		out.Profiles = append(out.Profiles, PreviewProfile{ID: item.UID, Name: item.Name, Type: item.Type, Active: item.UID == s.index.Current})
-		var providers struct {
-			Rules map[string]struct {
-				Type string `yaml:"type"`
-				Path string `yaml:"path"`
-			} `yaml:"rule-providers"`
-			Proxies map[string]struct {
-				Type string `yaml:"type"`
-				Path string `yaml:"path"`
-			} `yaml:"proxy-providers"`
-		}
-		if yaml.Unmarshal(s.files["profiles/"+item.File], &providers) == nil {
-			for _, p := range providers.Rules {
-				if p.Path != "" || p.Type == "file" {
-					unsupported["文件型规则或代理集合的外部文件未迁入，可能需要重新下载或修正路径"] = true
-				}
-			}
-			for _, p := range providers.Proxies {
-				if p.Path != "" || p.Type == "file" {
-					unsupported["文件型规则或代理集合的外部文件未迁入，可能需要重新下载或修正路径"] = true
-				}
-			}
-		}
 		if item.Option.Script != "" {
 			unsupported["脚本扩展会保留，但不会自动执行"] = true
 		}
@@ -407,7 +387,10 @@ func (s *Source) Preview() Preview {
 			}
 		}
 	}
-	for _, msg := range []string{"脚本扩展会保留，但不会自动执行", "部分数据扩展引用不存在或类型不匹配，未应用", "追加规则在 NetFlow 中位于 MATCH 前，顺序可能与 Verge 不同", "有订阅启用 DNS 覆写，但源配置缺少 DNS 内容", "文件型规则或代理集合的外部文件未迁入，可能需要重新下载或修正路径"} {
+	for msg := range s.providerWarnings {
+		unsupported[msg] = true
+	}
+	for _, msg := range []string{"脚本扩展会保留，但不会自动执行", "部分数据扩展引用不存在或类型不匹配，未应用", "追加规则在 NetFlow 中位于 MATCH 前，顺序可能与 Verge 不同", "有订阅启用 DNS 覆写，但源配置缺少 DNS 内容", "文件型规则或代理集合的外部文件未迁入，可能需要重新下载或修正路径", "HTTP 集合缓存未迁入，将在使用时重新下载"} {
 		if unsupported[msg] {
 			out.Warnings = append(out.Warnings, msg)
 		}

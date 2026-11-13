@@ -181,6 +181,14 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(verge, "profiles"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(verge, "sets"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, contents := range map[string]string{"nodes.yaml": "proxies: [{name: migrated-provider-node, type: direct}]\n", "rules.yaml": "payload: ['+.blocked.netflow-test.example']\n"} {
+		if err := os.WriteFile(filepath.Join(verge, "sets", name), []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(verge, "profiles.yaml"), []byte("current: p1\nitems:\n  - {uid: p1, type: remote, name: Test, url: 'https://example.test/sub', file: p1.yaml, option: {proxies: p2, groups: g1, merge: m1}}\n  - {uid: p2, type: proxies, file: p2.yaml}\n  - {uid: g1, type: groups, file: g1.yaml}\n  - {uid: m1, type: merge, file: m1.yaml}\n  - {uid: Merge, type: merge, file: Merge.yaml}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -196,8 +204,8 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	}
 	for name, contents := range map[string]string{
 		"p2.yaml":    "prepend: [{name: new, type: socks5, server: 127.0.0.1, port: 2}]\ndelete: [old]\n",
-		"g1.yaml":    "append: [{name: Extra, type: select, proxies: [DIRECT]}]\n",
-		"m1.yaml":    "profile: {store-selected: true}\n",
+		"g1.yaml":    "append: [{name: Extra, type: select, proxies: [DIRECT]}, {name: FromSet, type: select, use: [imported]}]\n",
+		"m1.yaml":    "profile: {store-selected: true}\nproxy-providers:\n  imported: {type: file, path: ./sets/nodes.yaml, health-check: {enable: false}}\nrule-providers:\n  blocked: {type: file, behavior: domain, format: yaml, path: ./sets/rules.yaml}\n",
 		"Merge.yaml": "profile: {store-fake-ip: false}\n",
 	} {
 		if err := os.WriteFile(filepath.Join(verge, "profiles", name), []byte(contents), 0600); err != nil {
@@ -293,6 +301,52 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		}
 		if !selectFound || !extraFound || !newFound {
 			t.Fatalf("migrated proxy extensions missing: %s", out)
+		}
+		// The provider belongs to a group added by the imported extension. Its
+		// contents must survive the switch to the privileged TUN worker.
+		callMigration := func(args ...string) ([]byte, error) {
+			c, done := context.WithTimeout(context.Background(), 30*time.Second)
+			defer done()
+			return vmCommand(c, agentExe, append([]string{"--config-dir", migrationTarget}, args...)...).CombinedOutput()
+		}
+		if out, err := callMigration("tun", "on"); err != nil {
+			t.Fatalf("migrated TUN on: %s %v", out, err)
+		}
+		var status agent.Status
+		deadline = time.Now().Add(90 * time.Second)
+		for time.Now().Before(deadline) {
+			out, err = callMigration("status")
+			if err == nil {
+				err = json.Unmarshal(out, &status)
+			}
+			if err == nil && !status.TUNPending && (status.TUN || status.TUNError != "") {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if err != nil || !status.TUN {
+			t.Fatalf("migrated TUN failed: %+v %v", status, err)
+		}
+		out, err = callMigration("groups")
+		if err != nil || !strings.Contains(string(out), "migrated-provider-node") {
+			t.Fatalf("migrated provider unavailable in TUN: %s %v", out, err)
+		}
+		if out, err := callMigration("tun", "off"); err != nil {
+			t.Fatalf("migrated TUN off: %s %v", out, err)
+		}
+		deadline = time.Now().Add(90 * time.Second)
+		for time.Now().Before(deadline) {
+			out, err = callMigration("status")
+			if err == nil {
+				err = json.Unmarshal(out, &status)
+			}
+			if err == nil && !status.TUNPending && !status.TUN {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if err != nil || status.TUNPending || status.TUN {
+			t.Fatalf("migrated TUN did not stop: %+v %v", status, err)
 		}
 	}()
 	t.Log("migrated DNS, hosts, proxy and group extensions applied by installed GUI")

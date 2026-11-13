@@ -2,6 +2,7 @@ package migration
 
 import (
 	"archive/zip"
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -74,6 +75,12 @@ func ExportVerge(target, destination string) (ExportResult, error) {
 		result.Warnings = append(result.Warnings, "临时连接级规则不会迁出")
 	}
 	output := map[string][]byte{}
+	type providerEntry struct {
+		name string
+		data []byte
+	}
+	providerOutput := map[string]providerEntry{}
+	providerConflicts := map[string]bool{}
 	index := vergeIndex{Items: []vergeItem{}}
 	seenArchive := map[string]*Source{}
 	hasScript := false
@@ -92,6 +99,35 @@ func ExportVerge(target, destination string) (ExportResult, error) {
 		}
 		if err = validProfile(body); err != nil {
 			return ExportResult{}, err
+		}
+		if _, err = profile.RemapVergeProviders(body, p.Option.VergeProviderPaths); err != nil {
+			return ExportResult{}, err
+		}
+		for original, managed := range p.Option.VergeProviderPaths {
+			rel := providerRelative(original, "")
+			if rel == "" {
+				result.Warnings = append(result.Warnings, "部分集合的原始路径不适合写入备份，请在 Verge 中检查")
+				continue
+			}
+			file, e := managedFile(target, "verge-providers", filepath.FromSlash(managed))
+			if errors.Is(e, os.ErrNotExist) {
+				continue
+			}
+			if e != nil {
+				return ExportResult{}, e
+			}
+			data, e := os.ReadFile(file)
+			if e != nil {
+				return ExportResult{}, e
+			}
+			key := strings.ToLower(rel)
+			if previous, ok := providerOutput[key]; ok && !bytes.Equal(previous.data, data) {
+				providerConflicts[key] = true
+				delete(providerOutput, key)
+			}
+			if !providerConflicts[key] {
+				providerOutput[key] = providerEntry{name: rel, data: data}
+			}
 		}
 		id, err := randomID()
 		if err != nil {
@@ -298,6 +334,38 @@ func ExportVerge(target, destination string) (ExportResult, error) {
 	output["config.yaml"], err = yaml.Marshal(cfg)
 	if err != nil {
 		return ExportResult{}, err
+	}
+	providerNames := make([]string, 0, len(providerOutput))
+	for name := range providerOutput {
+		providerNames = append(providerNames, name)
+	}
+	for _, name := range providerNames {
+		for parent := filepath.ToSlash(filepath.Dir(name)); parent != "." && parent != "/"; parent = filepath.ToSlash(filepath.Dir(parent)) {
+			if _, ok := providerOutput[parent]; ok {
+				providerConflicts[parent], providerConflicts[name] = true, true
+			}
+		}
+	}
+	for key, entry := range providerOutput {
+		if providerConflicts[key] {
+			continue
+		}
+		conflict := false
+		for existing := range output {
+			a, b := strings.ToLower(existing), strings.ToLower(entry.name)
+			if a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/") {
+				conflict = true
+				break
+			}
+		}
+		if conflict {
+			providerConflicts[key] = true
+			continue
+		}
+		output[entry.name] = entry.data
+	}
+	if len(providerConflicts) > 0 {
+		result.Warnings = append(result.Warnings, "集合文件路径冲突，冲突文件未写入备份")
 	}
 	total := 0
 	for _, b := range output {

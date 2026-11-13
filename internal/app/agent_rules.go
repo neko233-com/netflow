@@ -243,6 +243,10 @@ func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options
 			}
 			hashes[archivePath] = archiveHash
 		}
+		providerHashes, err := a.vergeProviderHashes(id, catalog)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 		base, err = a.applyProfileTUN(base)
 		if err != nil {
 			return nil, nil, nil, err
@@ -267,6 +271,16 @@ func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options
 		}
 		if _, err = executor.ParseWithBytes(effective); err != nil {
 			return nil, nil, nil, fmt.Errorf("profile %q: %w", id, err)
+		}
+		afterHashes, err := a.vergeProviderHashes(id, catalog)
+		if err != nil || !reflect.DeepEqual(providerHashes, afterHashes) {
+			return nil, nil, nil, errors.New("集合文件在预览期间发生变化，请重试")
+		}
+		for path, hash := range providerHashes {
+			if previous, ok := hashes[path]; ok && previous != hash {
+				return nil, nil, nil, errors.New("集合文件在预览期间发生变化，请重试")
+			}
+			hashes[path] = hash
 		}
 		if id == target {
 			beforeRules, afterRules, foundTarget = oldRules, newRules, true

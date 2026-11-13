@@ -3,6 +3,7 @@ package migration
 import (
 	"archive/zip"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -153,10 +154,26 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 	if err = safeTargetDir(target, "verge-imports"); err != nil {
 		return ImportResult{}, err
 	}
+	if err = safeTargetDir(target, "verge-providers"); err != nil {
+		return ImportResult{}, err
+	}
+	root, err := os.OpenRoot(target)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	defer root.Close()
+	var providerCreated []string
+	var providerDir string
 	var created []string
 	committed := false
 	defer func() {
 		if !committed {
+			for _, p := range providerCreated {
+				_ = root.Remove(filepath.FromSlash(p))
+			}
+			if providerDir != "" {
+				_ = root.Remove(filepath.FromSlash(providerDir))
+			}
 			for _, p := range created {
 				_ = os.Remove(p)
 			}
@@ -165,6 +182,36 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 	archiveID, err := randomID()
 	if err != nil {
 		return ImportResult{}, err
+	}
+	providerPaths := map[string]string{}
+	for raw, data := range s.providers {
+		if providerDir == "" {
+			providerDir = "verge-providers/" + archiveID
+			if err := root.Mkdir(filepath.FromSlash(providerDir), 0700); err != nil {
+				providerDir = ""
+				return ImportResult{}, err
+			}
+		}
+		hash := sha256.Sum256([]byte(raw))
+		rel := providerDir + "/" + hex.EncodeToString(hash[:])
+		if data.present {
+			f, e := root.OpenFile(filepath.FromSlash(rel), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			if e != nil {
+				return ImportResult{}, e
+			}
+			providerCreated = append(providerCreated, rel)
+			_, e = f.Write(data.data)
+			if e == nil {
+				e = f.Sync()
+			}
+			if closeErr := f.Close(); e == nil {
+				e = closeErr
+			}
+			if e != nil {
+				return ImportResult{}, e
+			}
+		}
+		providerPaths[raw] = rel
 	}
 	archiveRel := filepath.Join("verge-imports", archiveID+".zip")
 	archivePath := filepath.Join(target, archiveRel)
@@ -196,6 +243,14 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 		created = append(created, full)
 		mapped[v.UID] = id
 		item := profile.CatalogItem{UID: id, Type: v.Type, Name: v.Name, Description: v.Desc, URL: v.URL, Home: v.Home, File: rel, Option: profile.CatalogOption{UpdateInterval: v.Option.UpdateInterval, AllowAutoUpdate: v.Option.AllowAutoUpdate, UseSystemProxy: v.Option.WithProxy, UseClashProxy: v.Option.SelfProxy, UserAgent: v.Option.UserAgent, TimeoutSeconds: v.Option.Timeout, VergeArchive: archiveRel, VergeUID: v.UID}}
+		for _, ref := range s.profileProviders[v.UID] {
+			if destination, ok := providerPaths[ref.Path]; ok {
+				if item.Option.VergeProviderPaths == nil {
+					item.Option.VergeProviderPaths = map[string]string{}
+				}
+				item.Option.VergeProviderPaths[ref.Path] = destination
+			}
+		}
 		ext, e := s.extensions(v.UID)
 		if e != nil {
 			return ImportResult{}, e
