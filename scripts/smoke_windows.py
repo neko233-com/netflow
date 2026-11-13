@@ -44,6 +44,7 @@ def main():
     if sandbox.parent != build or not sandbox.name.startswith("netflow-smoke-"):
         raise RuntimeError("unexpected smoke-test path")
     app = None
+    app_log = None
     origin = None
     try:
         installed = os.environ.get("NETFLOW_SMOKE_INSTALLED") == "1"
@@ -75,8 +76,9 @@ def main():
             encoding="utf-8",
         )
         env = dict(os.environ, NETFLOW_CONFIG_DIR=str(data), GOMAXPROCS="1")
+        app_log = (sandbox / "app.log").open("wb")
         app = subprocess.Popen([str(sandbox / "NetFlow.exe")], env=env, cwd=sandbox,
-                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               stdin=subprocess.DEVNULL, stdout=app_log, stderr=subprocess.STDOUT,
                                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
         deadline = time.monotonic() + 30
         while True:
@@ -85,9 +87,11 @@ def main():
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.5):
                     break
-            except OSError:
+            except OSError as error:
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("proxy port did not start")
+                    app_log.flush()
+                    details = (sandbox / "app.log").read_text(encoding="utf-8", errors="replace")[-2000:]
+                    raise RuntimeError(f"proxy port {port} did not start: {error}; application log: {details}")
                 time.sleep(0.2)
         origin_address = f"127.0.0.1:{origin.server_port}"
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
@@ -240,6 +244,8 @@ def main():
         if app and app.poll() is None:
             app.terminate()
             app.wait(timeout=10)
+        if app_log:
+            app_log.close()
         if origin:
             origin.shutdown()
             origin.server_close()
