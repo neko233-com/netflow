@@ -12,6 +12,9 @@ import (
 func TestMCPRequestsTUN(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := Start(dir, func(_ context.Context, method string, args json.RawMessage) (any, error) {
+		if method == "diagnostics" {
+			return Diagnostics{SchemaVersion: 1, ProfileCount: 2}, nil
+		}
 		var in TunArgs
 		if method != "tun" || json.Unmarshal(args, &in) != nil || in.Enabled == nil || *in.Enabled {
 			t.Error("incorrect TUN request")
@@ -42,5 +45,14 @@ func TestMCPRequestsTUN(t *testing.T) {
 	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "netflow_set_tun", Arguments: map[string]any{"enabled": false}})
 	if err != nil || result.IsError {
 		t.Fatalf("TUN tool failed: %v %+v", err, result)
+	}
+	result, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "netflow_diagnostics", Arguments: map[string]any{}})
+	if err != nil || result.IsError {
+		t.Fatalf("diagnostics tool failed: %v %+v", err, result)
+	}
+	data, err := json.Marshal(result.StructuredContent)
+	var diagnostics Diagnostics
+	if err != nil || json.Unmarshal(data, &diagnostics) != nil || diagnostics.SchemaVersion != 1 || diagnostics.ProfileCount != 2 {
+		t.Fatalf("unexpected MCP diagnostics: %s %v", data, err)
 	}
 }

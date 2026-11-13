@@ -248,7 +248,7 @@ func (m *Model) vergeAdvanced(c *mygoui.Context, pal Palette) {
 		}, nil)
 		clickRow(c, pal, "导出诊断信息", "diag", false, nil, func() {
 			if textButton(c, pal, "复制", "导出诊断信息", "copy-diag") {
-				m.copy("NetFlow " + AppVersion)
+				m.copyDiagnostics()
 			}
 		})
 		ver := "v" + trimV(m.Home.VergeVersion)
@@ -259,6 +259,19 @@ func (m *Model) vergeAdvanced(c *mygoui.Context, pal Palette) {
 			}
 		})
 	})
+}
+
+func (m *Model) copyDiagnostics() {
+	if m.Hooks.Diagnostics == nil {
+		m.Notice = "诊断信息不可用"
+		return
+	}
+	data, err := m.Hooks.Diagnostics()
+	if err != nil {
+		m.Notice = "获取诊断信息失败: " + err.Error()
+		return
+	}
+	m.copy(data)
 }
 
 func (m *Model) openDir(kind string) {

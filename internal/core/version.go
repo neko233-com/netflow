@@ -1,11 +1,41 @@
 package core
 
-import C "github.com/metacubex/mihomo/constant"
+import (
+	"runtime/debug"
+	"strings"
 
-// EmbeddedVersion is the mihomo release this binary vendors.
-// The module's constant.Version stays "1.10.0" unless the linker
-// overrides it, so Start reports EmbeddedVersion in that case.
-const EmbeddedVersion = "1.19.33-netflow.6"
+	C "github.com/metacubex/mihomo/constant"
+)
+
+// EmbeddedVersion is derived from Go's build information so it follows the
+// actual replacement module used by this binary.
+var EmbeddedVersion = embeddedVersion()
+
+func embeddedVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	return mihomoDependencyVersion(info)
+}
+
+func mihomoDependencyVersion(info *debug.BuildInfo) string {
+	if info != nil {
+		for _, dep := range info.Deps {
+			if dep.Path != "github.com/metacubex/mihomo" {
+				continue
+			}
+			if dep.Replace != nil {
+				if dep.Replace.Version == "" || dep.Replace.Version == "(devel)" {
+					return "local"
+				}
+				return strings.TrimPrefix(dep.Replace.Version, "v")
+			}
+			return strings.TrimPrefix(dep.Version, "v")
+		}
+	}
+	return "unknown"
+}
 
 func init() {
 	if C.Version == "" || C.Version == "1.10.0" {

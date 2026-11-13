@@ -120,6 +120,25 @@ def main():
                 time.sleep(0.2)
         if not status["running"] or status["tun"] or status["tun_pending"]:
             raise RuntimeError("unexpected initial core or TUN state")
+        diagnostics = call("diagnostics")
+        if diagnostics["schema_version"] != 1 or diagnostics["app_version"] != VERSION or not diagnostics["core_running"] or diagnostics["tun"]:
+            raise RuntimeError("unexpected diagnostics")
+        build_info = subprocess.check_output(["go", "version", "-m", str(sandbox / "NetFlow.exe")], text=True,
+                                             creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS).splitlines()
+        core_version = None
+        for index, line in enumerate(build_info):
+            fields = line.split()
+            if fields[:2] == ["dep", "github.com/metacubex/mihomo"] and len(fields) >= 3:
+                core_version = fields[2]
+                if index + 1 < len(build_info):
+                    replacement = build_info[index + 1].split()
+                    if len(replacement) >= 3 and replacement[0] == "=>":
+                        core_version = replacement[2]
+                break
+        if not core_version or diagnostics["core_version"] != core_version.removeprefix("v"):
+            raise RuntimeError("reported core version differs from the executable build metadata")
+        if any(key in diagnostics for key in ("config_dir", "profiles", "connections", "token", "tun_error")):
+            raise RuntimeError("diagnostics exposed user data")
         if set(status["tun_stacks"]) != {"system", "mixed", "gvisor", "mips"}:
             raise RuntimeError("release build is missing TUN protocol stacks")
         tun_result = call("tun", "off")
@@ -226,7 +245,7 @@ def main():
             mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n"); mcp.stdin.flush()
             response = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
             names = {item["name"] for item in response["result"]["tools"]}
-            expected = {"netflow_status", "netflow_set_tun", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
+            expected = {"netflow_status", "netflow_diagnostics", "netflow_set_tun", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
                         "netflow_select_proxy", "netflow_set_mode", "netflow_use_profile", "netflow_close_connection",
                         "netflow_migration_preview", "netflow_migration_import", "netflow_migration_export"}
             if names != expected:
@@ -234,12 +253,15 @@ def main():
             response = rpc({"jsonrpc":"2.0", "id":3, "method":"tools/call", "params":{"name":"netflow_status", "arguments":{}}})
             if response.get("result", {}).get("isError") or "error" in response:
                 raise RuntimeError(f"MCP status failed: {response}")
+            response = rpc({"jsonrpc":"2.0", "id":4, "method":"tools/call", "params":{"name":"netflow_diagnostics", "arguments":{}}})
+            if response.get("result", {}).get("isError") or "error" in response or response.get("result", {}).get("structuredContent", {}).get("app_version") != VERSION:
+                raise RuntimeError(f"MCP diagnostics failed: {response}")
             response = rpc({"jsonrpc":"2.0", "id":4, "method":"tools/call", "params":{"name":"netflow_proxy_groups", "arguments":{}}})
             if response.get("result", {}).get("isError") or "error" in response:
                 raise RuntimeError(f"MCP proxy groups failed: {response}")
         finally:
             mcp.terminate(); mcp.wait(timeout=10)
-        print(f"Windows {'installed' if installed else 'portable'}: routing, CLI global/connection rewrites and expiry, MCP handshake/status passed.")
+        print(f"Windows {'installed' if installed else 'portable'}: routing, CLI rewrites and expiry, diagnostics and MCP checks passed.")
     finally:
         if app and app.poll() is None:
             app.terminate()

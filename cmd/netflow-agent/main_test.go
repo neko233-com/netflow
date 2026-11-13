@@ -123,3 +123,25 @@ func TestTUNCommandUsesBridge(t *testing.T) {
 		t.Fatal("invalid TUN argument accepted")
 	}
 }
+
+func TestDiagnosticsCommandUsesBridge(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method != "diagnostics" {
+			t.Errorf("unexpected bridge method: %s", method)
+		}
+		return agent.Diagnostics{SchemaVersion: 1, ProfileCount: 2}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	var output bytes.Buffer
+	if err := run([]string{"--config-dir", dir, "diagnostics"}, bytes.NewReader(nil), &output); err != nil {
+		t.Fatal(err)
+	}
+	var result agent.Diagnostics
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil || result.SchemaVersion != 1 || result.ProfileCount != 2 {
+		t.Fatalf("unexpected diagnostics: %s %v", output.String(), err)
+	}
+}

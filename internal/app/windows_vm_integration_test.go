@@ -28,6 +28,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/neko233-com/netflow"
 	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/coreipc"
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/tun"
@@ -411,6 +412,12 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		data, _ := os.ReadFile(filepath.Join(dir, "gui.log"))
 		t.Fatalf("installed GUI did not start agent: %v status=%+v log=%s", err, s, data)
 	}
+	diagnosticOutput, diagnosticErr := call("diagnostics")
+	var diagnostics agent.Diagnostics
+	if diagnosticErr != nil || json.Unmarshal(diagnosticOutput, &diagnostics) != nil || diagnostics.AppVersion != netflow.Version() || diagnostics.CoreVersion != core.Version() || diagnostics.CoreVersion == "unknown" || !diagnostics.CoreRunning || diagnostics.TUN {
+		t.Fatalf("installed CLI diagnostics mismatch: %s %v", diagnosticOutput, diagnosticErr)
+	}
+	t.Log("installed CLI diagnostics match application and kernel build versions")
 	lookupFake := func(name, server string) string {
 		t.Helper()
 		query := new(dns.Msg)

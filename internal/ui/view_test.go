@@ -554,6 +554,17 @@ func TestSettingsSections(t *testing.T) {
 	}
 }
 
+func TestCopyDiagnosticsUsesService(t *testing.T) {
+	m := DemoModel()
+	var copied string
+	m.Hooks.Diagnostics = func() (string, error) { return `{"schema_version":1}`, nil }
+	m.Hooks.Copy = func(text string) error { copied = text; return nil }
+	m.copyDiagnostics()
+	if copied != `{"schema_version":1}` || m.Notice != "复制成功" {
+		t.Fatalf("diagnostics copy failed: %q %q", copied, m.Notice)
+	}
+}
+
 func TestManualOpensDocs(t *testing.T) {
 	m := NewModel(demoHome())
 	tt := mygoui.NewTester(m.View, WindowWidth, WindowHeight)

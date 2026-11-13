@@ -26,6 +26,29 @@ type Status struct {
 	Overrides     rewrite.State `json:"overrides"`
 }
 
+// Diagnostics deliberately excludes configuration contents, paths, profile
+// names and URLs, endpoint credentials, and connection metadata.
+type Diagnostics struct {
+	SchemaVersion          int    `json:"schema_version"`
+	AppVersion             string `json:"app_version"`
+	CoreVersion            string `json:"core_version"`
+	OS                     string `json:"os"`
+	Architecture           string `json:"architecture"`
+	GoVersion              string `json:"go_version"`
+	CoreRunning            bool   `json:"core_running"`
+	CoreHasError           bool   `json:"core_has_error"`
+	Mode                   string `json:"mode"`
+	TUN                    bool   `json:"tun"`
+	TUNPending             bool   `json:"tun_pending"`
+	TUNHasError            bool   `json:"tun_has_error"`
+	PrivilegedKernel       bool   `json:"privileged_kernel"`
+	ProfileCatalogReadable bool   `json:"profile_catalog_readable"`
+	ProfileCount           int    `json:"profile_count"`
+	ConnectionCount        int    `json:"connection_count"`
+	RewriteRevision        uint64 `json:"rewrite_revision"`
+	UptimeSeconds          int64  `json:"uptime_seconds"`
+}
+
 type Change struct {
 	Scope         string        `json:"scope" jsonschema:"global, profile, or connection"`
 	Operation     string        `json:"operation" jsonschema:"set or clear"`

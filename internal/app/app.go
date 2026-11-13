@@ -1127,6 +1127,7 @@ func (a *App) bindHooks() {
 		SaveProfileMetadata: a.saveProfileMetadata,
 		SetProfileDNS:       a.setProfileDNS,
 		LoadEffectiveConfig: a.effectiveConfig,
+		Diagnostics:         a.diagnosticsText,
 		OpenProfileFile:     a.openProfileFile,
 		SetKernelOption:     a.SetKernelOption,
 		SetKernelPorts:      a.SetKernelPorts,

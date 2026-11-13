@@ -47,6 +47,7 @@ type Hooks struct {
 	SaveProfileMetadata        func(form ProfileForm) error
 	SetProfileDNS              func(id string, enabled bool, text string) error
 	LoadEffectiveConfig        func() (string, error)
+	Diagnostics                func() (string, error)
 	OpenProfileFile            func(id string) error
 	CreateProfileAsync         func(form ProfileForm, done func(error))
 	LoadRewrite                func(scope, profileID string) (rewrite.Layer, error)

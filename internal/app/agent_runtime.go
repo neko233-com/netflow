@@ -62,6 +62,8 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 	switch method {
 	case "status":
 		value, callErr = a.agentStatus()
+	case "diagnostics":
+		value = a.diagnostics()
 	case "preview":
 		var change agent.Change
 		if callErr = decodeStrict(args, &change); callErr == nil {

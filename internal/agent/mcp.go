@@ -23,6 +23,12 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "status", nil, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_diagnostics", Description: "Return an allowlisted diagnostics summary without subscription URLs, file paths, error text, tokens, or connection metadata.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, Diagnostics, error) {
+			var out Diagnostics
+			err := client.Call(ctx, "diagnostics", nil, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_set_tun", Description: "Request TUN on or off; enabling may show a Windows administrator consent prompt. If pending, poll netflow_status for tun_pending and tun_error."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in TunArgs) (*mcp.CallToolResult, TunResult, error) {
 			var out TunResult
