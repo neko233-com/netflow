@@ -10,7 +10,10 @@ import "sync"
 type Settings struct {
 	Enabled bool
 	HTTP    string
-	SOCKS   string
+	HTTPS   string
+	// SchemeSpecific means HTTP and HTTPS describe independent OS settings.
+	SchemeSpecific bool
+	SOCKS          string
 }
 
 // Controller reads and applies system proxy settings.

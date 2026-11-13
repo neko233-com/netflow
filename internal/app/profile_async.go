@@ -38,9 +38,6 @@ func (a *App) updateProfileViaProxyAsync(uid string, done func(error)) {
 }
 
 func (a *App) subscriptionClient(opt profile.CatalogOption, forceProxy bool) (*http.Client, error) {
-	if opt.UseSystemProxy && !opt.UseClashProxy && !forceProxy {
-		return nil, fmt.Errorf("此版本尚不支持订阅使用系统代理，请改用内核代理")
-	}
 	timeout := opt.TimeoutSeconds
 	if timeout == 0 {
 		timeout = 20
@@ -62,7 +59,22 @@ func (a *App) subscriptionClient(opt profile.CatalogOption, forceProxy bool) (*h
 		}
 		addr = net.JoinHostPort("127.0.0.1", strconv.Itoa(st.MixedPort))
 	}
-	return newSubscriptionClient(addr, time.Duration(timeout)*time.Second, opt.AcceptInvalid), nil
+	client := newSubscriptionClient(addr, time.Duration(timeout)*time.Second, opt.AcceptInvalid)
+	if opt.UseSystemProxy && !opt.UseClashProxy && !forceProxy {
+		if a.proxy == nil {
+			return nil, fmt.Errorf("系统代理不可用")
+		}
+		settings, err := a.proxy.Current()
+		if err != nil {
+			return nil, fmt.Errorf("读取系统代理失败: %w", err)
+		}
+		proxy, err := manualSystemProxy(settings)
+		if err != nil {
+			return nil, err
+		}
+		client.Transport.(*http.Transport).Proxy = proxy
+	}
+	return client, nil
 }
 
 func newSubscriptionClient(proxyAddr string, timeout time.Duration, acceptInvalid bool) *http.Client {

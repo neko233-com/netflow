@@ -169,10 +169,12 @@ func ParseScutil(out string) Settings {
 	socksOn := vals["SOCKSEnable"] == "1"
 	var st Settings
 	st.Enabled = httpOn || httpsOn || socksOn
+	st.SchemeSpecific = true
 	if httpOn {
 		st.HTTP = joinProxy(vals["HTTPProxy"], vals["HTTPPort"])
-	} else if httpsOn {
-		st.HTTP = joinProxy(vals["HTTPSProxy"], vals["HTTPSPort"])
+	}
+	if httpsOn {
+		st.HTTPS = joinProxy(vals["HTTPSProxy"], vals["HTTPSPort"])
 	}
 	if socksOn {
 		st.SOCKS = joinProxy(vals["SOCKSProxy"], vals["SOCKSPort"])

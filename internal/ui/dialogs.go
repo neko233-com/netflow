@@ -218,10 +218,9 @@ func (m *Model) profileForm(c *mygoui.Context, pal Palette) {
 					}
 				})
 				m.boolLine(c, "通过内核代理下载和更新", &m.Form.Clash)
+				m.boolLine(c, "通过系统手动代理下载和更新", &m.Form.SysProxy)
+				mygoui.Text(c, "不使用 PAC、自动检测或绕过列表；同时启用时优先使用内核代理。").FontSize(12).TextColor(pal.TextMuted)
 				m.boolLine(c, "允许无效证书（不安全）", &m.Form.Insecure)
-				if m.Form.SysProxy {
-					m.boolLine(c, "使用系统代理（尚不支持，请关闭）", &m.Form.SysProxy)
-				}
 				m.boolLine(c, "自动更新订阅", &m.Form.Auto)
 				mygoui.Row(c).FillWidth().AlignItems(mygoui.Center).Gap(8).Children(func() {
 					mygoui.Text(c, "更新间隔（分钟）").FontSize(13).Grow(1)

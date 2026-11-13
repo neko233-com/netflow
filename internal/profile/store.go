@@ -147,9 +147,6 @@ func (s *Store) UpdateMetadata(uid, name, description string, options *CatalogOp
 				if len(options.UserAgent) > 512 || strings.ContainsAny(options.UserAgent, "\r\n") {
 					return errors.New("用户代理无效或超过 512 字节")
 				}
-				if options.UseSystemProxy && !options.UseClashProxy {
-					return errors.New("此版本尚不支持订阅使用系统代理，请改用内核代理")
-				}
 				old := &f.Items[i].Option
 				old.AllowAutoUpdate, old.UpdateInterval = options.AllowAutoUpdate, options.UpdateInterval
 				old.TimeoutSeconds, old.UserAgent = options.TimeoutSeconds, options.UserAgent

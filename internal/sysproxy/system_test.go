@@ -33,6 +33,13 @@ func TestParseScutil(t *testing.T) {
 	if !got.Enabled || got.HTTP != "127.0.0.1:7897" || got.SOCKS != "127.0.0.1:7897" {
 		t.Fatalf("%+v", got)
 	}
+	if !got.SchemeSpecific || got.HTTPS != "127.0.0.1:7897" {
+		t.Fatalf("missing HTTPS proxy: %+v", got)
+	}
+	httpsOnly := ParseScutil("HTTPSEnable : 1\nHTTPSProxy : 127.0.0.1\nHTTPSPort : 7777\n")
+	if !httpsOnly.Enabled || !httpsOnly.SchemeSpecific || httpsOnly.HTTP != "" || httpsOnly.HTTPS != "127.0.0.1:7777" {
+		t.Fatalf("HTTPS-only proxy: %+v", httpsOnly)
+	}
 	off := ParseScutil("HTTPEnable : 0\nHTTPSEnable : 0\nSOCKSEnable : 0\n")
 	if off.Enabled {
 		t.Fatal("disabled proxy parsed as on")
