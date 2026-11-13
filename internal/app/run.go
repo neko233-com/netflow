@@ -102,6 +102,7 @@ func (a *App) ready(quitting *bool) {
 	})
 	a.model.Hooks.ImportURLAsync = a.importURLAsync
 	a.model.Hooks.UpdateProfileAsync = a.updateProfileAsync
+	a.model.Hooks.UpdateProfileViaProxyAsync = a.updateProfileViaProxyAsync
 	a.model.Hooks.BrowseProfiles = a.browseProfiles
 	a.model.Hooks.CreateProfileAsync = a.createProfileAsync
 	a.probeSlots = make(chan struct{}, 4)

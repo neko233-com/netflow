@@ -2,7 +2,12 @@ package app
 
 import (
 	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/neko233-com/netflow/internal/ui"
@@ -23,6 +28,44 @@ func (a *App) importURLAsync(raw string, done func(error)) {
 			}
 		})
 	}()
+}
+
+// The explicit proxy action never falls back to a direct connection.
+func (a *App) updateProfileViaProxyAsync(uid string, done func(error)) {
+	raw, err := a.profileURL(uid)
+	if err != nil {
+		done(err)
+		return
+	}
+	if a.core == nil {
+		done(fmt.Errorf("内核未运行，无法通过代理更新"))
+		return
+	}
+	st := a.core.Status()
+	if !st.Running || st.MixedPort <= 0 {
+		done(fmt.Errorf("内核混合端口不可用，无法通过代理更新"))
+		return
+	}
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(st.MixedPort))
+	go func() {
+		body, err := fetchProfileThroughProxy(raw, addr)
+		mygo.RunOnMain(func() {
+			if err == nil {
+				err = a.updateProfileData(uid, raw, body)
+			}
+			done(err)
+			if a.win != nil {
+				a.win.Invalidate()
+			}
+		})
+	}()
+}
+
+func fetchProfileThroughProxy(raw, addr string) ([]byte, error) {
+	proxy := &url.URL{Scheme: "http", Host: addr}
+	transport := &http.Transport{Proxy: http.ProxyURL(proxy)}
+	defer transport.CloseIdleConnections()
+	return fetchProfileWithClient(raw, &http.Client{Timeout: 20 * time.Second, Transport: transport})
 }
 
 func (a *App) updateProfileAsync(uid string, done func(error)) {

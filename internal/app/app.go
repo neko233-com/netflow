@@ -1286,6 +1286,10 @@ func (a *App) restartCore() error {
 
 func fetchProfile(raw string) ([]byte, error) {
 	client := &http.Client{Timeout: 20 * time.Second}
+	return fetchProfileWithClient(raw, client)
+}
+
+func fetchProfileWithClient(raw string, client *http.Client) ([]byte, error) {
 	resp, err := client.Get(raw)
 	if err != nil {
 		return nil, err

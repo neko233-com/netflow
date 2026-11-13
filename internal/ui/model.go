@@ -16,56 +16,57 @@ import (
 // Hooks are the app services a page calls. Nil hooks update the model only,
 // which is what the headless tests do.
 type Hooks struct {
-	SetSystemProxy           func(on bool) error
-	SetAutoLaunch            func(on bool) error
-	SetLightweight           func(on bool) error
-	ChainAvailable           func() bool
-	SystemDark               func() bool
-	ApplyHotkeys             func(Prefs) error
-	SetTUN                   func(on bool) error
-	SetMode                  func(mode string) error
-	SelectProxy              func(group, node string) error
-	UseProfile               func(uid string) error
-	CloseConnection          func(id string) error
-	CloseAllConnections      func() error
-	ClearClosed              func()
-	RefreshRules             func() ([]rules.Item, []rules.Provider)
-	UpdateRuleProvider       func(name string) error
-	UpdateRuleProviderAsync  func(name string, done func(error))
-	UpdateProxyProviderAsync func(name string, done func(error))
-	SetLogPaused             func(paused bool)
-	ClearLogs                func()
-	ImportURL                func(url string) error
-	ImportURLAsync           func(url string, done func(error))
-	ImportLocal              func(path string) error
-	DeleteProfile            func(uid string) error
-	UpdateProfile            func(uid string) error
-	UpdateProfileAsync       func(uid string, done func(error))
-	BrowseProfiles           func() ([]string, error)
-	SaveProfileMetadata      func(form ProfileForm) error
-	CreateProfileAsync       func(form ProfileForm, done func(error))
-	LoadRewrite              func(scope, profileID string) (rewrite.Layer, error)
-	PreviewRewrite           func(change agent.Change) (agent.Preview, error)
-	ApplyRewrite             func(id string) (agent.ApplyResult, error)
-	SetKernelOption          func(name string, value any) error
-	SetKernelPorts           func(PortSet) error
-	SavePrefs                func(Prefs) error
-	OpenDir                  func(kind string)
-	RestartCore              func() error
-	BrowseScript             func() (string, error)
-	Copy                     func(text string) error
-	Quit                     func()
-	TestSite                 func(url string) error
-	ProbeSite                func(url string) (int, error)
-	ProbeSiteAsync           func(url string, done func(int, error))
-	SaveSites                func([]SiteTest) error
-	InstallService           func() error
-	UninstallService         func() error
-	CheckUnlock              func(name string) (status, region string, ms int, err error)
-	CheckUnlockAsync         func(name string, done func(string, string, int, error))
-	TestProxyAsync           func(group, name, url string, done func(int, error))
-	CheckUpdateAsync         func(done func(update.Result, error))
-	QueryIPAsync             func(done func(ipinfo.Result, error))
+	SetSystemProxy             func(on bool) error
+	SetAutoLaunch              func(on bool) error
+	SetLightweight             func(on bool) error
+	ChainAvailable             func() bool
+	SystemDark                 func() bool
+	ApplyHotkeys               func(Prefs) error
+	SetTUN                     func(on bool) error
+	SetMode                    func(mode string) error
+	SelectProxy                func(group, node string) error
+	UseProfile                 func(uid string) error
+	CloseConnection            func(id string) error
+	CloseAllConnections        func() error
+	ClearClosed                func()
+	RefreshRules               func() ([]rules.Item, []rules.Provider)
+	UpdateRuleProvider         func(name string) error
+	UpdateRuleProviderAsync    func(name string, done func(error))
+	UpdateProxyProviderAsync   func(name string, done func(error))
+	SetLogPaused               func(paused bool)
+	ClearLogs                  func()
+	ImportURL                  func(url string) error
+	ImportURLAsync             func(url string, done func(error))
+	ImportLocal                func(path string) error
+	DeleteProfile              func(uid string) error
+	UpdateProfile              func(uid string) error
+	UpdateProfileAsync         func(uid string, done func(error))
+	UpdateProfileViaProxyAsync func(uid string, done func(error))
+	BrowseProfiles             func() ([]string, error)
+	SaveProfileMetadata        func(form ProfileForm) error
+	CreateProfileAsync         func(form ProfileForm, done func(error))
+	LoadRewrite                func(scope, profileID string) (rewrite.Layer, error)
+	PreviewRewrite             func(change agent.Change) (agent.Preview, error)
+	ApplyRewrite               func(id string) (agent.ApplyResult, error)
+	SetKernelOption            func(name string, value any) error
+	SetKernelPorts             func(PortSet) error
+	SavePrefs                  func(Prefs) error
+	OpenDir                    func(kind string)
+	RestartCore                func() error
+	BrowseScript               func() (string, error)
+	Copy                       func(text string) error
+	Quit                       func()
+	TestSite                   func(url string) error
+	ProbeSite                  func(url string) (int, error)
+	ProbeSiteAsync             func(url string, done func(int, error))
+	SaveSites                  func([]SiteTest) error
+	InstallService             func() error
+	UninstallService           func() error
+	CheckUnlock                func(name string) (status, region string, ms int, err error)
+	CheckUnlockAsync           func(name string, done func(string, string, int, error))
+	TestProxyAsync             func(group, name, url string, done func(int, error))
+	CheckUpdateAsync           func(done func(update.Result, error))
+	QueryIPAsync               func(done func(ipinfo.Result, error))
 }
 
 // Model is the main window: a sidebar and the page it shows.

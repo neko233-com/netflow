@@ -395,8 +395,7 @@ func (m *Model) profileMenu(menu *mygoui.Menu, p *ProfileItem) {
 			m.updateProfile(p.UID)
 		}
 		if menu.Item("更新（代理）").Chosen() {
-			m.Notice = "更新订阅尚未实现"
-			m.Notice = "通过代理更新订阅尚未实现"
+			m.updateProfileViaProxy(p.UID)
 		}
 	}
 	if menu.Item("删除").Chosen() {
@@ -410,6 +409,26 @@ func (m *Model) profileMenu(menu *mygoui.Menu, p *ProfileItem) {
 	_ = groups
 	_ = merge
 	_ = script
+}
+
+func (m *Model) updateProfileViaProxy(uid string) {
+	if m.ProfileBusy {
+		return
+	}
+	if m.Hooks.UpdateProfileViaProxyAsync == nil {
+		m.Notice = "通过内核代理更新订阅不可用"
+		return
+	}
+	m.ProfileBusy = true
+	m.Notice = "正在通过内核代理更新订阅…"
+	m.Hooks.UpdateProfileViaProxyAsync(uid, func(err error) {
+		m.ProfileBusy = false
+		if err != nil {
+			m.Notice = err.Error()
+		} else {
+			m.Notice = "订阅已通过内核代理更新"
+		}
+	})
 }
 
 func (m *Model) updateProfile(uid string) {
