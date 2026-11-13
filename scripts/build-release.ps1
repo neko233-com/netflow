@@ -21,6 +21,8 @@ try {
     $env:GOOS = 'darwin'; $env:GOARCH = 'arm64'
     & go build -o resources/darwin-arm64/netflow-agent ./cmd/netflow-agent
     if ($LASTEXITCODE -ne 0) { throw 'macOS agent build failed' }
+    & go build -o resources/darwin-arm64/netflow-kernel-worker ./cmd/netflow-kernel-worker
+    if ($LASTEXITCODE -ne 0) { throw 'macOS kernel worker build failed' }
     Remove-Item Env:GOOS,Env:GOARCH
     $buildArgs = @('tool', 'mygo', 'build', '-platform', 'windows/amd64,darwin/arm64', '-skip-dmg', '-skip-installer', '-o', $buildDir)
     & go @buildArgs

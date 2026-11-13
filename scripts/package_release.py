@@ -75,7 +75,7 @@ def zip_tree(source, target, prefix, executable, exclude=()):
                 continue
             info = zipfile.ZipInfo(f"{prefix}/{rel}", (2026, 1, 1, 0, 0, 0))
             info.create_system = 3
-            mode = 0o755 if rel in (executable, "Contents/Resources/netflow-agent") else 0o644
+            mode = 0o755 if rel in (executable, "Contents/Resources/netflow-agent", "Contents/Resources/netflow-kernel-worker") else 0o644
             info.external_attr = (stat.S_IFREG | mode) << 16
             info.compress_type = zipfile.ZIP_DEFLATED
             with file.open("rb") as src, z.open(info, "w", force_zip64=True) as dst:
@@ -84,9 +84,11 @@ def zip_tree(source, target, prefix, executable, exclude=()):
         bad = z.testzip()
         if bad:
             raise ValueError(f"invalid ZIP entry: {bad}")
-        entry = z.getinfo(f"{prefix}/{executable}")
-        if executable.startswith("Contents/MacOS/") and not ((entry.external_attr >> 16) & 0o111):
-            raise ValueError("the macOS executable lost its execute bit")
+        if executable.startswith("Contents/MacOS/"):
+            for program in (executable, "Contents/Resources/netflow-agent", "Contents/Resources/netflow-kernel-worker"):
+                entry = z.getinfo(f"{prefix}/{program}")
+                if not ((entry.external_attr >> 16) & 0o111):
+                    raise ValueError(f"the macOS program lost its execute bit: {program}")
 
 
 def main():
@@ -98,6 +100,8 @@ def main():
     check_tun_build_tags(windows / "NetFlow.exe")
     check_tun_build_tags(windows / "netflow-kernel-worker.exe")
     check_macho(mac / "Contents/Resources/netflow-agent")
+    check_macho(mac / "Contents/Resources/netflow-kernel-worker")
+    check_tun_build_tags(mac / "Contents/Resources/netflow-kernel-worker")
     with (mac / "Contents" / "Info.plist").open("rb") as f:
         plist = plistlib.load(f)
     executable = "Contents/MacOS/" + plist["CFBundleExecutable"]
