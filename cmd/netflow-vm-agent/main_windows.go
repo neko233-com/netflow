@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 const base = "http://10.233.42.1:18765"
@@ -190,12 +191,51 @@ func post(r result) error {
 	}
 	return nil
 }
+func event(name string) {
+	resp, err := httpClient.Post(base+"/v1/event", "text/plain", strings.NewReader(name))
+	if err == nil {
+		_ = resp.Body.Close()
+	}
+}
+func disposableGuest() bool {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DESCRIPTION\System\BIOS`, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	manufacturer, _, err := k.GetStringValue("SystemManufacturer")
+	_ = k.Close()
+	if err != nil || !strings.Contains(strings.ToLower(manufacturer), "qemu") {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "wmic.exe", "diskdrive", "get", "model", "/value")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000 | 0x00004000}
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	count, matches := 0, false
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(line, "\x00", "")))
+		if strings.HasPrefix(line, "model=") {
+			count++
+			matches = strings.Contains(line, "qemu")
+		}
+	}
+	return count == 1 && matches
+}
 func main() {
+	if !disposableGuest() {
+		return
+	}
 	// Setup initially logs in with UAC disabled. The OEM bootstrap enables it
 	// and reboots; do not run the test until this process has a filtered token.
 	if windows.GetCurrentProcessToken().IsElevated() {
+		event("agent-elevated")
 		return
 	}
+	event("agent-ready")
 	root := filepath.Join(os.Getenv("LOCALAPPDATA"), "NetFlowVMVerify")
 	if !filepath.IsAbs(root) || os.MkdirAll(root, 0700) != nil {
 		return

@@ -71,6 +71,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
+        if self.path == "/v1/event":
+            try:
+                length = int(self.headers.get("Content-Length", "-1"))
+                if not 1 <= length <= 64:
+                    raise ValueError("invalid event size")
+                event = self.rfile.read(length).decode("ascii")
+                if event not in {"setup-start", "setup-refused", "setup-reboot", "agent-elevated", "agent-ready"}:
+                    raise ValueError("invalid event")
+                print("Windows guest: " + event, flush=True)
+                return self.send_bytes(200, b"OK", "text/plain")
+            except (ValueError, UnicodeDecodeError):
+                return self.send_error(400)
         if self.path != "/v1/result":
             return self.send_error(404)
         try:
