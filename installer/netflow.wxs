@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="NetFlow" Language="1033" Version="$(var.ProductVersion)" Manufacturer="NetFlow contributors" UpgradeCode="D07A8D86-8BB9-4E9A-A122-5C482CE27E08">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" InstallPrivileges="limited" Platform="x64" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of NetFlow is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Icon Id="NetFlowIcon" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="NetFlowIcon" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/neko233-com/netflow" />
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="NetFlow" />
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppMenuFolder" Name="NetFlow" />
+      </Directory>
+    </Directory>
+    <DirectoryRef Id="AppMenuFolder">
+      <Component Id="ApplicationShortcut" Guid="7DA7E2F3-9BCE-4F64-9D68-5E8DB0A34E85">
+        <Shortcut Id="StartMenuShortcut" Name="NetFlow" Description="NetFlow proxy client" Target="[INSTALLFOLDER]NetFlow.exe" WorkingDirectory="INSTALLFOLDER" Icon="NetFlowIcon" />
+        <RemoveFolder Id="RemoveMenuFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\NetFlow" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+    <Feature Id="MainFeature" Title="NetFlow" Level="1">
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentRef Id="ApplicationShortcut" />
+    </Feature>
+  </Product>
+</Wix>

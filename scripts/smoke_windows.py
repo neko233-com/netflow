@@ -1,9 +1,10 @@
 """Run the Windows portable ZIP against a local HTTP origin, without OS proxy changes."""
 
 import http.client
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import queue
 from pathlib import Path
 import shutil
 import socket
@@ -41,9 +42,16 @@ def main():
     app = None
     origin = None
     try:
-        with zipfile.ZipFile(ARCHIVE) as z, z.open("NetFlow/NetFlow.exe") as src, (sandbox / "NetFlow.exe").open("wb") as dst:
-            shutil.copyfileobj(src, dst)
-        origin = HTTPServer(("127.0.0.1", 0), Origin)
+        installed = os.environ.get("NETFLOW_SMOKE_INSTALLED") == "1"
+        if installed:
+            for name in ("NetFlow.exe", "netflow-agent.exe"):
+                shutil.copyfile(Path(os.environ["LOCALAPPDATA"]) / "Programs" / "NetFlow" / name, sandbox / name)
+        else:
+            with zipfile.ZipFile(ARCHIVE) as z:
+                for name in ("NetFlow.exe", "netflow-agent.exe"):
+                    with z.open("NetFlow/" + name) as src, (sandbox / name).open("wb") as dst:
+                        shutil.copyfileobj(src, dst)
+        origin = ThreadingHTTPServer(("127.0.0.1", 0), Origin)
         thread = threading.Thread(target=origin.serve_forever, daemon=True)
         thread.start()
         with socket.socket() as reservation:
@@ -60,7 +68,7 @@ def main():
         env = dict(os.environ, NETFLOW_CONFIG_DIR=str(data), GOMAXPROCS="1")
         app = subprocess.Popen([str(sandbox / "NetFlow.exe")], env=env, cwd=sandbox,
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               creationflags=subprocess.CREATE_NO_WINDOW)
+                               creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
         deadline = time.monotonic() + 30
         while True:
             if app.poll() is not None:
@@ -80,7 +88,123 @@ def main():
         conn.close()
         if response.status != 200 or payload != b"netflow-release-smoke-ok":
             raise RuntimeError(f"proxy returned {response.status}, {payload!r}")
-        print("Portable Windows binary forwarded a local HTTP request successfully.")
+        agent = str(sandbox / "netflow-agent.exe")
+        def call(*args, data=None):
+            result = subprocess.run([agent, "--config-dir", str(data_dir), *args], input=data, capture_output=True,
+                                    text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+            if result.returncode:
+                raise RuntimeError(f"agent {args}: {result.stderr}")
+            return json.loads(result.stdout)
+        data_dir = data
+        deadline = time.monotonic() + 15
+        while True:
+            try:
+                status = call("status")
+                break
+            except RuntimeError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.2)
+        if not status["running"]:
+            raise RuntimeError("agent reported core stopped")
+        change = {"scope":"global", "operation":"set", "layer":{"prepend":["IP-CIDR,127.0.0.1/32,REJECT"]}}
+        proposal = call("preview", data=json.dumps(change))
+        call("apply", proposal["proposal_id"])
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            conn.request("GET", f"http://{origin_address}/", headers={"Host": origin_address})
+            blocked = conn.getresponse()
+            if blocked.status == 200:
+                raise RuntimeError("REJECT rule did not block the local request")
+        except (ConnectionResetError, http.client.RemoteDisconnected):
+            pass
+        finally:
+            conn.close()
+        proposal = call("preview", data=json.dumps({"scope":"global", "operation":"clear"}))
+        call("apply", proposal["proposal_id"])
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", f"http://{origin_address}/", headers={"Host": origin_address})
+        response = conn.getresponse()
+        if response.status != 200 or response.read() != b"netflow-release-smoke-ok":
+            raise RuntimeError("clearing the rule did not restore routing")
+        conn.close()
+        tunnel = socket.create_connection(("127.0.0.1", port), timeout=5)
+        tunnel.sendall(f"CONNECT {origin_address} HTTP/1.1\r\nHost: {origin_address}\r\n\r\n".encode())
+        header = b""
+        while b"\r\n\r\n" not in header:
+            chunk = tunnel.recv(4096)
+            if not chunk:
+                raise RuntimeError("CONNECT ended before response")
+            header += chunk
+        if b" 200 " not in header.split(b"\r\n", 1)[0]:
+            raise RuntimeError(f"CONNECT failed: {header!r}")
+        deadline = time.monotonic() + 5
+        while True:
+            status = call("status")
+            matches = [item for item in status.get("connections", []) if item.get("DestinationPort") == str(origin.server_port)]
+            if matches:
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("active CONNECT absent from status")
+            time.sleep(0.1)
+        connection_id = matches[0]["ID"]
+        proposal = call("preview", data=json.dumps({"scope":"connection", "operation":"set", "connection_id":connection_id, "policy":"REJECT", "ttl_seconds":5}))
+        call("apply", proposal["proposal_id"])
+        tunnel.sendall(f"GET / HTTP/1.1\r\nHost: {origin_address}\r\nConnection: close\r\n\r\n".encode())
+        existing_response = b""
+        while True:
+            chunk = tunnel.recv(4096)
+            if not chunk:
+                break
+            existing_response += chunk
+        tunnel.close()
+        if b"netflow-release-smoke-ok" not in existing_response:
+            raise RuntimeError("existing connection was unexpectedly interrupted")
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            conn.request("GET", f"http://{origin_address}/", headers={"Host": origin_address})
+            if conn.getresponse().status == 200:
+                raise RuntimeError("connection-derived rule did not reject matching new traffic")
+        except (ConnectionResetError, http.client.RemoteDisconnected):
+            pass
+        finally:
+            conn.close()
+        deadline = time.monotonic() + 12
+        while call("status")["overrides"].get("connections"):
+            if time.monotonic() >= deadline:
+                raise RuntimeError("connection rule did not expire")
+            time.sleep(0.25)
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", f"http://{origin_address}/", headers={"Host": origin_address})
+        response = conn.getresponse()
+        if response.status != 200 or response.read() != b"netflow-release-smoke-ok":
+            raise RuntimeError("routing was not restored after expiry")
+        conn.close()
+        mcp = subprocess.Popen([agent, "--config-dir", str(data_dir), "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+        lines = queue.Queue()
+        threading.Thread(target=lambda: [lines.put(line) for line in mcp.stdout], daemon=True).start()
+        def rpc(payload):
+            mcp.stdin.write(json.dumps(payload) + "\n"); mcp.stdin.flush()
+            try:
+                return json.loads(lines.get(timeout=15))
+            except queue.Empty:
+                raise RuntimeError("MCP response timed out")
+        try:
+            response = rpc({"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{"protocolVersion":"2025-06-18", "capabilities":{}, "clientInfo":{"name":"smoke", "version":"1"}}})
+            if "result" not in response:
+                raise RuntimeError(f"MCP initialize failed: {response}")
+            mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n"); mcp.stdin.flush()
+            response = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
+            names = {item["name"] for item in response["result"]["tools"]}
+            if names != {"netflow_status", "netflow_preview_rewrite", "netflow_apply_rewrite"}:
+                raise RuntimeError(f"unexpected MCP tools: {names}")
+            response = rpc({"jsonrpc":"2.0", "id":3, "method":"tools/call", "params":{"name":"netflow_status", "arguments":{}}})
+            if response.get("result", {}).get("isError") or "error" in response:
+                raise RuntimeError(f"MCP status failed: {response}")
+        finally:
+            mcp.terminate(); mcp.wait(timeout=10)
+        print(f"Windows {'installed' if installed else 'portable'}: routing, CLI global/connection rewrites and expiry, MCP handshake/status passed.")
     finally:
         if app and app.poll() is None:
             app.terminate()

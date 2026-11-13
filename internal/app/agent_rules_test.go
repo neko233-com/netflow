@@ -94,4 +94,42 @@ func TestAgentApplyValidatesPersistsAndRollsBack(t *testing.T) {
 	if len(rules) < 2 || rules[0].Payload != "example.test" {
 		t.Fatalf("core not restored: %+v", rules)
 	}
+
+	p1, err := a.profiles.ImportLocal("one.yaml", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := a.profiles.ImportLocal("two.yaml", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.UseProfile(p1.UID); err != nil {
+		t.Fatal(err)
+	}
+	profileChange := agent.Change{Scope: "profile", Operation: "set", ProfileID: p2.UID, Layer: rewrite.Layer{Prepend: []string{"DOMAIN,p2.test,DIRECT"}}}
+	profileProposal, err := a.agentPreview(profileChange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := a.agentApply(profileProposal.ProposalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Active {
+		t.Fatal("inactive profile reported as active")
+	}
+	if err := a.UseProfile(p2.UID); err != nil {
+		t.Fatal(err)
+	}
+	rules = a.core.Rules()
+	if len(rules) < 3 || rules[0].Payload != "p2.test" || rules[1].Payload != "example.test" {
+		t.Fatalf("profile layering: %+v", rules)
+	}
+	if err := a.UseProfile(p1.UID); err != nil {
+		t.Fatal(err)
+	}
+	rules = a.core.Rules()
+	if len(rules) < 2 || rules[0].Payload != "example.test" {
+		t.Fatalf("profile override leaked: %+v", rules)
+	}
 }

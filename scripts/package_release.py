@@ -14,12 +14,12 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parent.parent
-BUILD = ROOT / "build" / "release-artifacts"
 VERSION = json.loads((ROOT / "mygo.json").read_text(encoding="utf-8"))["version"]
+BUILD = ROOT / "build" / f"release-artifacts-{VERSION}"
 OUT = ROOT / "build" / "releases" / VERSION
 
 
-def check_pe(path, require_amd64=True):
+def check_pe(path, require_amd64=True, subsystem=2):
     with path.open("rb") as f:
         header = f.read(64)
         if header[:2] != b"MZ":
@@ -31,8 +31,8 @@ def check_pe(path, require_amd64=True):
     magic = struct.unpack_from("<H", pe, 24)[0]
     if pe[:4] != b"PE\0\0" or machine not in (0x14C, 0x8664) or (require_amd64 and (machine != 0x8664 or magic != 0x20B)):
         raise ValueError(f"unexpected PE architecture: {path}")
-    if magic not in (0x10B, 0x20B) or struct.unpack_from("<H", pe, 24 + 68)[0] != 2:
-        raise ValueError(f"not a Windows GUI executable: {path}")
+    if magic not in (0x10B, 0x20B) or struct.unpack_from("<H", pe, 24 + 68)[0] != subsystem:
+        raise ValueError(f"unexpected Windows executable subsystem: {path}")
 
 
 def check_macho(path):
@@ -67,7 +67,7 @@ def zip_tree(source, target, prefix, executable, exclude=()):
                 continue
             info = zipfile.ZipInfo(f"{prefix}/{rel}", (2026, 1, 1, 0, 0, 0))
             info.create_system = 3
-            mode = 0o755 if rel == executable else 0o644
+            mode = 0o755 if rel in (executable, "Contents/Resources/netflow-agent") else 0o644
             info.external_attr = (stat.S_IFREG | mode) << 16
             info.compress_type = zipfile.ZIP_DEFLATED
             with file.open("rb") as src, z.open(info, "w", force_zip64=True) as dst:
@@ -85,6 +85,8 @@ def main():
     windows = BUILD / "windows-amd64"
     mac = BUILD / "darwin-arm64" / "NetFlow.app"
     check_pe(windows / "NetFlow.exe")
+    check_pe(windows / "netflow-agent.exe", subsystem=3)
+    check_macho(mac / "Contents/Resources/netflow-agent")
     with (mac / "Contents" / "Info.plist").open("rb") as f:
         plist = plistlib.load(f)
     executable = "Contents/MacOS/" + plist["CFBundleExecutable"]
@@ -117,7 +119,12 @@ def main():
         mac_zip = stage / f"NetFlow-{VERSION}-macos-arm64.zip"
         zip_tree(windows, win_zip, "NetFlow", "NetFlow.exe", exclude=[p.name for p in installers])
         zip_tree(mac, mac_zip, "NetFlow.app", executable)
-        artifacts = [win_zip, mac_zip]
+        msi_source = ROOT / "build" / "msi" / VERSION / f"NetFlow-{VERSION}-windows-amd64.msi"
+        if msi_source.read_bytes()[:8] != bytes.fromhex("d0cf11e0a1b11ae1"):
+            raise ValueError("invalid MSI compound file header")
+        msi = stage / msi_source.name
+        shutil.copyfile(msi_source, msi)
+        artifacts = [win_zip, mac_zip, msi]
         if installers:
             check_pe(installers[0], require_amd64=False)
             installer = stage / f"NetFlow-{VERSION}-windows-amd64-setup.exe"
