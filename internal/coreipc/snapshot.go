@@ -1,6 +1,7 @@
 package coreipc
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -20,9 +21,14 @@ func snapshotDirectory(root string) ([]StageFile, error) {
 	if !filepath.IsAbs(root) {
 		return nil, errors.New("配置目录必须是绝对路径")
 	}
+	safeRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer safeRoot.Close()
 	var files []StageFile
 	var total int64
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -50,14 +56,20 @@ func snapshotDirectory(root string) ([]StageFile, error) {
 		}
 		if !strings.ContainsAny(rel, `/\`) {
 			switch strings.ToLower(rel) {
-			case "cache.db", "netflow-worker-cache.db", ".netflow.lock", ".netflow-stage-owner":
+			case "cache.db", "netflow-worker-cache.db", ".netflow.lock", ".netflow-stage-owner", "profiles.json", "settings.json", "kernel-options.json", "agent-rules.json":
 				return nil
 			}
+		}
+		// Verge's private recovery archive is interpreted by the desktop before
+		// composition. The kernel needs the resulting configuration and provider
+		// files, never the original archive containing subscription credentials.
+		if isVergeRecoveryArchive(rel) {
+			return nil
 		}
 		if len(files) >= maxStageFiles {
 			return errors.New("配置目录文件过多，无法安全启动特权内核")
 		}
-		f, err := os.Open(path)
+		f, err := safeRoot.Open(rel)
 		if err != nil {
 			return fmt.Errorf("读取配置文件 %s: %w", rel, err)
 		}
@@ -80,4 +92,17 @@ func snapshotDirectory(root string) ([]StageFile, error) {
 		return nil, err
 	}
 	return files, nil
+}
+
+func isVergeRecoveryArchive(rel string) bool {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "verge-imports") {
+		return false
+	}
+	name := parts[1]
+	if len(name) != 37 || name[0] != 'v' || !strings.EqualFold(name[33:], ".zip") {
+		return false
+	}
+	_, err := hex.DecodeString(name[1:33])
+	return err == nil
 }

@@ -198,7 +198,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	}
 	migrationDNS := reservation.LocalAddr().String()
 	_ = reservation.Close()
-	vergeConfig := fmt.Sprintf("mixed-port: 0\nport: 0\nsocks-port: 0\nipv6: false\nproxies: [{name: old, type: socks5, server: 127.0.0.1, port: 2}]\nproxy-groups: [{name: Select, type: select, proxies: [old, DIRECT]}]\ndns:\n  enable: true\n  listen: '%s'\n  enhanced-mode: redir-host\n  use-hosts: true\n  nameserver: ['127.0.0.1:3']\n  fallback: ['127.0.0.1:2']\nrules: ['MATCH,DIRECT']\n", migrationDNS)
+	vergeConfig := fmt.Sprintf("mixed-port: 0\nport: 0\nsocks-port: 0\nipv6: false\nproxies: [{name: old, type: socks5, server: 127.0.0.1, port: 2}]\nproxy-groups: [{name: Select, type: select, proxies: [old, DIRECT]}]\ndns:\n  enable: true\n  listen: '%s'\n  enhanced-mode: redir-host\n  use-hosts: true\n  nameserver: ['127.0.0.1:3']\n  fallback: ['127.0.0.1:2']\nrules: ['RULE-SET,blocked,REJECT', 'MATCH,DIRECT']\n", migrationDNS)
 	if err := os.WriteFile(filepath.Join(verge, "profiles", "p1.yaml"), []byte(vergeConfig), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -330,6 +330,10 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		out, err = callMigration("groups")
 		if err != nil || !strings.Contains(string(out), "migrated-provider-node") {
 			t.Fatalf("migrated provider unavailable in TUN: %s %v", out, err)
+		}
+		out, err = callMigration("rules")
+		if err != nil || !strings.Contains(string(out), "blocked") {
+			t.Fatalf("migrated rule provider unavailable in TUN: %s %v", out, err)
 		}
 		if out, err := callMigration("tun", "off"); err != nil {
 			t.Fatalf("migrated TUN off: %s %v", out, err)

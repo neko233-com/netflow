@@ -2,7 +2,7 @@
   "name": "NetFlow",
   "slug": "netflow",
   "identifier": "com.neko233.netflow",
-  "version": "0.2.31-alpha.1",
+  "version": "0.2.32-alpha.1",
   "copyright": "NetFlow contributors; includes Clash Go by ChaoGPT",
   "main": "./cmd/clash-go",
   "out": "build",
