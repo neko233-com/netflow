@@ -20,7 +20,7 @@ func (m *Model) profilePage(c *mygoui.Context, pal Palette) {
 			m.updateAllProfiles()
 		}
 		if textButton(c, pal, "配置", "查看运行时订阅", "runtime") {
-			m.Dialogs.Runtime = true
+			m.openRuntimeConfig()
 		}
 		if textButton(c, pal, "激活", "重新激活订阅", "reactivate") {
 			if m.CurrentProfile == "" {
@@ -367,7 +367,7 @@ func (m *Model) profileMenu(menu *mygoui.Menu, p *ProfileItem) {
 		}
 	}
 	if menu.Item("编辑文件").Chosen() {
-		m.Dialogs.Runtime = true
+		m.openProfileFile(p.UID)
 	}
 	if menu.Item("编辑规则覆写").Chosen() {
 		m.openRuleEditor("profile", p.UID)
@@ -389,9 +389,7 @@ func (m *Model) profileMenu(menu *mygoui.Menu, p *ProfileItem) {
 		script.Disabled(true)
 	}
 	if menu.Item("打开文件").Chosen() {
-		if m.Hooks.OpenDir != nil {
-			m.Hooks.OpenDir("profile")
-		}
+		m.openProfileFile(p.UID)
 	}
 	if remote {
 		if menu.Item("更新").Chosen() {

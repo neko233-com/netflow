@@ -54,6 +54,7 @@ type Core struct {
 	dir       string
 	profileID string
 	transform func([]byte, string) ([]byte, error)
+	effective []byte
 }
 
 // SetTransformer installs an in-memory transformation; the original config
@@ -127,7 +128,21 @@ func (c *Core) Stop() error {
 	closeProviders()
 	releaseListeners()
 	c.running = false
+	c.effective = nil
 	return nil
+}
+
+// EffectiveConfig returns the last successfully applied composed YAML.
+func (c *Core) EffectiveConfig() ([]byte, error) {
+	if c == nil {
+		return nil, errors.New("core is nil")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.running || len(c.effective) == 0 {
+		return nil, errors.New("内核未运行或没有可用配置")
+	}
+	return append([]byte(nil), c.effective...), nil
 }
 
 // Status reports the kernel. Version is set even when the core is stopped.
@@ -229,6 +244,7 @@ func (c *Core) apply() error {
 		}
 	}
 	startExternalController(cfg.Controller.ExternalController, cfg.Controller.Secret, cfg.General.LogLevel == log.DEBUG)
+	c.effective = append(c.effective[:0], data...)
 	return nil
 }
 

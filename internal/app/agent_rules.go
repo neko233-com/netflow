@@ -185,10 +185,9 @@ func (a *App) previewSources(items []profile.CatalogItem, before, after rewrite.
 			continue
 		}
 		if all || item.UID == target {
-			file := filepath.Join(a.dir, item.File)
-			rel, err := filepath.Rel(filepath.Join(a.dir, "profiles"), file)
-			if err != nil || rel == "." || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-				return nil, nil, nil, errors.New("invalid profile path")
+			file, err := profileFilePath(a.dir, item.File)
+			if err != nil {
+				return nil, nil, nil, err
 			}
 			sources[item.UID] = file
 		}

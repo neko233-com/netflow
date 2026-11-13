@@ -241,7 +241,7 @@ func (m *Model) vergeAdvanced(c *mygoui.Context, pal Palette) {
 		clickRow(c, pal, "备份设置", "backup", false, func() { m.Dialogs.Backup = true }, func() {
 			helpMark(c, pal, "help-backup", "支持本地或 WebDAV 方式备份配置文件")
 		})
-		clickRow(c, pal, "当前配置", "runtime-row", false, func() { m.Dialogs.Runtime = true }, nil)
+		clickRow(c, pal, "当前配置", "runtime-row", false, func() { m.openRuntimeConfig() }, nil)
 		clickRow(c, pal, "配置目录", "conf-dir", false, func() { m.openDir("config") }, func() {
 			helpMark(c, pal, "help-conf", "如果软件运行异常，备份并删除此文件夹下的所有文件，重启软件")
 		})

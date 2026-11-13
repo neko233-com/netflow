@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/neko233-com/netflow/internal/profile"
@@ -70,10 +69,9 @@ func (a *App) updateProfileData(uid, expectedURL string, body []byte, headers ht
 	if err = validateProfile(body); err != nil {
 		return err
 	}
-	file := filepath.Join(a.dir, f.Items[index].File)
-	inside, err := filepath.Rel(filepath.Join(a.dir, "profiles"), file)
-	if err != nil || inside == "." || inside == ".." || filepath.IsAbs(inside) || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
-		return errors.New("订阅文件路径无效")
+	file, err := profileFilePath(a.dir, f.Items[index].File)
+	if err != nil {
+		return err
 	}
 	oldFile, err := os.ReadFile(file)
 	if err != nil {

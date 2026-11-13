@@ -592,7 +592,9 @@ func (a *App) installCurrentProfile() error {
 	if rel == "" {
 		return nil
 	}
-	body, err := os.ReadFile(filepath.Join(a.dir, rel))
+	filePath, err := profileFilePath(a.dir, rel)
+	if err != nil { return err }
+	body, err := os.ReadFile(filePath)
 	if err != nil {
 		return err
 	}
@@ -967,6 +969,8 @@ func (a *App) bindHooks() {
 		ApplyRewrite:        a.agentApply,
 		SaveProfileMetadata: a.saveProfileMetadata,
 		SetProfileDNS:       a.setProfileDNS,
+		LoadEffectiveConfig: a.effectiveConfig,
+		OpenProfileFile:     a.openProfileFile,
 		SetKernelOption:     a.SetKernelOption,
 		SetKernelPorts:      a.SetKernelPorts,
 		SavePrefs:           a.savePrefs,

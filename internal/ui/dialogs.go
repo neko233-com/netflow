@@ -401,6 +401,9 @@ func (m *Model) simpleDialog(c *mygoui.Context, pal Palette, open *bool, title s
 	if !*open && (title == "主题设置" || title == "界面设置" || title == "杂项设置") {
 		m.savePrefs()
 	}
+	if !*open && title == "当前配置" {
+		m.RuntimeConfig = ""
+	}
 }
 
 func (m *Model) themeBody(c *mygoui.Context, pal Palette) {
@@ -755,9 +758,8 @@ func (m *Model) dnsBody(c *mygoui.Context, pal Palette) {
 
 func (m *Model) runtimeBody(c *mygoui.Context, pal Palette) {
 	chip(c, pal, "只读", ToneMuted, false)
-	mygoui.Text(c, "无法在只读模式下编辑").FontSize(12).TextColor(pal.TextMuted)
-	mygoui.Text(c, "mode: "+m.Home.Mode).FontSize(13)
-	mygoui.Text(c, "mixed-port: "+itoa(nonZero(m.Home.MixedPort, 7897))).FontSize(13)
+	mygoui.Text(c, "上次成功应用的合成配置可能包含订阅和节点凭据，请勿随意分享。外部控制接口受安全策略限制。").FontSize(12).TextColor(pal.Warning)
+	mygoui.TextArea(c, &m.RuntimeConfig).FillWidth().Height(320).ReadOnly(true).Label("runtime-config")
 }
 
 func (m *Model) liteBody(c *mygoui.Context, pal Palette) {
