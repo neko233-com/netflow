@@ -3,6 +3,8 @@
 package coreipc
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -12,12 +14,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/metacubex/bbolt"
+	"github.com/miekg/dns"
 	"github.com/neko233-com/netflow/internal/tun"
-	"time"
 )
 
 func dockerState(t *testing.T, args ...string) string {
@@ -92,6 +96,32 @@ func TestDockerWorkerCleansTUNAfterDisconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lockedCache.Close()
+	peer := os.Getenv("NETFLOW_TUN_TEST_PEER")
+	var upstreamCalls atomic.Int32
+	var upstreamAddress string
+	if peer != "" {
+		if ip := net.ParseIP(peer); ip == nil || ip.To4() == nil || ip.IsLoopback() {
+			t.Fatal("invalid isolated peer address")
+		}
+		packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		upstreamAddress = packet.LocalAddr().String()
+		server := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, query *dns.Msg) {
+			upstreamCalls.Add(1)
+			response := new(dns.Msg)
+			response.SetReply(query)
+			for _, q := range query.Question {
+				if q.Qtype == dns.TypeA && q.Name == "netflow-test.example." {
+					response.Answer = append(response.Answer, &dns.A{Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 30}, A: net.ParseIP(peer).To4()})
+				}
+			}
+			_ = w.WriteMsg(response)
+		})}
+		go func() { _ = server.ActivateAndServe() }()
+		defer server.Shutdown()
+	}
 	config := `mixed-port: 0
 port: 0
 socks-port: 0
@@ -106,16 +136,15 @@ tun:
 rules:
   - MATCH,DIRECT
 `
+	if upstreamAddress != "" {
+		config += fmt.Sprintf("\ndns:\n  nameserver: ['%s']\n", upstreamAddress)
+	}
 	composed, err := tun.Compose([]byte(config), true, "netflow-ipc0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	config = string(composed)
-	peer := os.Getenv("NETFLOW_TUN_TEST_PEER")
 	if peer != "" {
-		if ip := net.ParseIP(peer); ip == nil || ip.To4() == nil || ip.IsLoopback() {
-			t.Fatal("invalid isolated peer address")
-		}
 		config = strings.Replace(config, "MATCH,DIRECT", "MATCH,REJECT", 1)
 	}
 	if err = os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
@@ -160,6 +189,32 @@ rules:
 		resp.Body.Close()
 		if err != nil || resp.StatusCode != 200 || string(body) != "OK" {
 			t.Fatalf("peer response: %d %q %v", resp.StatusCode, body, err)
+		}
+		query := new(dns.Msg)
+		query.SetQuestion("netflow-test.example.", dns.TypeA)
+		dnsClient := &dns.Client{Net: "udp", Timeout: 3 * time.Second}
+		answer, _, err := dnsClient.Exchange(query, "8.8.8.8:53")
+		if err != nil || len(answer.Answer) == 0 {
+			t.Fatalf("TUN DNS hijack: %v", err)
+		}
+		record, ok := answer.Answer[0].(*dns.A)
+		if !ok || !strings.HasPrefix(record.A.String(), "198.18.") {
+			t.Fatalf("unexpected fake IP: %+v", answer.Answer)
+		}
+		fakeIP := record.A.String()
+		fakeTransport := &http.Transport{Proxy: nil, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(fakeIP, "8080"))
+		}}
+		fakeClient := &http.Client{Timeout: 5 * time.Second, Transport: fakeTransport}
+		fakeResponse, err := fakeClient.Get("http://netflow-test.example:8080/")
+		if err != nil {
+			t.Fatalf("Fake-IP forwarding: %v", err)
+		}
+		fakeBody, err := io.ReadAll(fakeResponse.Body)
+		fakeResponse.Body.Close()
+		fakeTransport.CloseIdleConnections()
+		if err != nil || string(fakeBody) != "OK" || upstreamCalls.Load() == 0 {
+			t.Fatalf("Fake-IP upstream resolution failed: %q, calls=%d, err=%v", fakeBody, upstreamCalls.Load(), err)
 		}
 		_, up, down := client.Connections()
 		if up == 0 || down == 0 {
