@@ -8,5 +8,7 @@ if not "%DISKLINES%"=="1" exit /b 1
 reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA /t REG_DWORD /d 1 /f >nul
 reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin /t REG_DWORD /d 0 /f >nul
 reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v NetFlowVMVerify /t REG_SZ /d "C:\OEM\netflow-vm-agent.exe" /f >nul
-reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce" /v NetFlowVMEnableUAC /t REG_SZ /d "shutdown.exe /r /t 15 /c NetFlowValidationSetup" /f >nul
+rem FirstLogonCommands may run after RunOnce was already processed. Reboot
+rem directly so UAC is active before the persistent guest agent is started.
+shutdown.exe /r /t 45 /c NetFlowValidationSetup >nul
 exit /b 0
