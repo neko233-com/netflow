@@ -1,0 +1,19 @@
+/build/
+/.mygo/
+/screenshots/
+coverage.out
+*.out
+.DS_Store
+
+# Local indexes, credentials, user data, and generated binaries.
+/.codegraph233.json
+/.codegraph233/
+/logs/
+.env
+.env.*
+*.exe
+*.db
+/config.yaml
+/settings.json
+/profiles.json
+/profiles/

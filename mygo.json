@@ -1,0 +1,17 @@
+{
+  "name": "NetFlow",
+  "slug": "netflow",
+  "identifier": "com.neko233.netflow",
+  "version": "0.1.0",
+  "copyright": "NetFlow contributors; includes Clash Go by ChaoGPT",
+  "main": "./cmd/clash-go",
+  "out": "build",
+  "linux": {
+    "webview": false,
+    "comment": "Clash Verge Rev compatible client"
+  },
+  "macos": {
+    "minimumSystemVersion": "12.0",
+    "signingIdentity": "-"
+  }
+}

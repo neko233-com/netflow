@@ -1,0 +1,400 @@
+package ui
+
+import (
+	"strings"
+	"time"
+
+	mygoui "github.com/egoist/mygo/ui"
+)
+
+func (m *Model) profilePage(c *mygoui.Context, pal Palette) {
+	m.page(c, pal, "订阅", func() {
+		if m.Batch {
+			m.batchTools(c, pal)
+			return
+		}
+		if textButton(c, pal, "批量", "批量操作", "batch") {
+			m.Batch = true
+		}
+		if textButton(c, pal, "更新", "更新所有订阅", "update-all") {
+			m.Notice = "批量更新订阅尚未实现"
+		}
+		if textButton(c, pal, "配置", "查看运行时订阅", "runtime") {
+			m.Dialogs.Runtime = true
+		}
+		if textButton(c, pal, "激活", "重新激活订阅", "reactivate") {
+			m.Notice = "重新激活订阅尚未实现"
+		}
+	}, func() {
+		zone := mygoui.Column(c).FillWidth().Padding(10).Gap(12)
+		zone.Children(func() {
+			m.importRow(c, pal)
+			w, _ := c.Size()
+			cols := ProfileColumns(contentWidth(w, m.sidebarWidth()))
+			mygoui.Grid(c).Columns(cols).Gap(8).Children(func() {
+				for i := range m.Profiles {
+					m.profileItem(c, pal, i)
+				}
+			})
+			mygoui.Box(c).FillWidth().Height(1).Label("profile-rule").Background(pal.Divider)
+			mygoui.Grid(c).Columns(2).Gap(8).Children(func() {
+				m.extensionCard(c, pal, "全局扩展覆写配置", "Merge")
+				m.extensionCard(c, pal, "全局扩展脚本", "Script")
+			})
+		})
+		if files := zone.DroppedFiles(); len(files) > 0 {
+			m.dropProfiles(files)
+		}
+	})
+}
+
+func (m *Model) importRow(c *mygoui.Context, pal Palette) {
+	mygoui.Row(c).Height(36).Gap(8).AlignItems(mygoui.Center).Children(func() {
+		field := mygoui.TextInput(c, &m.ProfileURL).Placeholder("订阅文件链接").Grow(1).Label("profile-url")
+		if field.Submitted() {
+			m.importProfile(c)
+		}
+		if strings.TrimSpace(m.ProfileURL) == "" {
+			if textButton(c, pal, "粘贴", "粘贴", "paste-url") {
+				m.ProfileURL = c.ReadClipboard()
+			}
+		} else if textButton(c, pal, "清除", "清除", "clear-url") {
+			m.ProfileURL = ""
+		}
+		disabled := strings.TrimSpace(m.ProfileURL) == "" || m.ProfileBusy
+		b := mygoui.ButtonBase(c.Key("do-import")).Height(28).Padding(0, 10).Radius(6).Label("do-import")
+		if disabled {
+			b.Background(pal.TextMuted.Alpha(0.18)).TextColor(pal.TextMuted)
+		} else {
+			b.Background(pal.Primary).TextColor(pal.OnPrimary)
+		}
+		b.Disabled(disabled)
+		b.Children(func() { mygoui.Text(c, "导入").FontSize(13) })
+		if b.Clicked() {
+			m.importProfile(c)
+		}
+		if filledButton(c, pal, "新建", "profile-new", false) {
+			m.Form = ProfileForm{Open: true, Type: "remote", Timeout: 60, Interval: 1440, Auto: true}
+		}
+	})
+}
+
+func (m *Model) importProfile(c *mygoui.Context) {
+	raw := strings.TrimSpace(m.ProfileURL)
+	if !ValidSubscriptionURL(raw) {
+		m.Notice = "无效的订阅链接，请输入以 http:// 或 https:// 开头的地址"
+		return
+	}
+	if m.Hooks.ImportURL != nil {
+		if err := m.Hooks.ImportURL(raw); err != nil {
+			m.Notice = err.Error()
+			return
+		}
+		m.ProfileURL = ""
+		m.Notice = "订阅已成功导入，如未显示请重启应用"
+		return
+	}
+	m.addProfile(ProfileItem{
+		UID:     "u" + itoa(len(m.Profiles)+1),
+		Name:    URLHost(raw),
+		URL:     raw,
+		Type:    "remote",
+		Updated: time.Now(),
+		Option:  ProfileOption{UpdateInterval: 1440, AllowAutoUpdate: true, TimeoutSeconds: 60},
+	})
+	m.ProfileURL = ""
+	m.Notice = "订阅已成功导入，如未显示请重启应用"
+	_ = c
+}
+
+func (m *Model) addProfile(item ProfileItem) {
+	if item.UID == "" {
+		item.UID = "u" + itoa(len(m.Profiles)+1)
+	}
+	m.Profiles = append(m.Profiles, item)
+	if m.CurrentProfile == "" {
+		m.CurrentProfile = item.UID
+		m.Home.Profile = homeFrom(item)
+	}
+}
+
+func homeFrom(item ProfileItem) *HomeProfile {
+	return &HomeProfile{
+		Name: item.Name, URL: item.URL, Home: item.Home, Updated: item.Updated,
+		Used: item.Used, Total: item.Total, Expire: item.Expire,
+	}
+}
+
+func (m *Model) dropProfiles(files []string) {
+	for _, f := range files {
+		low := strings.ToLower(f)
+		if !strings.HasSuffix(low, ".yaml") && !strings.HasSuffix(low, ".yml") {
+			m.Notice = "仅支持 YAML 文件"
+			continue
+		}
+		if m.Hooks.ImportLocal != nil {
+			if err := m.Hooks.ImportLocal(f); err != nil {
+				m.Notice = err.Error()
+			} else {
+				m.Notice = "本地配置已导入"
+			}
+			continue
+		}
+		name := f
+		if i := strings.LastIndexAny(name, `/\`); i >= 0 {
+			name = name[i+1:]
+		}
+		m.addProfile(ProfileItem{Name: name, Type: "local", Updated: time.Now()})
+	}
+}
+
+func (m *Model) batchTools(c *mygoui.Context, pal Palette) {
+	n := 0
+	for _, p := range m.Profiles {
+		if p.Checked {
+			n++
+		}
+	}
+	all := n == len(m.Profiles) && n > 0
+	label := "全选"
+	if all {
+		label = "取消全选"
+	} else if n > 0 {
+		label = "半选"
+	}
+	if textButton(c, pal, label, label, "batch-all") {
+		for i := range m.Profiles {
+			m.Profiles[i].Checked = !all
+		}
+	}
+	del := mygoui.ButtonBase(c.Key("batch-delete")).Height(28).Padding(0, 8).Disabled(n == 0).Label("batch-delete")
+	del.Children(func() { mygoui.Text(c, "删除").FontSize(13).TextColor(pal.Error) })
+	if del.Clicked() {
+		m.deleteChecked()
+	}
+	if filledButton(c, pal, "完成", "batch-done", false) {
+		m.Batch = false
+		for i := range m.Profiles {
+			m.Profiles[i].Checked = false
+		}
+	}
+	mygoui.Text(c, "已选中 "+itoa(n)+" 项目").FontSize(13).TextColor(pal.TextMuted)
+}
+
+func (m *Model) deleteChecked() {
+	if m.Hooks.DeleteProfile != nil {
+		m.Notice = "批量删除尚未实现，请逐项删除"
+		return
+	}
+	var keep []ProfileItem
+	for _, p := range m.Profiles {
+		if !p.Checked {
+			keep = append(keep, p)
+		} else if p.UID == m.CurrentProfile {
+			m.CurrentProfile = ""
+			m.Home.Profile = nil
+		}
+	}
+	m.Profiles = keep
+	m.Notice = "选中的订阅已成功删除"
+	m.Batch = false
+}
+
+func (m *Model) profileItem(c *mygoui.Context, pal Palette, i int) {
+	p := &m.Profiles[i]
+	selected := p.UID == m.CurrentProfile
+	card := mygoui.ButtonBase(c.Key("profile-"+p.UID)).FillWidth().Padding(8, 16).Radius(8).Label("profile-" + p.Name)
+	card.Background(pal.Card)
+	if selected {
+		card.BorderWidth(0, 0, 0, 3).BorderColor(pal.Primary)
+	}
+	card.Drag(i)
+	if from, ok := mygoui.Drop[int](card); ok {
+		m.Profiles = Move(m.Profiles, from, i)
+	}
+	card.ContextMenu(func(menu *mygoui.Menu) {
+		m.profileMenu(menu, p)
+	})
+	card.Children(func() {
+		mygoui.Column(c).FillWidth().AlignItems(mygoui.Stretch).Gap(6).Children(func() {
+			mygoui.Row(c).AlignItems(mygoui.Center).Gap(6).Children(func() {
+				if m.Batch {
+					on := p.Checked
+					sw := mygoui.Checkbox(c, &on, "").Label("check-" + p.UID)
+					if sw.Changed() {
+						p.Checked = on
+					}
+				}
+				mygoui.Text(c, "⋮⋮").FontSize(12).TextColor(pal.TextMuted)
+				title := mygoui.Text(c, p.Name).FontSize(18).FontWeight(600).SingleLine().Grow(1)
+				if selected {
+					title.TextColor(pal.Primary)
+				}
+				if p.URL != "" {
+					if textButton(c, pal, "刷新", "更新", "refresh-"+p.UID) {
+						m.updateProfile(p.UID)
+					}
+				}
+			})
+			desc := p.Description
+			if desc == "" && p.URL != "" {
+				desc = URLHost(p.URL)
+			}
+			mygoui.Text(c, desc).FontSize(14).TextColor(pal.TextMuted)
+			if p.Total > 0 {
+				mygoui.Row(c).FillWidth().Children(func() {
+					mygoui.Text(c, FormatTraffic(p.Used)+"/"+FormatTraffic(p.Total)).FontSize(14).Grow(1)
+					if !p.Expire.IsZero() {
+						mygoui.Text(c, p.Expire.Format("2006-01-02")).FontSize(14)
+					}
+				})
+				meter(c, pal, UsagePercent(p.Used, p.Total))
+			} else if !p.Updated.IsZero() {
+				mygoui.Text(c, p.Updated.Format("2006-01-02 15:04")).FontSize(12).TextColor(pal.TextMuted)
+			}
+		})
+	})
+	if card.Clicked() && !m.Batch {
+		m.activateProfile(p.UID)
+	}
+}
+
+// activateProfile switches the current subscription. When the app hook is
+// set, that path reloads the kernel and restores this profile's selected
+// nodes. A nil hook only updates the model, which is what headless pages do.
+func (m *Model) activateProfile(uid string) {
+	if uid == "" {
+		return
+	}
+	if m.Hooks.UseProfile != nil {
+		if err := m.Hooks.UseProfile(uid); err != nil {
+			m.Notice = err.Error()
+			return
+		}
+		m.Notice = "订阅已切换"
+		return
+	}
+	for _, p := range m.Profiles {
+		if p.UID != uid {
+			continue
+		}
+		m.CurrentProfile = uid
+		m.Home.Profile = homeFrom(p)
+		m.Notice = "订阅已切换"
+		return
+	}
+}
+
+func (m *Model) profileMenu(menu *mygoui.Menu, p *ProfileItem) {
+	remote := p.URL != ""
+	if remote && p.Home != "" {
+		if menu.Item("首 页").Chosen() {
+			m.Notice = p.Home
+		}
+	}
+	if menu.Item("使用").Chosen() {
+		m.activateProfile(p.UID)
+	}
+	if remote {
+		if menu.Item("分享二维码").Chosen() {
+			m.Notice = "订阅二维码"
+		}
+	}
+	if menu.Item("编辑信息").Chosen() {
+		m.Form = ProfileForm{
+			Open: true, Editing: true, UID: p.UID, Type: p.Type, Name: p.Name, Desc: p.Description,
+			URL: p.URL, UA: p.Option.UserAgent, Timeout: p.Option.TimeoutSeconds, Interval: p.Option.UpdateInterval,
+			SysProxy: p.Option.UseSystemProxy, Clash: p.Option.UseClashProxy, Insecure: p.Option.AcceptInvalid,
+			Auto: p.Option.AllowAutoUpdate,
+		}
+		if m.Form.Type == "" {
+			m.Form.Type = "local"
+		}
+	}
+	if menu.Item("编辑文件").Chosen() {
+		m.Dialogs.Runtime = true
+	}
+	rules := menu.Item("编辑规则")
+	if p.Option.Rules == "" {
+		rules.Disabled(true)
+	}
+	proxies := menu.Item("编辑节点")
+	if p.Option.Proxies == "" {
+		proxies.Disabled(true)
+	}
+	groups := menu.Item("编辑代理组")
+	if p.Option.Groups == "" {
+		groups.Disabled(true)
+	}
+	merge := menu.Item("扩展覆写配置")
+	if p.Option.Merge == "" {
+		merge.Disabled(true)
+	}
+	script := menu.Item("扩展脚本")
+	if p.Option.Script == "" {
+		script.Disabled(true)
+	}
+	if menu.Item("打开文件").Chosen() {
+		if m.Hooks.OpenDir != nil {
+			m.Hooks.OpenDir("profile")
+		}
+	}
+	if remote {
+		if menu.Item("更新").Chosen() {
+			m.updateProfile(p.UID)
+		}
+		if menu.Item("更新（代理）").Chosen() {
+			m.Notice = "更新订阅尚未实现"
+			m.Notice = "通过代理更新订阅尚未实现"
+		}
+	}
+	if menu.Item("删除").Chosen() {
+		if m.Batch {
+			p.Checked = !p.Checked
+			return
+		}
+		m.DeleteUID = p.UID
+	}
+	_ = rules
+	_ = proxies
+	_ = groups
+	_ = merge
+	_ = script
+}
+
+func (m *Model) updateProfile(uid string) {
+	if m.Hooks.UpdateProfile == nil {
+		m.Notice = "更新订阅尚未实现"
+		return
+	}
+	if err := m.Hooks.UpdateProfile(uid); err != nil {
+		m.Notice = err.Error()
+		return
+	}
+	m.Notice = "订阅已更新"
+}
+
+func (m *Model) extensionCard(c *mygoui.Context, pal Palette, title, chipText string) {
+	b := mygoui.ButtonBase(c.Key("ext-" + chipText)).FillWidth().Padding(12).Radius(8).Background(pal.Card).Label("ext-" + chipText)
+	b.Children(func() {
+		mygoui.Column(c).FillWidth().AlignItems(mygoui.Stretch).Gap(6).Children(func() {
+			mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
+				mygoui.Text(c, title).FontSize(14).Grow(1)
+				chip(c, pal, chipText, TonePrimary, false)
+			})
+			mygoui.Text(c, "执行顺序：订阅原文 → 应用设置 → 全局扩展配置 → 全局扩展脚本 → 订阅扩展配置 → 订阅扩展脚本 → 应用设置回写").FontSize(12).TextColor(pal.TextMuted)
+		})
+	})
+	if b.Clicked() {
+		m.Dialogs.Runtime = true
+	}
+}
+
+func (m *Model) deleteTarget() *ProfileItem {
+	for i := range m.Profiles {
+		if m.Profiles[i].UID == m.DeleteUID {
+			return &m.Profiles[i]
+		}
+	}
+	return nil
+}
