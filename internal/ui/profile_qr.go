@@ -9,6 +9,10 @@ import (
 
 func (m *Model) openProfileQR(raw string) {
 	raw = strings.TrimSpace(raw)
+	if len(raw) > 2048 {
+		m.Notice = "订阅链接过长，无法生成二维码"
+		return
+	}
 	if !safeProfileHome(raw) {
 		m.Notice = "订阅链接无效，无法生成二维码"
 		return
