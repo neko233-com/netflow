@@ -185,6 +185,11 @@ func (a *App) Prepare() error {
 				return nil, err
 			}
 		}
+		var dnsErr error
+		base, dnsErr = a.applyProfileDNS(base, profileID)
+		if dnsErr != nil {
+			return nil, dnsErr
+		}
 		state := a.rewrites.Snapshot()
 		now := time.Now()
 		if rewrite.HasActive(state, profileID, now) {
@@ -273,6 +278,7 @@ func (a *App) loadProfiles() {
 				AllowAutoUpdate: it.Option.AllowAutoUpdate, Rules: it.Option.Rules, Proxies: it.Option.Proxies,
 				Groups: it.Option.Groups, Merge: it.Option.Merge, Script: it.Option.Script,
 				UserAgent: it.Option.UserAgent, TimeoutSeconds: it.Option.TimeoutSeconds,
+				DNSEnabled: it.Option.DNSEnabled, DNSOverride: it.Option.DNSOverride,
 			},
 		}
 		for _, sel := range it.Selected {
@@ -281,7 +287,11 @@ func (a *App) loadProfiles() {
 		a.model.Profiles = append(a.model.Profiles, item)
 	}
 	if cur := a.model.CurrentItem(); cur != nil {
+		a.model.Prefs.DNSOverwrite = cur.Option.DNSEnabled
 		a.model.Home.Profile = &ui.HomeProfile{Name: cur.Name, URL: cur.URL, Home: cur.Home, Updated: cur.Updated, Used: cur.Used, Total: cur.Total, Expire: cur.Expire}
+	}
+	if a.model.CurrentItem() == nil {
+		a.model.Prefs.DNSOverwrite = false
 	}
 }
 
@@ -956,6 +966,7 @@ func (a *App) bindHooks() {
 		PreviewRewrite:      a.agentPreview,
 		ApplyRewrite:        a.agentApply,
 		SaveProfileMetadata: a.saveProfileMetadata,
+		SetProfileDNS:       a.setProfileDNS,
 		SetKernelOption:     a.SetKernelOption,
 		SetKernelPorts:      a.SetKernelPorts,
 		SavePrefs:           a.savePrefs,

@@ -92,6 +92,10 @@ func (a *App) applyKernelOptions(next kernelopts.Options) error {
 	if err != nil {
 		return err
 	}
+	base, err = a.applyProfileDNS(base, a.core.ProfileID())
+	if err != nil {
+		return err
+	}
 	state := a.rewrites.Snapshot()
 	if rewrite.HasActive(state, a.core.ProfileID(), time.Now()) {
 		base, _, err = rewrite.Compose(base, state, a.core.ProfileID(), time.Now())

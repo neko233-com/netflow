@@ -93,16 +93,34 @@ func (m *Model) clashSettings(c *mygoui.Context, pal Palette) {
 			mygoui.Text(c, "DNS 覆写").FontSize(14).Grow(1)
 			helpMark(c, pal, "help-dns", "DNS 覆写开关按订阅独立保存，仅对对应订阅生效。")
 			if gearButton(c, pal, "DNS 覆写", "dns-gear") {
-				m.Dialogs.DNS = true
+				if p := m.currentProfile(); p != nil {
+					m.DNSDraft = p.Option.DNSOverride
+					m.DNSProfileID = p.UID
+					m.Dialogs.DNS = true
+				} else {
+					m.Notice = "请先激活订阅"
+				}
 			}
 			sw := mygoui.Switch(c, &m.Prefs.DNSOverwrite).Disabled(disabled).Label("dns-overwrite")
 			if sw.Changed() {
-				if m.Prefs.DNSOverwrite && m.ProfileHasDNS {
-					m.Prefs.DNSOverwrite = false
-					m.DNSAsk = true
+				p := m.currentProfile()
+				if p == nil || m.Hooks.SetProfileDNS == nil {
+					m.Prefs.DNSOverwrite = !m.Prefs.DNSOverwrite
+					m.Notice = "DNS 覆写不可用"
 					return
 				}
-				m.savePrefs()
+				if m.Prefs.DNSOverwrite && p.Option.DNSOverride == "" {
+					m.Prefs.DNSOverwrite = false
+					m.DNSDraft = ""
+					m.DNSProfileID = p.UID
+					m.Dialogs.DNS = true
+					m.Notice = "请先填写 DNS 配置"
+					return
+				}
+				if err := m.Hooks.SetProfileDNS(p.UID, m.Prefs.DNSOverwrite, p.Option.DNSOverride); err != nil {
+					m.Prefs.DNSOverwrite = !m.Prefs.DNSOverwrite
+					m.Notice = err.Error()
+				}
 			}
 		})
 		m.switchLine(c, pal, "IPv6", &m.Prefs.IPv6, "ipv6", func(on bool) { m.setKernelBool("ipv6", &m.Prefs.IPv6, on) }, nil)

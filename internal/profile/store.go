@@ -49,6 +49,8 @@ type CatalogOption struct {
 	Script          string `json:"script,omitempty"`
 	UserAgent       string `json:"user_agent,omitempty"`
 	TimeoutSeconds  int    `json:"timeout,omitempty"`
+	DNSEnabled      bool   `json:"dns_override_enabled,omitempty"`
+	DNSOverride     string `json:"dns_override,omitempty"`
 }
 
 // File is profiles.json.

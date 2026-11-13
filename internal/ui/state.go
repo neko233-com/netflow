@@ -177,6 +177,8 @@ type ProfileOption struct {
 	Script          string
 	UserAgent       string
 	TimeoutSeconds  int
+	DNSEnabled      bool
+	DNSOverride     string
 }
 
 // ProfileForm is the create/edit dialog draft.

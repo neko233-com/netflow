@@ -31,7 +31,20 @@ func validateProfile(body []byte) error {
 // Validate the effective configuration before replacing a running profile.
 // A system proxy keeps pointing to its original endpoint until disabled.
 func (a *App) validateEffectiveProfile(body []byte, profileID string) error {
+	return a.validateEffectiveProfileWithDNS(body, profileID, nil)
+}
+
+func (a *App) validateEffectiveProfileWithDNS(body []byte, profileID string, dns *dnsOverride) error {
 	data := profile.EnsureMixedPort(body, 7897)
+	var err error
+	if dns == nil {
+		data, err = a.applyProfileDNS(data, profileID)
+	} else if dns.enabled {
+		data, err = profile.ComposeDNS(data, dns.text)
+	}
+	if err != nil {
+		return err
+	}
 	if a.rewrites != nil {
 		state := a.rewrites.Snapshot()
 		if rewrite.HasActive(state, profileID, time.Now()) {

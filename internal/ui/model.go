@@ -44,6 +44,7 @@ type Hooks struct {
 	UpdateProfileViaProxyAsync func(uid string, done func(error))
 	BrowseProfiles             func() ([]string, error)
 	SaveProfileMetadata        func(form ProfileForm) error
+	SetProfileDNS              func(id string, enabled bool, text string) error
 	CreateProfileAsync         func(form ProfileForm, done func(error))
 	LoadRewrite                func(scope, profileID string) (rewrite.Layer, error)
 	PreviewRewrite             func(change agent.Change) (agent.Preview, error)
@@ -112,6 +113,8 @@ type Model struct {
 	Busy              string
 	DNSAsk            bool
 	ProfileHasDNS     bool
+	DNSDraft          string
+	DNSProfileID      string
 	ForceTray         bool
 	Dialogs           dialogSet
 	Hooks             Hooks

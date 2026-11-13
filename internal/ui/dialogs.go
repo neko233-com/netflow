@@ -735,13 +735,22 @@ func (m *Model) uninstallService() {
 }
 
 func (m *Model) dnsBody(c *mygoui.Context, pal Palette) {
-	mygoui.Text(c, "DNS 覆写开关按订阅独立保存，仅对对应订阅生效。").FontSize(12).TextColor(pal.TextMuted)
-	mygoui.Text(c, "如果你不清楚这里的设置请不要修改，并保持 DNS 覆写关闭").FontSize(12).TextColor(pal.Warning)
-	mygoui.Text(c, "DNS 设置").FontSize(14).Bold()
-	mygoui.Text(c, "listen :53").FontSize(13)
-	mygoui.Text(c, "fake-ip-range 198.18.0.1/16").FontSize(13)
-	mygoui.Text(c, "回退过滤设置").FontSize(14).Bold()
-	mygoui.Text(c, "Hosts 设置").FontSize(14).Bold()
+	mygoui.Text(c, "填写 mihomo dns 段的 YAML 内容；保存后替换当前订阅的 DNS 段。").FontSize(12).TextColor(pal.TextMuted)
+	mygoui.Text(c, "DNS 设置错误可能导致连接失败；请确认监听端口未被占用。").FontSize(12).TextColor(pal.Warning)
+	mygoui.TextArea(c, &m.DNSDraft).FillWidth().Height(180).Label("dns-override-yaml")
+	if filledButton(c, pal, "保存并启用", "dns-save", true) {
+		p := m.currentProfile()
+		if p == nil || p.UID != m.DNSProfileID || m.Hooks.SetProfileDNS == nil {
+			m.Notice = "DNS 覆写不可用"
+			return
+		}
+		if err := m.Hooks.SetProfileDNS(p.UID, true, m.DNSDraft); err != nil {
+			m.Notice = err.Error()
+			return
+		}
+		m.Dialogs.DNS = false
+		m.Notice = "DNS 覆写已应用"
+	}
 }
 
 func (m *Model) runtimeBody(c *mygoui.Context, pal Palette) {
@@ -773,9 +782,15 @@ func (m *Model) dnsConfirm(c *mygoui.Context, pal Palette) {
 					m.DNSAsk = false
 				}
 				if filledButton(c, pal, "仍然开启", "dns-anyway", true) {
-					m.Prefs.DNSOverwrite = true
+					p := m.currentProfile()
+					if p != nil && m.Hooks.SetProfileDNS != nil {
+						if err := m.Hooks.SetProfileDNS(p.UID, true, p.Option.DNSOverride); err != nil {
+							m.Notice = err.Error()
+						} else {
+							m.Prefs.DNSOverwrite = true
+						}
+					}
 					m.DNSAsk = false
-					m.savePrefs()
 				}
 			})
 		})

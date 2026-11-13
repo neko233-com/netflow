@@ -481,7 +481,7 @@ func TestSettingsSections(t *testing.T) {
 	m := DemoModel()
 	m.Router.Replace("/settings")
 	tt := renderModel(m, WindowWidth, WindowHeight, false)
-	for _, title := range []string{"系统设置", "Clash 设置", "Verge 基础设置", "Verge 高级设置", "简体中文", "浅色", "深色", "系统", "v0.2.3-alpha.1"} {
+	for _, title := range []string{"系统设置", "Clash 设置", "Verge 基础设置", "Verge 高级设置", "简体中文", "浅色", "深色", "系统", "v0.2.4-alpha.1"} {
 		if !tt.HasText(title) {
 			t.Errorf("settings missing %q", title)
 		}
