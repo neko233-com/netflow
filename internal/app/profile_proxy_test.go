@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestFetchProfileThroughProxyNeverFallsBackToDirect(t *testing.T) {
@@ -24,12 +25,14 @@ func TestFetchProfileThroughProxyNeverFallsBackToDirect(t *testing.T) {
 		_, _ = w.Write([]byte("rules: [MATCH,DIRECT]"))
 	}))
 	proxyAddr := strings.TrimPrefix(proxy.URL, "http://")
-	body, err := fetchProfileThroughProxy(target.URL+"/subscription", proxyAddr)
+	client := newSubscriptionClient(proxyAddr, time.Second, false)
+	defer client.CloseIdleConnections()
+	body, err := fetchProfileWithClient(target.URL+"/subscription", client, "")
 	if err != nil || len(body) == 0 || !seen.Load() {
 		t.Fatalf("proxy fetch: %s %v", body, err)
 	}
 	proxy.Close()
-	if _, err := fetchProfileThroughProxy(target.URL+"/subscription", proxyAddr); err == nil {
+	if _, err := fetchProfileWithClient(target.URL+"/subscription", client, ""); err == nil {
 		t.Fatal("unavailable proxy unexpectedly succeeded")
 	}
 	if got := direct.Load(); got != 0 {

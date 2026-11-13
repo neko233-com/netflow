@@ -209,6 +209,19 @@ func (m *Model) profileForm(c *mygoui.Context, pal Palette) {
 				m.field(c, "订阅链接", &m.Form.URL)
 			}
 			if m.Form.Type == "remote" && m.Hooks.SaveProfileMetadata != nil {
+				m.field(c, "用户代理（留空使用默认值）", &m.Form.UA)
+				mygoui.Row(c).FillWidth().AlignItems(mygoui.Center).Gap(8).Children(func() {
+					mygoui.Text(c, "下载超时（秒）").FontSize(13).Grow(1)
+					timeout := itoa(m.Form.Timeout)
+					if mygoui.TextInput(c, &timeout).Width(100).Label("subscription-timeout").Changed() {
+						m.Form.Timeout = atoi(timeout)
+					}
+				})
+				m.boolLine(c, "通过内核代理下载和更新", &m.Form.Clash)
+				m.boolLine(c, "允许无效证书（不安全）", &m.Form.Insecure)
+				if m.Form.SysProxy {
+					m.boolLine(c, "使用系统代理（尚不支持，请关闭）", &m.Form.SysProxy)
+				}
 				m.boolLine(c, "自动更新订阅", &m.Form.Auto)
 				mygoui.Row(c).FillWidth().AlignItems(mygoui.Center).Gap(8).Children(func() {
 					mygoui.Text(c, "更新间隔（分钟）").FontSize(13).Grow(1)

@@ -5,12 +5,19 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+
+	"github.com/neko233-com/netflow/internal/profile"
 )
 
 func TestUpdateRemoteProfile(t *testing.T) {
 	body := "rules:\n  - MATCH,DIRECT\n"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+	var lastAgent atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastAgent.Store(r.Header.Get("User-Agent"))
+		_, _ = w.Write([]byte(body))
+	}))
 	defer srv.Close()
 	dir := t.TempDir()
 	a := newProfileHarness(dir)
@@ -22,9 +29,16 @@ func TestUpdateRemoteProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	uid, file := f.Current, filepath.Join(dir, f.Items[0].File)
+	opt := profile.CatalogOption{UpdateInterval: 60, TimeoutSeconds: 10, UserAgent: "NetFlow-test/1"}
+	if err := a.profiles.UpdateMetadata(uid, "Test", "", &opt); err != nil {
+		t.Fatal(err)
+	}
 	body = "mode: direct\nrules:\n  - MATCH,DIRECT\n"
 	if err := a.UpdateProfile(uid); err != nil {
 		t.Fatal(err)
+	}
+	if got := lastAgent.Load(); got != opt.UserAgent {
+		t.Fatalf("update User-Agent %q", got)
 	}
 	got, err := os.ReadFile(file)
 	if err != nil || string(got) != body {

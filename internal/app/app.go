@@ -975,11 +975,13 @@ func (a *App) saveProfileMetadata(form ui.ProfileForm) error {
 	if a.profiles == nil {
 		return errors.New("订阅存储不可用")
 	}
-	var auto *bool
+	var options *profile.CatalogOption
 	if form.Type == "remote" {
-		auto = &form.Auto
+		options = &profile.CatalogOption{AllowAutoUpdate: form.Auto, UpdateInterval: form.Interval,
+			TimeoutSeconds: form.Timeout, UserAgent: strings.TrimSpace(form.UA), UseClashProxy: form.Clash,
+			UseSystemProxy: form.SysProxy, AcceptInvalid: form.Insecure}
 	}
-	if err := a.profiles.UpdateMetadata(form.UID, form.Name, form.Desc, auto, form.Interval); err != nil {
+	if err := a.profiles.UpdateMetadata(form.UID, form.Name, form.Desc, options); err != nil {
 		return err
 	}
 	a.loadProfiles()
@@ -1286,11 +1288,18 @@ func (a *App) restartCore() error {
 
 func fetchProfile(raw string) ([]byte, error) {
 	client := &http.Client{Timeout: 20 * time.Second}
-	return fetchProfileWithClient(raw, client)
+	return fetchProfileWithClient(raw, client, "")
 }
 
-func fetchProfileWithClient(raw string, client *http.Client) ([]byte, error) {
-	resp, err := client.Get(raw)
+func fetchProfileWithClient(raw string, client *http.Client, userAgent string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, raw, nil)
+	if err != nil {
+		return nil, err
+	}
+	if userAgent != "" {
+		req.Header.Set("User-Agent", userAgent)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

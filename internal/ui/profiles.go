@@ -359,6 +359,9 @@ func (m *Model) profileMenu(menu *mygoui.Menu, p *ProfileItem) {
 			SysProxy: p.Option.UseSystemProxy, Clash: p.Option.UseClashProxy, Insecure: p.Option.AcceptInvalid,
 			Auto: p.Option.AllowAutoUpdate,
 		}
+		if m.Form.Timeout <= 0 {
+			m.Form.Timeout = 20
+		}
 		if m.Form.Type == "" {
 			m.Form.Type = "local"
 		}

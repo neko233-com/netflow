@@ -122,7 +122,7 @@ func (s *Store) Save(f File) error {
 	return os.Rename(name, s.path())
 }
 
-func (s *Store) UpdateMetadata(uid, name, description string, auto *bool, interval int) error {
+func (s *Store) UpdateMetadata(uid, name, description string, options *CatalogOption) error {
 	name = strings.TrimSpace(name)
 	description = strings.TrimSpace(description)
 	if name == "" || len(name) > 256 || len(description) > 2048 {
@@ -134,12 +134,23 @@ func (s *Store) UpdateMetadata(uid, name, description string, auto *bool, interv
 	}
 	for i := range f.Items {
 		if f.Items[i].UID == uid {
-			if auto != nil && f.Items[i].Type == "remote" {
-				if interval < 1 || interval > 43200 {
+			if options != nil && f.Items[i].Type == "remote" {
+				if options.UpdateInterval < 1 || options.UpdateInterval > 43200 {
 					return errors.New("更新间隔必须在 1 到 43200 分钟之间")
 				}
-				f.Items[i].Option.AllowAutoUpdate = *auto
-				f.Items[i].Option.UpdateInterval = interval
+				if options.TimeoutSeconds < 1 || options.TimeoutSeconds > 300 {
+					return errors.New("下载超时必须在 1 到 300 秒之间")
+				}
+				if len(options.UserAgent) > 512 || strings.ContainsAny(options.UserAgent, "\r\n") {
+					return errors.New("用户代理无效或超过 512 字节")
+				}
+				if options.UseSystemProxy && !options.UseClashProxy {
+					return errors.New("此版本尚不支持订阅使用系统代理，请改用内核代理")
+				}
+				old := &f.Items[i].Option
+				old.AllowAutoUpdate, old.UpdateInterval = options.AllowAutoUpdate, options.UpdateInterval
+				old.TimeoutSeconds, old.UserAgent = options.TimeoutSeconds, options.UserAgent
+				old.UseClashProxy, old.UseSystemProxy, old.AcceptInvalid = options.UseClashProxy, options.UseSystemProxy, options.AcceptInvalid
 			}
 			f.Items[i].Name = name
 			f.Items[i].Description = description

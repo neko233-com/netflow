@@ -14,31 +14,41 @@ import (
 // UpdateProfile replaces one remote subscription only after it has been
 // downloaded and validated. A failed reload restores the previous files.
 func (a *App) UpdateProfile(uid string) error {
-	raw, err := a.profileURL(uid)
+	item, err := a.profileItem(uid)
 	if err != nil {
 		return err
 	}
-	body, err := fetchProfile(raw)
+	client, err := a.subscriptionClient(item.Option, false)
 	if err != nil {
 		return err
 	}
-	return a.updateProfileData(uid, raw, body)
+	defer client.CloseIdleConnections()
+	body, err := fetchProfileWithClient(item.URL, client, item.Option.UserAgent)
+	if err != nil {
+		return err
+	}
+	return a.updateProfileData(uid, item.URL, body)
 }
 
 func (a *App) profileURL(uid string) (string, error) {
+	item, err := a.profileItem(uid)
+	return item.URL, err
+}
+
+func (a *App) profileItem(uid string) (profile.CatalogItem, error) {
 	if a == nil || a.profiles == nil {
-		return "", errors.New("订阅存储不可用")
+		return profile.CatalogItem{}, errors.New("订阅存储不可用")
 	}
 	f, err := a.profiles.Load()
 	if err != nil {
-		return "", err
+		return profile.CatalogItem{}, err
 	}
 	for _, item := range f.Items {
 		if item.UID == uid && item.URL != "" {
-			return item.URL, nil
+			return item, nil
 		}
 	}
-	return "", errors.New("远程订阅不存在")
+	return profile.CatalogItem{}, errors.New("远程订阅不存在")
 }
 
 func (a *App) updateProfileData(uid, expectedURL string, body []byte) error {
