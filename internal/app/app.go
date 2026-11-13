@@ -15,6 +15,7 @@ import (
 
 	"github.com/neko233-com/netflow/internal/appconfig"
 	"github.com/neko233-com/netflow/internal/appdir"
+	"github.com/neko233-com/netflow/internal/autostart"
 	"github.com/neko233-com/netflow/internal/clashlog"
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
@@ -34,22 +35,24 @@ import (
 // (an in-memory proxy elsewhere), and a TUN controller that only
 // remembers the switch.
 type Options struct {
-	Dirs    appdir.Provider
-	Store   appconfig.Store
-	Proxy   sysproxy.Controller
-	TUN     tun.Controller
-	Service service.Manager
-	Core    *core.Core
+	Dirs      appdir.Provider
+	Store     appconfig.Store
+	Proxy     sysproxy.Controller
+	AutoStart autostart.Controller
+	TUN       tun.Controller
+	Service   service.Manager
+	Core      *core.Core
 }
 
 // App is one running Clash Go process.
 type App struct {
-	dirs  appdir.Provider
-	store appconfig.Store
-	proxy sysproxy.Controller
-	tun   tun.Controller
-	svc   service.Manager
-	core  *core.Core
+	dirs      appdir.Provider
+	store     appconfig.Store
+	proxy     sysproxy.Controller
+	autostart autostart.Controller
+	tun       tun.Controller
+	svc       service.Manager
+	core      *core.Core
 
 	settings appconfig.Settings
 	model    *ui.Model
@@ -76,6 +79,9 @@ func New(opt Options) *App {
 	if opt.Proxy == nil {
 		opt.Proxy = sysproxy.Platform()
 	}
+	if opt.AutoStart == nil {
+		opt.AutoStart = autostart.Platform()
+	}
 	if opt.TUN == nil {
 		opt.TUN = tun.Platform()
 	}
@@ -86,12 +92,13 @@ func New(opt Options) *App {
 		opt.Core = core.New()
 	}
 	return &App{
-		dirs:  opt.Dirs,
-		store: opt.Store,
-		proxy: opt.Proxy,
-		tun:   opt.TUN,
-		svc:   opt.Service,
-		core:  opt.Core,
+		dirs:      opt.Dirs,
+		store:     opt.Store,
+		proxy:     opt.Proxy,
+		autostart: opt.AutoStart,
+		tun:       opt.TUN,
+		svc:       opt.Service,
+		core:      opt.Core,
 	}
 }
 
@@ -126,6 +133,10 @@ func (a *App) Prepare() error {
 	a.profiles = profile.NewStore(dir)
 	a.model = ui.NewModel(ui.HomeState{ConfigDir: dir, Version: core.Version()})
 	a.applySettings()
+	if active, err := a.autostart.Current(); err == nil {
+		a.model.Prefs.AutoLaunch = active
+		a.model.Home.AutoLaunch = active
+	}
 	a.loadProfiles()
 	a.loadSites()
 	if err := a.installCurrentProfile(); err != nil {
@@ -723,6 +734,7 @@ func (a *App) bindHooks() {
 	}
 	a.model.Hooks = ui.Hooks{
 		SetSystemProxy:      a.SetSystemProxy,
+		SetAutoLaunch:       a.SetAutoLaunch,
 		SetTUN:              a.SetTUN,
 		SetMode:             a.SetMode,
 		SelectProxy:         a.SelectProxy,
@@ -757,6 +769,16 @@ func (a *App) bindHooks() {
 		Copy:             writeClipboard,
 		Quit:             func() { mygo.App.Quit() },
 	}
+}
+
+func (a *App) SetAutoLaunch(on bool) error {
+	if a == nil || a.autostart == nil {
+		return autostart.ErrUnsupported
+	}
+	if err := a.autostart.Set(on); err != nil {
+		return err
+	}
+	return nil
 }
 
 // SelectProxy writes the choice into mihomo's selector when the kernel is

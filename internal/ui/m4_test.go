@@ -200,7 +200,7 @@ func TestTUNToggleNeedsService(t *testing.T) {
 	if err := tt.Click("tun-row"); err != nil {
 		t.Fatal(err)
 	}
-	if m.Home.TUN || m.Notice != "denied" {
+	if !m.Home.TUN || m.Notice != "denied" {
 		t.Fatalf("rollback tun %v notice %q", m.Home.TUN, m.Notice)
 	}
 

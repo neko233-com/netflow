@@ -13,6 +13,7 @@ import (
 // which is what the headless tests do.
 type Hooks struct {
 	SetSystemProxy      func(on bool) error
+	SetAutoLaunch       func(on bool) error
 	SetTUN              func(on bool) error
 	SetMode             func(mode string) error
 	SelectProxy         func(group, node string) error
@@ -392,6 +393,20 @@ func (m *Model) savePrefs() {
 			m.Notice = err.Error()
 		}
 	}
+}
+
+func (m *Model) setAutoLaunch(on bool) {
+	if m.Hooks.SetAutoLaunch != nil {
+		if err := m.Hooks.SetAutoLaunch(on); err != nil {
+			m.Prefs.AutoLaunch = !on
+			m.Home.AutoLaunch = !on
+			m.Notice = err.Error()
+			return
+		}
+	}
+	m.Prefs.AutoLaunch = on
+	m.Home.AutoLaunch = on
+	m.savePrefs()
 }
 
 func (m *Model) copy(text string) {

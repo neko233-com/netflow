@@ -39,7 +39,8 @@ func (m *Model) settingsPage(c *mygoui.Context, pal Palette) {
 
 func (m *Model) systemSettings(c *mygoui.Context, pal Palette) {
 	sectionCard(c, pal, "系统设置", func() {
-		m.switchLine(c, pal, "虚拟网卡模式", &m.Home.TUN, "tun-row", func(on bool) { m.setTUN(on) }, func() {
+		tunOn := m.Home.TUN
+		m.switchLine(c, pal, "虚拟网卡模式", &tunOn, "tun-row", func(on bool) { m.setTUN(on) }, func() {
 			if !m.Home.TUNAvailable {
 				mygoui.Icon(c, iconWarn).Size(18, 18).TextColor(pal.Warning).Tooltip("TUN 模式需要安装服务模式或管理员模式").Label("tun-warn")
 			}
@@ -47,12 +48,13 @@ func (m *Model) systemSettings(c *mygoui.Context, pal Palette) {
 				m.Dialogs.TUN = true
 			}
 		})
-		m.switchLine(c, pal, "系统代理", &m.Home.SystemProxy, "sysproxy-row", func(on bool) { m.setProxy(on) }, func() {
+		proxyOn := m.Home.SystemProxy
+		m.switchLine(c, pal, "系统代理", &proxyOn, "sysproxy-row", func(on bool) { m.setProxy(on) }, func() {
 			if gearButton(c, pal, "系统代理", "sysproxy-gear") {
 				m.Dialogs.Sysproxy = true
 			}
 		})
-		m.switchLine(c, pal, "开机自启", &m.Prefs.AutoLaunch, "launch-row", func(bool) { m.savePrefs() }, nil)
+		m.switchLine(c, pal, "开机自启", &m.Prefs.AutoLaunch, "launch-row", m.setAutoLaunch, nil)
 		m.switchLine(c, pal, "静默启动", &m.Prefs.SilentStart, "silent-row", func(bool) { m.savePrefs() }, func() {
 			helpMark(c, pal, "help-silent", "程序启动时以后台模式运行，不显示程序面板")
 		})

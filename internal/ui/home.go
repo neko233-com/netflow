@@ -527,9 +527,7 @@ func (m *Model) systemCard(c *mygoui.Context, pal Palette) mygoui.Element {
 			launch = "已启用"
 		}
 		if textButton(c, pal, "开机自启 "+launch, "开机自启", "auto-launch") {
-			m.Prefs.AutoLaunch = !m.Prefs.AutoLaunch
-			m.Home.AutoLaunch = m.Prefs.AutoLaunch
-			m.savePrefs()
+			m.setAutoLaunch(!m.Prefs.AutoLaunch)
 		}
 		mode := RunModeLabel(m.runMode())
 		if m.runMode() == RunSidecar {
