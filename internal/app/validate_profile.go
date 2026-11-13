@@ -3,9 +3,12 @@ package app
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/metacubex/mihomo/hub/executor"
+	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/profile"
+	"github.com/neko233-com/netflow/internal/rewrite"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -21,6 +24,37 @@ func validateProfile(body []byte) error {
 	}
 	if _, err := executor.ParseWithBytes(profile.EnsureMixedPort(body, 7897)); err != nil {
 		return fmt.Errorf("内核配置无效: %w", err)
+	}
+	return nil
+}
+
+// Validate the effective configuration before replacing a running profile.
+// A system proxy keeps pointing to its original endpoint until disabled.
+func (a *App) validateEffectiveProfile(body []byte, profileID string) error {
+	data := profile.EnsureMixedPort(body, 7897)
+	if a.rewrites != nil {
+		state := a.rewrites.Snapshot()
+		if rewrite.HasActive(state, profileID, time.Now()) {
+			var err error
+			data, _, err = rewrite.Compose(data, state, profileID, time.Now())
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if a.kernelOptions != nil {
+		var err error
+		data, err = kernelopts.Compose(data, a.kernelOptions.Snapshot())
+		if err != nil {
+			return err
+		}
+	}
+	cfg, err := executor.ParseWithBytes(data)
+	if err != nil {
+		return fmt.Errorf("合并后的内核配置无效: %w", err)
+	}
+	if a.settings.SystemProxy && a.core != nil && a.core.Status().Running && cfg.General.MixedPort != a.core.Status().MixedPort {
+		return errors.New("此订阅的混合代理端口不同；请先关闭系统代理或设置统一端口")
 	}
 	return nil
 }

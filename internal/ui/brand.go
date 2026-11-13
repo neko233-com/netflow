@@ -6,17 +6,17 @@ import (
 	mygoui "github.com/egoist/mygo/ui"
 )
 
-// mygoFaviconSVG is a byte-for-byte copy of docs/spec/assets/brand/favicon.svg
-// so the app embed and the spec stay the same mark. The MIT notice is
-// internal/ui/assets/NOTICE.
-//
-//go:embed assets/mygo-favicon.svg
-var mygoFaviconSVG []byte
+//go:embed assets/netflow.png
+var netflowBrandPNG []byte
 
-// brandMark is the mygo favicon: a cyan rounded square and a white ring.
-// Parsed once. Image shows its own colors; Icon would flatten them to the
-// text color.
-var brandMark = mygoui.MustParseSVG(mygoFaviconSVG)
+// Use the same generated artwork as the application and notification area.
+var brandMark = func() mygoui.ImageSource {
+	image, err := mygoui.DecodeImage(netflowBrandPNG)
+	if err != nil {
+		panic(err)
+	}
+	return image
+}()
 
 // Sidebar and logo slot, matching Clash Verge's layout-sidebar.
 const (

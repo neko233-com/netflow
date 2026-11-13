@@ -51,6 +51,8 @@ type Snapshot struct {
 	Closed        []Item
 	UploadTotal   int64
 	DownloadTotal int64
+	UploadSpeed   int64
+	DownloadSpeed int64
 }
 
 // FormatParts splits n into a number and a 1024-based unit.
@@ -330,12 +332,20 @@ func (t *Tracker) Observe(active []Item, up, down int64, now time.Time) Snapshot
 		return t.cached
 	}
 	seen := make(map[string]Item, len(active))
+	previousSample := t.have
+	seconds := now.Sub(t.last).Seconds()
+	rate := func(delta int64) int64 {
+		if seconds <= 0 {
+			return 0
+		}
+		return int64(float64(nonneg(delta)) / seconds)
+	}
 	out := make([]Item, 0, len(active))
 	next := make(map[string][2]int64, len(active))
 	for _, it := range active {
-		if p, ok := t.prev[it.ID]; ok {
-			it.UploadSpeed = nonneg(it.Upload - p[0])
-			it.DownloadSpeed = nonneg(it.Download - p[1])
+		if p, ok := t.prev[it.ID]; ok && previousSample {
+			it.UploadSpeed = rate(it.Upload - p[0])
+			it.DownloadSpeed = rate(it.Download - p[1])
 		} else {
 			it.UploadSpeed = 0
 			it.DownloadSpeed = 0
@@ -360,11 +370,18 @@ func (t *Tracker) Observe(active []Item, up, down int64, now time.Time) Snapshot
 	t.prev = next
 	t.last = now
 	t.have = true
+	var upSpeed, downSpeed int64
+	if previousSample {
+		upSpeed = rate(up - t.cached.UploadTotal)
+		downSpeed = rate(down - t.cached.DownloadTotal)
+	}
 	t.cached = Snapshot{
 		Active:        out,
 		Closed:        append([]Item(nil), t.closed...),
 		UploadTotal:   up,
 		DownloadTotal: down,
+		UploadSpeed:   upSpeed,
+		DownloadSpeed: downSpeed,
 	}
 	return t.cached
 }

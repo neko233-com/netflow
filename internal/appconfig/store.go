@@ -83,5 +83,23 @@ func (s *FileStore) Save(in Settings) error {
 		return err
 	}
 	b = append(b, '\n')
-	return os.WriteFile(s.path(), b, 0o600)
+	f, err := os.CreateTemp(s.dir, ".settings-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	defer os.Remove(name)
+	if err = f.Chmod(0600); err == nil {
+		_, err = f.Write(b)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(name, s.path())
 }

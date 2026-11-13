@@ -44,22 +44,22 @@ func TestHomeShowsKernelStatus(t *testing.T) {
 }
 
 func TestBrandAssetMatchesSpec(t *testing.T) {
-	spec, err := os.ReadFile("../../docs/spec/assets/brand/favicon.svg")
+	spec, err := os.ReadFile("../app/assets/tray.png")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(bytes.TrimSpace(spec), bytes.TrimSpace(mygoFaviconSVG)) {
-		t.Fatal("internal/ui/assets favicon drifted from docs/spec/assets/brand/favicon.svg")
+	if !bytes.Equal(spec, netflowBrandPNG) {
+		t.Fatal("sidebar and tray artwork differ")
 	}
 }
 
 func TestSidebarBrandMark(t *testing.T) {
 	m := NewModel(demoHome())
 	tt := renderModel(m, WindowWidth, WindowHeight, false)
-	if !tt.HasText("mygo") || !tt.HasText("NetFlow") {
+	if !tt.HasText("netflow-mark") || !tt.HasText("NetFlow") {
 		t.Fatal("brand mark is not next to the app name")
 	}
-	mark, ok := tt.Find("mygo")
+	mark, ok := tt.Find("netflow-mark")
 	name, nameOK := tt.Find("NetFlow")
 	if !ok || !nameOK {
 		t.Fatal("missing brand mark or name")
@@ -83,7 +83,7 @@ func TestSidebarBrandMark(t *testing.T) {
 	ct := NewCollapsedTester(m, false)
 	requireCollapsedBrand(t, ct)
 	requireCollapsedBrand(t, NewCollapsedTester(nil, false))
-	collapsed, ok := ct.Find("mygo")
+	collapsed, ok := ct.Find("netflow-mark")
 	if !ok {
 		t.Fatal("collapsed sidebar lost the mark")
 	}
@@ -112,12 +112,17 @@ func requireCollapsedBrand(t *testing.T, tt *mygoui.Tester) {
 
 func assertCyanMark(t *testing.T, img image.Image, mark mygoui.Rect) {
 	t.Helper()
-	cx := int(mark.X + mark.W/2)
-	cy := int(mark.Y + mark.H/2)
-	r, g, b, _ := img.At(cx, cy).RGBA()
-	// Center of the favicon is the cyan tile, #00add8, inside the white ring.
-	if r>>8 > 0x30 || g>>8 < 0x90 || b>>8 < 0xB0 {
-		t.Fatalf("brand mark center #%02x%02x%02x at %d,%d", r>>8, g>>8, b>>8, cx, cy)
+	blue := 0
+	for y := int(mark.Y); y < int(mark.Y+mark.H); y++ {
+		for x := int(mark.X); x < int(mark.X+mark.W); x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if b > r*13/10 && b > g*11/10 {
+				blue++
+			}
+		}
+	}
+	if blue < 20 {
+		t.Fatalf("brand mark has too few visible blue pixels: %d", blue)
 	}
 }
 
@@ -476,7 +481,7 @@ func TestSettingsSections(t *testing.T) {
 	m := DemoModel()
 	m.Router.Replace("/settings")
 	tt := renderModel(m, WindowWidth, WindowHeight, false)
-	for _, title := range []string{"系统设置", "Clash 设置", "Verge 基础设置", "Verge 高级设置", "简体中文", "浅色", "深色", "系统", "v0.2.0-alpha.1"} {
+	for _, title := range []string{"系统设置", "Clash 设置", "Verge 基础设置", "Verge 高级设置", "简体中文", "浅色", "深色", "系统", "v0.2.1-alpha.1"} {
 		if !tt.HasText(title) {
 			t.Errorf("settings missing %q", title)
 		}

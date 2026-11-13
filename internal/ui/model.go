@@ -6,6 +6,8 @@ import (
 
 	mygoui "github.com/egoist/mygo/ui"
 
+	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/rules"
 )
 
@@ -26,9 +28,19 @@ type Hooks struct {
 	SetLogPaused        func(paused bool)
 	ClearLogs           func()
 	ImportURL           func(url string) error
+	ImportURLAsync      func(url string, done func(error))
 	ImportLocal         func(path string) error
 	DeleteProfile       func(uid string) error
 	UpdateProfile       func(uid string) error
+	UpdateProfileAsync  func(uid string, done func(error))
+	BrowseProfiles      func() ([]string, error)
+	SaveProfileMetadata func(uid, name, description string) error
+	CreateProfileAsync  func(form ProfileForm, done func(error))
+	LoadRewrite         func(scope, profileID string) (rewrite.Layer, error)
+	PreviewRewrite      func(change agent.Change) (agent.Preview, error)
+	ApplyRewrite        func(id string) (agent.ApplyResult, error)
+	SetKernelOption     func(name string, value any) error
+	SetKernelPorts      func(PortSet) error
 	SavePrefs           func(Prefs) error
 	OpenDir             func(kind string)
 	RestartCore         func() error
@@ -68,6 +80,10 @@ type Model struct {
 	ProfileURL       string
 	ProfileBusy      bool
 	Batch            bool
+	BatchDeleteAsk   bool
+	RuleEditor       RuleEditor
+	portsDraft       Prefs
+	portsDraftActive bool
 	ShowNextUpdate   map[string]bool
 	Form             ProfileForm
 	DeleteUID        string
@@ -305,7 +321,7 @@ func (m *Model) logoRow(c *mygoui.Context, pal Palette, collapsed bool) {
 		// Collapsed mark uses margin 0 and sits centered in the 56×56 logo area.
 		mygoui.Row(c).Height(logoCollapsedBox).AlignItems(mygoui.Center).Justify(mygoui.Center).Children(func() {
 			mygoui.Column(c).Size(logoCollapsedBox, logoCollapsedBox).Label("logo-slot").AlignItems(mygoui.Center).Justify(mygoui.Center).Children(func() {
-				mygoui.Image(c, brandMark).Size(brandMarkSize, brandMarkSize).Label("mygo")
+				mygoui.Image(c, brandMark).Size(brandMarkSize, brandMarkSize).Label("netflow-mark")
 			})
 		})
 		return
@@ -315,7 +331,7 @@ func (m *Model) logoRow(c *mygoui.Context, pal Palette, collapsed bool) {
 	mygoui.Row(c).Height(logoRowHeight).Padding(0, logoRowPaddingX).AlignItems(mygoui.Center).Children(func() {
 		mygoui.Row(c).Height(logoInnerHeight).AlignItems(mygoui.Center).Children(func() {
 			mygoui.Image(c, brandMark).Size(brandMarkSize, brandMarkSize).Shrink(0).
-				Margin(brandMarkNudge, brandMarkMargin, 0, brandMarkNudge).Label("mygo")
+				Margin(brandMarkNudge, brandMarkMargin, 0, brandMarkNudge).Label("netflow-mark")
 			mygoui.Text(c, "NetFlow").Bold().FontSize(16).TextColor(pal.Text)
 		})
 	})

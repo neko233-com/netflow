@@ -17,13 +17,17 @@ func (m *Model) profilePage(c *mygoui.Context, pal Palette) {
 			m.Batch = true
 		}
 		if textButton(c, pal, "更新", "更新所有订阅", "update-all") {
-			m.Notice = "批量更新订阅尚未实现"
+			m.updateAllProfiles()
 		}
 		if textButton(c, pal, "配置", "查看运行时订阅", "runtime") {
 			m.Dialogs.Runtime = true
 		}
 		if textButton(c, pal, "激活", "重新激活订阅", "reactivate") {
-			m.Notice = "重新激活订阅尚未实现"
+			if m.CurrentProfile == "" {
+				m.Notice = "没有已激活的订阅"
+			} else {
+				m.activateProfile(m.CurrentProfile)
+			}
 		}
 	}, func() {
 		zone := mygoui.Column(c).FillWidth().Padding(10).Gap(12)
@@ -38,8 +42,8 @@ func (m *Model) profilePage(c *mygoui.Context, pal Palette) {
 			})
 			mygoui.Box(c).FillWidth().Height(1).Label("profile-rule").Background(pal.Divider)
 			mygoui.Grid(c).Columns(2).Gap(8).Children(func() {
-				m.extensionCard(c, pal, "全局扩展覆写配置", "Merge")
-				m.extensionCard(c, pal, "全局扩展脚本", "Script")
+				m.rewriteCard(c, pal, "全局规则覆写", "所有订阅共享", "global", "")
+				m.rewriteCard(c, pal, "当前订阅规则覆写", "只影响当前订阅", "profile", m.CurrentProfile)
 			})
 		})
 		if files := zone.DroppedFiles(); len(files) > 0 {
@@ -50,7 +54,7 @@ func (m *Model) profilePage(c *mygoui.Context, pal Palette) {
 
 func (m *Model) importRow(c *mygoui.Context, pal Palette) {
 	mygoui.Row(c).Height(36).Gap(8).AlignItems(mygoui.Center).Children(func() {
-		field := mygoui.TextInput(c, &m.ProfileURL).Placeholder("订阅文件链接").Grow(1).Label("profile-url")
+		field := mygoui.TextInput(c, &m.ProfileURL).Placeholder("订阅文件链接").Grow(1).Disabled(m.ProfileBusy).Label("profile-url")
 		if field.Submitted() {
 			m.importProfile(c)
 		}
@@ -73,16 +77,45 @@ func (m *Model) importRow(c *mygoui.Context, pal Palette) {
 		if b.Clicked() {
 			m.importProfile(c)
 		}
-		if filledButton(c, pal, "新建", "profile-new", false) {
+		if filledButton(c, pal, "本地文件", "profile-local", false) && !m.ProfileBusy {
+			if m.Hooks.BrowseProfiles != nil {
+				files, err := m.Hooks.BrowseProfiles()
+				if err != nil {
+					m.Notice = err.Error()
+				} else {
+					m.dropProfiles(files)
+				}
+			}
+		}
+		if filledButton(c, pal, "新建", "profile-new", false) && !m.ProfileBusy {
 			m.Form = ProfileForm{Open: true, Type: "remote", Timeout: 60, Interval: 1440, Auto: true}
 		}
 	})
 }
 
 func (m *Model) importProfile(c *mygoui.Context) {
+	if m.ProfileBusy {
+		return
+	}
 	raw := strings.TrimSpace(m.ProfileURL)
 	if !ValidSubscriptionURL(raw) {
 		m.Notice = "无效的订阅链接，请输入以 http:// 或 https:// 开头的地址"
+		return
+	}
+	if m.Hooks.ImportURLAsync != nil {
+		m.ProfileBusy = true
+		m.Notice = "正在下载订阅…"
+		m.Hooks.ImportURLAsync(raw, func(err error) {
+			m.ProfileBusy = false
+			if err != nil {
+				m.Notice = err.Error()
+				return
+			}
+			if m.ProfileURL == raw {
+				m.ProfileURL = ""
+			}
+			m.Notice = "订阅已导入"
+		})
 		return
 	}
 	if m.Hooks.ImportURL != nil {
@@ -170,7 +203,7 @@ func (m *Model) batchTools(c *mygoui.Context, pal Palette) {
 	del := mygoui.ButtonBase(c.Key("batch-delete")).Height(28).Padding(0, 8).Disabled(n == 0).Label("batch-delete")
 	del.Children(func() { mygoui.Text(c, "删除").FontSize(13).TextColor(pal.Error) })
 	if del.Clicked() {
-		m.deleteChecked()
+		m.BatchDeleteAsk = true
 	}
 	if filledButton(c, pal, "完成", "batch-done", false) {
 		m.Batch = false
@@ -183,7 +216,26 @@ func (m *Model) batchTools(c *mygoui.Context, pal Palette) {
 
 func (m *Model) deleteChecked() {
 	if m.Hooks.DeleteProfile != nil {
-		m.Notice = "批量删除尚未实现，请逐项删除"
+		var ids []string
+		for _, p := range m.Profiles {
+			if p.Checked {
+				ids = append(ids, p.UID)
+			}
+		}
+		deleted := 0
+		var failures []string
+		for _, id := range ids {
+			if err := m.Hooks.DeleteProfile(id); err != nil {
+				failures = append(failures, err.Error())
+			} else {
+				deleted++
+			}
+		}
+		m.Batch = false
+		m.Notice = "已删除 " + itoa(deleted) + " 个订阅"
+		if len(failures) > 0 {
+			m.Notice += "；未删除 " + itoa(len(failures)) + " 个：" + strings.Join(failures, "；")
+		}
 		return
 	}
 	var keep []ProfileItem
@@ -314,9 +366,8 @@ func (m *Model) profileMenu(menu *mygoui.Menu, p *ProfileItem) {
 	if menu.Item("编辑文件").Chosen() {
 		m.Dialogs.Runtime = true
 	}
-	rules := menu.Item("编辑规则")
-	if p.Option.Rules == "" {
-		rules.Disabled(true)
+	if menu.Item("编辑规则覆写").Chosen() {
+		m.openRuleEditor("profile", p.UID)
 	}
 	proxies := menu.Item("编辑节点")
 	if p.Option.Proxies == "" {
@@ -355,7 +406,6 @@ func (m *Model) profileMenu(menu *mygoui.Menu, p *ProfileItem) {
 		}
 		m.DeleteUID = p.UID
 	}
-	_ = rules
 	_ = proxies
 	_ = groups
 	_ = merge
@@ -363,6 +413,22 @@ func (m *Model) profileMenu(menu *mygoui.Menu, p *ProfileItem) {
 }
 
 func (m *Model) updateProfile(uid string) {
+	if m.ProfileBusy {
+		return
+	}
+	if m.Hooks.UpdateProfileAsync != nil {
+		m.ProfileBusy = true
+		m.Notice = "正在更新订阅…"
+		m.Hooks.UpdateProfileAsync(uid, func(err error) {
+			m.ProfileBusy = false
+			if err != nil {
+				m.Notice = err.Error()
+			} else {
+				m.Notice = "订阅已更新"
+			}
+		})
+		return
+	}
 	if m.Hooks.UpdateProfile == nil {
 		m.Notice = "更新订阅尚未实现"
 		return
@@ -374,19 +440,68 @@ func (m *Model) updateProfile(uid string) {
 	m.Notice = "订阅已更新"
 }
 
-func (m *Model) extensionCard(c *mygoui.Context, pal Palette, title, chipText string) {
-	b := mygoui.ButtonBase(c.Key("ext-" + chipText)).FillWidth().Padding(12).Radius(8).Background(pal.Card).Label("ext-" + chipText)
+func (m *Model) updateAllProfiles() {
+	if m.ProfileBusy {
+		return
+	}
+	var ids []string
+	for _, p := range m.Profiles {
+		if p.URL != "" {
+			ids = append(ids, p.UID)
+		}
+	}
+	if len(ids) == 0 {
+		m.Notice = "没有可更新的远程订阅"
+		return
+	}
+	if m.Hooks.UpdateProfileAsync == nil && m.Hooks.UpdateProfile == nil {
+		m.Notice = "订阅更新不可用"
+		return
+	}
+	m.ProfileBusy = true
+	var failures []string
+	completed := 0
+	var next func(int)
+	next = func(i int) {
+		if i == len(ids) {
+			m.ProfileBusy = false
+			m.Notice = "已更新 " + itoa(completed) + " 个订阅"
+			if len(failures) > 0 {
+				m.Notice += "；失败 " + itoa(len(failures)) + " 个：" + strings.Join(failures, "；")
+			}
+			return
+		}
+		m.Notice = "正在更新订阅 " + itoa(i+1) + " / " + itoa(len(ids))
+		done := func(err error) {
+			if err != nil {
+				failures = append(failures, err.Error())
+			} else {
+				completed++
+			}
+			next(i + 1)
+		}
+		if m.Hooks.UpdateProfileAsync != nil {
+			m.Hooks.UpdateProfileAsync(ids[i], done)
+		} else {
+			done(m.Hooks.UpdateProfile(ids[i]))
+		}
+	}
+	next(0)
+}
+
+func (m *Model) rewriteCard(c *mygoui.Context, pal Palette, title, desc, scope, profileID string) {
+	b := mygoui.ButtonBase(c.Key("rewrite-" + scope)).FillWidth().Padding(14).Radius(8).Background(pal.Card).Label("rewrite-" + scope)
 	b.Children(func() {
 		mygoui.Column(c).FillWidth().AlignItems(mygoui.Stretch).Gap(6).Children(func() {
 			mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
 				mygoui.Text(c, title).FontSize(14).Grow(1)
-				chip(c, pal, chipText, TonePrimary, false)
+				chip(c, pal, "编辑", TonePrimary, false)
 			})
-			mygoui.Text(c, "执行顺序：订阅原文 → 应用设置 → 全局扩展配置 → 全局扩展脚本 → 订阅扩展配置 → 订阅扩展脚本 → 应用设置回写").FontSize(12).TextColor(pal.TextMuted)
+			mygoui.Text(c, desc+" · 先预览再应用").FontSize(12).TextColor(pal.TextMuted)
 		})
 	})
 	if b.Clicked() {
-		m.Dialogs.Runtime = true
+		m.openRuleEditor(scope, profileID)
 	}
 }
 

@@ -56,8 +56,13 @@ func (a *App) ready(quitting *bool) {
 		MinWidth:       ui.WindowMinWidth,
 		MinHeight:      ui.WindowMinHeight,
 		UseContentSize: true,
+		Hidden:         a.model.Prefs.SilentStart,
 		Content:        mygoui.View(a.model.View),
 	})
+	a.model.Hooks.ImportURLAsync = a.importURLAsync
+	a.model.Hooks.UpdateProfileAsync = a.updateProfileAsync
+	a.model.Hooks.BrowseProfiles = a.browseProfiles
+	a.model.Hooks.CreateProfileAsync = a.createProfileAsync
 	a.startLive()
 	if err := a.startAgent(); err != nil {
 		a.model.Notice = "Agent 接口启动失败: " + err.Error()
@@ -90,6 +95,10 @@ func (a *App) ready(quitting *bool) {
 	})
 	if err != nil {
 		log.Printf("tray: %v", err)
+		// A hidden window must remain reachable if the notification area fails.
+		if a.model.Prefs.SilentStart {
+			a.win.Show()
+		}
 		return
 	}
 	a.tray = tray

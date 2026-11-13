@@ -7,9 +7,15 @@ import (
 )
 
 func (m *Model) overlay(c *mygoui.Context, pal Palette) {
+	if m.Dialogs.Ports && !m.portsDraftActive {
+		m.portsDraft = m.Prefs
+		m.portsDraftActive = true
+	}
 	m.homeSettingsDialog(c, pal)
 	m.chainDialog(c, pal)
 	m.deleteDialog(c, pal)
+	m.batchDeleteDialog(c, pal)
+	m.ruleEditorDialog(c, pal)
 	m.profileForm(c, pal)
 	m.providerDialog(c, pal)
 	m.simpleDialog(c, pal, &m.Dialogs.Theme, "主题设置", m.themeBody)
@@ -18,6 +24,9 @@ func (m *Model) overlay(c *mygoui.Context, pal Palette) {
 	m.simpleDialog(c, pal, &m.Dialogs.Hotkey, "热键设置", m.hotkeyBody)
 	m.simpleDialog(c, pal, &m.Dialogs.Backup, "备份设置", m.backupBody)
 	m.simpleDialog(c, pal, &m.Dialogs.Ports, "端口设置", m.portsBody)
+	if !m.Dialogs.Ports {
+		m.portsDraftActive = false
+	}
 	m.simpleDialog(c, pal, &m.Dialogs.Sysproxy, "系统代理设置", m.sysproxyBody)
 	m.simpleDialog(c, pal, &m.Dialogs.TUN, "TUN 设置", m.tunBody)
 	m.serviceDialog(c, pal)
@@ -29,6 +38,27 @@ func (m *Model) overlay(c *mygoui.Context, pal Palette) {
 	m.connColumnDialog(c, pal)
 	m.ruleProviderDialog(c, pal)
 	m.testFormDialog(c, pal)
+}
+
+func (m *Model) batchDeleteDialog(c *mygoui.Context, pal Palette) {
+	if !m.BatchDeleteAsk {
+		return
+	}
+	mygoui.Modal(c, &m.BatchDeleteAsk, func() {
+		mygoui.Column(c).Width(420).Padding(16).Gap(10).Background(pal.Dialog).Radius(8).Children(func() {
+			mygoui.Text(c, "删除选中订阅？").FontSize(18).Bold()
+			mygoui.Text(c, "当前使用中的订阅会保留，其余选中项将被删除。").FontSize(14)
+			mygoui.Row(c).Gap(8).Children(func() {
+				if filledButton(c, pal, "取消", "batch-delete-cancel", false) {
+					m.BatchDeleteAsk = false
+				}
+				if filledButton(c, pal, "确认删除", "batch-delete-confirm", true) {
+					m.BatchDeleteAsk = false
+					m.deleteChecked()
+				}
+			})
+		})
+	})
 }
 
 func (m *Model) homeSettingsDialog(c *mygoui.Context, pal Palette) {
@@ -149,24 +179,28 @@ func (m *Model) profileForm(c *mygoui.Context, pal Palette) {
 		}
 		mygoui.Column(c).Width(375).Padding(16).Gap(8).Background(pal.Dialog).Radius(8).Children(func() {
 			mygoui.Text(c, title).FontSize(18).Bold()
-			types := []string{"远程", "本地"}
-			cur := "远程"
-			if m.Form.Type == "local" {
-				cur = "本地"
-			}
-			mygoui.Text(c, "类型").FontSize(13).TextColor(pal.TextMuted)
-			sel := mygoui.Select(c, &cur, types).FillWidth().Label("profile-type")
-			if sel.Changed() {
-				if cur == "本地" {
-					m.Form.Type = "local"
-				} else {
-					m.Form.Type = "remote"
+			if m.Hooks.SaveProfileMetadata == nil {
+				types := []string{"远程", "本地"}
+				cur := "远程"
+				if m.Form.Type == "local" {
+					cur = "本地"
+				}
+				mygoui.Text(c, "类型").FontSize(13).TextColor(pal.TextMuted)
+				sel := mygoui.Select(c, &cur, types).FillWidth().Label("profile-type")
+				if sel.Changed() {
+					if cur == "本地" {
+						m.Form.Type = "local"
+					} else {
+						m.Form.Type = "remote"
+					}
 				}
 			}
 			m.field(c, "名称", &m.Form.Name)
 			m.field(c, "描述", &m.Form.Desc)
-			if m.Form.Type == "remote" {
+			if m.Form.Type == "remote" && !m.Form.Editing {
 				m.field(c, "订阅链接", &m.Form.URL)
+			}
+			if m.Form.Type == "remote" && m.Hooks.SaveProfileMetadata == nil {
 				m.field(c, "用户代理", &m.Form.UA)
 				mygoui.Text(c, "更新间隔").FontSize(13)
 				interval := itoa(m.Form.Interval)
@@ -190,7 +224,7 @@ func (m *Model) profileForm(c *mygoui.Context, pal Palette) {
 				if filledButton(c, pal, "取消", "form-cancel", false) {
 					m.Form.Open = false
 				}
-				if filledButton(c, pal, "保存", "form-save", true) {
+				if filledButton(c, pal, "保存", "form-save", true) && !m.ProfileBusy {
 					m.saveForm()
 				}
 			})
@@ -199,8 +233,36 @@ func (m *Model) profileForm(c *mygoui.Context, pal Palette) {
 }
 
 func (m *Model) saveForm() {
+	if m.Hooks.SaveProfileMetadata != nil && m.Form.Editing {
+		if err := m.Hooks.SaveProfileMetadata(m.Form.UID, m.Form.Name, m.Form.Desc); err != nil {
+			m.Form.Error = err.Error()
+			return
+		}
+		m.Form.Open = false
+		m.Notice = "订阅信息已保存"
+		return
+	}
+	if m.Hooks.CreateProfileAsync != nil && !m.Form.Editing {
+		if !ValidSubscriptionURL(m.Form.URL) {
+			m.Form.Error = "请输入有效的订阅链接"
+			return
+		}
+		form := m.Form
+		m.ProfileBusy = true
+		m.Form.Error = "正在下载订阅…"
+		m.Hooks.CreateProfileAsync(form, func(err error) {
+			m.ProfileBusy = false
+			if err != nil {
+				m.Form.Error = err.Error()
+				return
+			}
+			m.Form.Open = false
+			m.Notice = "订阅已导入"
+		})
+		return
+	}
 	if m.Hooks.ImportURL != nil {
-		m.Form.Error = "配置表单尚未接入；请使用链接输入框或拖入 YAML 文件"
+		m.Form.Error = "当前无法创建订阅"
 		return
 	}
 	if m.Form.Type == "" {
@@ -454,21 +516,23 @@ func (m *Model) webdavBody(c *mygoui.Context, pal Palette) {
 }
 
 func (m *Model) portsBody(c *mygoui.Context, pal Palette) {
-	m.portLine(c, "混合代理端口", &m.Prefs.MixedPort, nil)
-	m.portLine(c, "SOCKS 代理端口", &m.Prefs.SocksPort, &m.Prefs.SocksOn)
-	m.portLine(c, "HTTP(S) 代理端口", &m.Prefs.HTTPPort, &m.Prefs.HTTPOn)
+	p := &m.portsDraft
+	m.portLine(c, "混合代理端口", &p.MixedPort, nil)
+	m.portLine(c, "SOCKS 代理端口", &p.SocksPort, &p.SocksOn)
+	m.portLine(c, "HTTP(S) 代理端口", &p.HTTPPort, &p.HTTPOn)
 	if runtime.GOOS != "windows" {
-		m.portLine(c, "Redir 透明代理端口", &m.Prefs.RedirPort, &m.Prefs.RedirOn)
+		m.portLine(c, "Redir 透明代理端口", &p.RedirPort, &p.RedirOn)
 	}
 	if runtime.GOOS == "linux" {
-		m.portLine(c, "Tproxy 透明代理端口", &m.Prefs.TProxyPort, &m.Prefs.TProxyOn)
+		m.portLine(c, "Tproxy 透明代理端口", &p.TProxyPort, &p.TProxyOn)
 	}
-	err := ValidatePorts(PortSet{
-		Mixed: m.Prefs.MixedPort, Socks: m.Prefs.SocksPort, SocksOn: m.Prefs.SocksOn,
-		HTTP: m.Prefs.HTTPPort, HTTPOn: m.Prefs.HTTPOn, Redir: m.Prefs.RedirPort, RedirOn: m.Prefs.RedirOn,
-		TProxy: m.Prefs.TProxyPort, TProxyOn: m.Prefs.TProxyOn,
+	ports := PortSet{
+		Mixed: p.MixedPort, Socks: p.SocksPort, SocksOn: p.SocksOn,
+		HTTP: p.HTTPPort, HTTPOn: p.HTTPOn, Redir: p.RedirPort, RedirOn: p.RedirOn,
+		TProxy: p.TProxyPort, TProxyOn: p.TProxyOn,
 		ShowRedir: runtime.GOOS != "windows", ShowTProxy: runtime.GOOS == "linux",
-	})
+	}
+	err := ValidatePorts(ports)
 	if err != "" {
 		mygoui.Text(c, err).FontSize(12).TextColor(pal.Error)
 	}
@@ -477,8 +541,20 @@ func (m *Model) portsBody(c *mygoui.Context, pal Palette) {
 			m.Notice = err
 			return
 		}
-		m.Home.MixedPort = m.Prefs.MixedPort
-		m.savePrefs()
+		if m.Hooks.SetKernelPorts != nil {
+			if applyErr := m.Hooks.SetKernelPorts(ports); applyErr != nil {
+				m.Notice = applyErr.Error()
+				return
+			}
+		}
+		if m.Hooks.SetKernelPorts == nil {
+			m.Prefs.MixedPort = p.MixedPort
+			m.Prefs.SocksPort = p.SocksPort
+			m.Prefs.SocksOn = p.SocksOn
+			m.Prefs.HTTPPort = p.HTTPPort
+			m.Prefs.HTTPOn = p.HTTPOn
+		}
+		m.Home.MixedPort = p.MixedPort
 		m.Notice = "端口设置已保存"
 		m.Dialogs.Ports = false
 	}

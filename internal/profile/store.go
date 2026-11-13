@@ -101,7 +101,45 @@ func (s *Store) Save(f File) error {
 		return err
 	}
 	b = append(b, '\n')
-	return os.WriteFile(s.path(), b, 0o600)
+	file, err := os.CreateTemp(s.dir, ".profiles-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := file.Name()
+	defer os.Remove(name)
+	if err = file.Chmod(0600); err == nil {
+		_, err = file.Write(b)
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(name, s.path())
+}
+
+func (s *Store) UpdateMetadata(uid, name, description string) error {
+	name = strings.TrimSpace(name)
+	description = strings.TrimSpace(description)
+	if name == "" || len(name) > 256 || len(description) > 2048 {
+		return errors.New("名称不能为空且不能超过 256 字节，描述不能超过 2048 字节")
+	}
+	f, err := s.Load()
+	if err != nil {
+		return err
+	}
+	for i := range f.Items {
+		if f.Items[i].UID == uid {
+			f.Items[i].Name = name
+			f.Items[i].Description = description
+			return s.Save(f)
+		}
+	}
+	return errors.New("订阅不存在")
 }
 
 // SetCurrent marks uid as the active subscription.
@@ -159,6 +197,31 @@ func (s *Store) Delete(uid string) error {
 		return err
 	}
 	if err := os.Remove(abs); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// DiscardFirstImport rolls back a failed first activation, without touching
+// an existing catalog or any file outside the managed profiles directory.
+func (s *Store) DiscardFirstImport(uid string) error {
+	f, err := s.Load()
+	if err != nil {
+		return err
+	}
+	if len(f.Items) != 1 || f.Current != uid || f.Items[0].UID != uid {
+		return errors.New("订阅目录已变化，无法自动回滚导入")
+	}
+	rel := f.Items[0].File
+	abs := filepath.Join(s.dir, rel)
+	inside, err := filepath.Rel(filepath.Join(s.dir, "profiles"), abs)
+	if rel == "" || err != nil || inside == "." || inside == ".." || filepath.IsAbs(inside) || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
+		return errors.New("订阅文件路径无效")
+	}
+	if err = s.Save(File{}); err != nil {
+		return err
+	}
+	if err = os.Remove(abs); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
@@ -254,6 +317,7 @@ func (s *Store) ImportRemote(raw string, fetch func(string) ([]byte, error)) (Ca
 		f.Current = uid
 	}
 	if err := s.Save(f); err != nil {
+		_ = os.Remove(filepath.Join(s.dir, rel))
 		return CatalogItem{}, err
 	}
 	return item, nil
@@ -290,6 +354,7 @@ func (s *Store) ImportLocal(filename string, body []byte) (CatalogItem, error) {
 		f.Current = uid
 	}
 	if err := s.Save(f); err != nil {
+		_ = os.Remove(filepath.Join(s.dir, rel))
 		return CatalogItem{}, err
 	}
 	return item, nil

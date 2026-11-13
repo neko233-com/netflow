@@ -384,7 +384,7 @@ func (m *Model) trafficCard(c *mygoui.Context, pal Palette) mygoui.Element {
 			{"下载量", FormatTraffic(m.Home.TotalDown), TonePrimary},
 		}
 		if m.Prefs.MemoryUsage {
-			cells = append(cells, cell{"内核占用", FormatTraffic(m.Home.Memory), ToneError})
+			cells = append(cells, cell{"Go 堆内存", FormatTraffic(m.Home.Memory), ToneError})
 		}
 		mygoui.Grid(c).Columns(cols).Gap(8).Children(func() {
 			for _, cell := range cells {

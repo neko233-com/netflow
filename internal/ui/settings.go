@@ -86,7 +86,7 @@ func (m *Model) switchLine(c *mygoui.Context, pal Palette, label string, on *boo
 
 func (m *Model) clashSettings(c *mygoui.Context, pal Palette) {
 	sectionCard(c, pal, "Clash 设置", func() {
-		m.switchLine(c, pal, "局域网连接", &m.Prefs.AllowLan, "allow-lan", func(bool) { m.savePrefs() }, func() {
+		m.switchLine(c, pal, "局域网连接", &m.Prefs.AllowLan, "allow-lan", func(on bool) { m.setKernelBool("allow-lan", &m.Prefs.AllowLan, on) }, func() {
 			if gearButton(c, pal, "网络接口", "lan-gear") {
 				m.Notice = "网络接口"
 			}
@@ -108,11 +108,22 @@ func (m *Model) clashSettings(c *mygoui.Context, pal Palette) {
 				m.savePrefs()
 			}
 		})
-		m.switchLine(c, pal, "IPv6", &m.Prefs.IPv6, "ipv6", func(bool) { m.savePrefs() }, nil)
-		m.switchLine(c, pal, "统一延迟", &m.Prefs.UnifiedDelay, "unified", func(bool) { m.savePrefs() }, func() {
+		m.switchLine(c, pal, "IPv6", &m.Prefs.IPv6, "ipv6", func(on bool) { m.setKernelBool("ipv6", &m.Prefs.IPv6, on) }, nil)
+		m.switchLine(c, pal, "统一延迟", &m.Prefs.UnifiedDelay, "unified", func(on bool) { m.setKernelBool("unified-delay", &m.Prefs.UnifiedDelay, on) }, func() {
 			helpMark(c, pal, "help-unified", "开启统一延迟时，会进行两次延迟测试，以消除连接握手等带来的不同类型节点的延迟差异")
 		})
-		m.labeledSelect(c, "日志等级", &m.Prefs.LogLevel, []string{"debug", "info", "warning", "error", "silent"}, "log-level")
+		mygoui.Row(c).FillWidth().Padding(5, 0).AlignItems(mygoui.Center).Children(func() {
+			mygoui.Text(c, "日志等级").FontSize(14).Grow(1)
+			previous := m.Prefs.LogLevel
+			if mygoui.Select(c, &m.Prefs.LogLevel, []string{"debug", "info", "warning", "error", "silent"}).Width(120).Label("log-level").Changed() {
+				if m.Hooks.SetKernelOption != nil {
+					if err := m.Hooks.SetKernelOption("log-level", m.Prefs.LogLevel); err != nil {
+						m.Prefs.LogLevel = previous
+						m.Notice = err.Error()
+					}
+				}
+			}
+		})
 		clickRow(c, pal, "端口设置", "ports", m.Busy == "ports", func() { m.Dialogs.Ports = true }, func() {
 			mygoui.Text(c, itoa(m.Prefs.MixedPort)).FontSize(13).TextColor(pal.TextMuted)
 		})
@@ -136,6 +147,15 @@ func (m *Model) clashSettings(c *mygoui.Context, pal Palette) {
 		}, nil)
 		clickRow(c, pal, "流量隧道管理", "tunnels", false, func() { m.Notice = "流量隧道管理" }, nil)
 	})
+}
+
+func (m *Model) setKernelBool(name string, field *bool, on bool) {
+	if m.Hooks.SetKernelOption != nil {
+		if err := m.Hooks.SetKernelOption(name, on); err != nil {
+			*field = !on
+			m.Notice = err.Error()
+		}
+	}
 }
 
 func (m *Model) vergeBasic(c *mygoui.Context, pal Palette) {

@@ -25,11 +25,19 @@ const configFileName = "config.yaml"
 // Status is a snapshot of the running kernel. The UI reads this value
 // and does not touch the mihomo singleton itself.
 type Status struct {
-	Running   bool
-	Version   string
-	MixedPort int
-	Mode      string
-	ConfigDir string
+	Running      bool
+	Version      string
+	MixedPort    int
+	HTTPPort     int
+	SOCKSPort    int
+	RedirPort    int
+	TProxyPort   int
+	AllowLAN     bool
+	IPv6         bool
+	UnifiedDelay bool
+	LogLevel     string
+	Mode         string
+	ConfigDir    string
 }
 
 // ProxyNode is one proxy inside a provider.
@@ -136,6 +144,14 @@ func (c *Core) Status() Status {
 	}
 	general := executor.GetGeneral()
 	st.MixedPort = general.MixedPort
+	st.HTTPPort = general.Port
+	st.SOCKSPort = general.SocksPort
+	st.RedirPort = general.RedirPort
+	st.TProxyPort = general.TProxyPort
+	st.AllowLAN = general.AllowLan
+	st.IPv6 = general.IPv6
+	st.UnifiedDelay = general.UnifiedDelay
+	st.LogLevel = general.LogLevel.String()
 	st.Mode = general.Mode.String()
 	return st
 }
@@ -199,8 +215,16 @@ func (c *Core) apply() error {
 		return fmt.Errorf("apply config: %w", err)
 	}
 	actual := executor.GetGeneral()
-	if cfg.General.MixedPort > 0 && actual.MixedPort != cfg.General.MixedPort {
-		return fmt.Errorf("mixed proxy port %d could not be opened", cfg.General.MixedPort)
+	for _, port := range []struct {
+		name      string
+		want, got int
+	}{
+		{"mixed", cfg.General.MixedPort, actual.MixedPort}, {"HTTP", cfg.General.Port, actual.Port}, {"SOCKS", cfg.General.SocksPort, actual.SocksPort},
+		{"redir", cfg.General.RedirPort, actual.RedirPort}, {"tproxy", cfg.General.TProxyPort, actual.TProxyPort},
+	} {
+		if port.want != port.got {
+			return fmt.Errorf("%s proxy port %d could not be opened (actual %d)", port.name, port.want, port.got)
+		}
 	}
 	startExternalController(cfg.Controller.ExternalController, cfg.Controller.Secret, cfg.General.LogLevel == log.DEBUG)
 	return nil

@@ -17,6 +17,7 @@ import (
 	"github.com/metacubex/mihomo/hub/executor"
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/conn"
+	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
 )
@@ -203,6 +204,16 @@ func (a *App) previewSources(items []profile.CatalogItem, before, after rewrite.
 	} else {
 		return nil, nil, nil, err
 	}
+	if a.kernelOptions != nil {
+		path := filepath.Join(a.dir, "kernel-options.json")
+		if data, err := os.ReadFile(path); err == nil {
+			hashes[path] = sha256.Sum256(data)
+		} else if errors.Is(err, os.ErrNotExist) {
+			hashes[path] = [32]byte{}
+		} else {
+			return nil, nil, nil, err
+		}
+	}
 	for id, path := range sources {
 		base, err := os.ReadFile(path)
 		if err != nil {
@@ -219,6 +230,12 @@ func (a *App) previewSources(items []profile.CatalogItem, before, after rewrite.
 		effective, newRules, err := rewrite.Compose(base, after, id, time.Now())
 		if err != nil {
 			return nil, nil, nil, err
+		}
+		if a.kernelOptions != nil {
+			effective, err = kernelopts.Compose(effective, a.kernelOptions.Snapshot())
+			if err != nil {
+				return nil, nil, nil, err
+			}
 		}
 		if _, err = executor.ParseWithBytes(effective); err != nil {
 			return nil, nil, nil, fmt.Errorf("profile %q: %w", id, err)

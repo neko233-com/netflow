@@ -14,9 +14,34 @@ import (
 // UpdateProfile replaces one remote subscription only after it has been
 // downloaded and validated. A failed reload restores the previous files.
 func (a *App) UpdateProfile(uid string) error {
-	if a == nil || a.profiles == nil {
-		return errors.New("订阅存储不可用")
+	raw, err := a.profileURL(uid)
+	if err != nil {
+		return err
 	}
+	body, err := fetchProfile(raw)
+	if err != nil {
+		return err
+	}
+	return a.updateProfileData(uid, raw, body)
+}
+
+func (a *App) profileURL(uid string) (string, error) {
+	if a == nil || a.profiles == nil {
+		return "", errors.New("订阅存储不可用")
+	}
+	f, err := a.profiles.Load()
+	if err != nil {
+		return "", err
+	}
+	for _, item := range f.Items {
+		if item.UID == uid && item.URL != "" {
+			return item.URL, nil
+		}
+	}
+	return "", errors.New("远程订阅不存在")
+}
+
+func (a *App) updateProfileData(uid, expectedURL string, body []byte) error {
 	f, err := a.profiles.Load()
 	if err != nil {
 		return err
@@ -28,12 +53,8 @@ func (a *App) UpdateProfile(uid string) error {
 			break
 		}
 	}
-	if index < 0 || f.Items[index].URL == "" {
-		return errors.New("远程订阅不存在")
-	}
-	body, err := fetchProfile(f.Items[index].URL)
-	if err != nil {
-		return err
+	if index < 0 || f.Items[index].URL == "" || f.Items[index].URL != expectedURL {
+		return errors.New("订阅已删除或链接已变化，请重新更新")
 	}
 	if err = validateProfile(body); err != nil {
 		return err
@@ -48,6 +69,11 @@ func (a *App) UpdateProfile(uid string) error {
 		return err
 	}
 	active := f.Current == uid
+	if active {
+		if err = a.validateEffectiveProfile(body, uid); err != nil {
+			return err
+		}
+	}
 	configPath := filepath.Join(a.dir, "config.yaml")
 	var oldConfig []byte
 	if active {

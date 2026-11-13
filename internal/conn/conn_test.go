@@ -94,7 +94,7 @@ func TestLabelsAndTracker(t *testing.T) {
 		t.Fatalf("sample inside 500ms replaced the snapshot: %+v", held.Active[0])
 	}
 	second := tr.Observe([]Item{{ID: "a", Upload: 30, Download: 25}}, 30, 25, t0.Add(SampleGap))
-	if second.Active[0].UploadSpeed != 20 || second.Active[0].DownloadSpeed != 20 {
+	if second.Active[0].UploadSpeed != 40 || second.Active[0].DownloadSpeed != 40 || second.UploadSpeed != 40 || second.DownloadSpeed != 40 {
 		t.Fatalf("delta speed %+v", second.Active[0])
 	}
 	gone := tr.Observe(nil, 30, 25, t0.Add(2*SampleGap))

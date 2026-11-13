@@ -59,7 +59,7 @@ func main() {
 	for _, target := range []struct {
 		path string
 		size int
-	}{{"resources/icon.png", 1024}, {"internal/app/assets/tray.png", 64}} {
+	}{{"resources/icon.png", 1024}, {"internal/app/assets/tray.png", 64}, {"internal/ui/assets/netflow.png", 64}} {
 		img := image.NewNRGBA(image.Rect(0, 0, target.size, target.size))
 		draw.CatmullRom.Scale(img, img.Bounds(), src, crop, draw.Over, nil)
 		out, err := os.Create(target.path)

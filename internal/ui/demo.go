@@ -156,7 +156,7 @@ func MeasureCollapsedBrand(tt *mygoui.Tester) (CollapsedBrandMeasure, bool) {
 	}
 	side, okSide := tt.Find("sidebar")
 	slot, okSlot := tt.Find("logo-slot")
-	mark, okMark := tt.Find("mygo")
+	mark, okMark := tt.Find("netflow-mark")
 	if !okSide || !okSlot || !okMark {
 		return out, false
 	}

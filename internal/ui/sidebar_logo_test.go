@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"bytes"
-	"os"
 	"testing"
 
 	mygoui "github.com/egoist/mygo/ui"
@@ -16,14 +14,6 @@ import (
 // centered in that rail, the same 36×36 favicon is centered in the area,
 // and the wordmark is not drawn.
 func TestSidebarLogoSizes(t *testing.T) {
-	spec, err := os.ReadFile("../../docs/spec/assets/brand/favicon.svg")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(bytes.TrimSpace(spec), bytes.TrimSpace(mygoFaviconSVG)) {
-		t.Fatal("brand mark drifted from docs/spec/assets/brand/favicon.svg")
-	}
-
 	m := NewModel(demoHome())
 	expanded := renderModel(m, WindowWidth, WindowHeight, false)
 	side, ok := expanded.Find("sidebar")
@@ -33,7 +23,7 @@ func TestSidebarLogoSizes(t *testing.T) {
 	if side.W != 200 {
 		t.Fatalf("expanded sidebar width %v, want 200", side.W)
 	}
-	mark, ok := expanded.Find("mygo")
+	mark, ok := expanded.Find("netflow-mark")
 	if !ok {
 		t.Fatal("expanded sidebar has no favicon")
 	}
@@ -73,7 +63,7 @@ func assertCollapsedLogoCenter(t *testing.T, tt *mygoui.Tester) {
 	}
 	side, okSide := tt.Find("sidebar")
 	slot, okSlot := tt.Find("logo-slot")
-	mark, okMark := tt.Find("mygo")
+	mark, okMark := tt.Find("netflow-mark")
 	if !okSide || !okSlot || !okMark {
 		t.Fatal("collapsed frame is missing sidebar, logo-slot, or the favicon")
 	}

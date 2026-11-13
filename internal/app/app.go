@@ -21,6 +21,7 @@ import (
 	"github.com/neko233-com/netflow/internal/clashlog"
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
+	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/service"
@@ -64,6 +65,7 @@ type App struct {
 	sites           *sitetest.Store
 	started         time.Time
 	rewrites        *rewrite.Store
+	kernelOptions   *kernelopts.Store
 	agentBridge     *agent.Bridge
 	agentProposals  map[string]agentProposal
 	agentExpiryStop chan struct{}
@@ -140,6 +142,12 @@ func (a *App) Prepare() error {
 	a.profiles = profile.NewStore(dir)
 	a.model = ui.NewModel(ui.HomeState{ConfigDir: dir, Version: core.Version()})
 	a.applySettings()
+	for _, page := range ui.Pages() {
+		if page.Path == a.model.Prefs.StartPage {
+			a.model.Router.Replace(page.Path)
+			break
+		}
+	}
 	if active, err := a.autostart.Current(); err == nil {
 		a.model.Prefs.AutoLaunch = active
 		a.model.Home.AutoLaunch = active
@@ -150,14 +158,21 @@ func (a *App) Prepare() error {
 	if err != nil {
 		return fmt.Errorf("读取 Agent 规则: %w", err)
 	}
+	a.kernelOptions, err = kernelopts.Open(dir)
+	if err != nil {
+		return fmt.Errorf("读取内核选项: %w", err)
+	}
 	a.core.SetTransformer(func(base []byte, profileID string) ([]byte, error) {
 		state := a.rewrites.Snapshot()
 		now := time.Now()
-		if !rewrite.HasActive(state, profileID, now) {
-			return base, nil
+		if rewrite.HasActive(state, profileID, now) {
+			var err error
+			base, _, err = rewrite.Compose(base, state, profileID, now)
+			if err != nil {
+				return nil, err
+			}
 		}
-		result, _, err := rewrite.Compose(base, state, profileID, now)
-		return result, err
+		return kernelopts.Compose(base, a.kernelOptions.Snapshot())
 	})
 	a.core.SetProfileID(a.model.CurrentProfile)
 	if err := a.installCurrentProfile(); err != nil {
@@ -461,6 +476,32 @@ func (a *App) refreshHome() {
 	}
 	st := a.core.Status()
 	h := a.model.Home
+	if st.Running {
+		h.Rules = len(a.core.Rules())
+	}
+	if st.Running {
+		a.model.Prefs.AllowLan = st.AllowLAN
+		a.model.Prefs.IPv6 = st.IPv6
+		a.model.Prefs.UnifiedDelay = st.UnifiedDelay
+		a.model.Prefs.LogLevel = st.LogLevel
+		a.model.Prefs.MixedPort = st.MixedPort
+		a.model.Prefs.SocksOn = st.SOCKSPort > 0
+		if st.SOCKSPort > 0 {
+			a.model.Prefs.SocksPort = st.SOCKSPort
+		}
+		a.model.Prefs.HTTPOn = st.HTTPPort > 0
+		if st.HTTPPort > 0 {
+			a.model.Prefs.HTTPPort = st.HTTPPort
+		}
+		a.model.Prefs.RedirOn = st.RedirPort > 0
+		if st.RedirPort > 0 {
+			a.model.Prefs.RedirPort = st.RedirPort
+		}
+		a.model.Prefs.TProxyOn = st.TProxyPort > 0
+		if st.TProxyPort > 0 {
+			a.model.Prefs.TProxyPort = st.TProxyPort
+		}
+	}
 	h.Version = st.Version
 	h.Running = st.Running
 	if st.MixedPort > 0 {
@@ -716,6 +757,9 @@ func (a *App) UseProfile(uid string) error {
 	if err := validateProfile(body); err != nil {
 		return err
 	}
+	if err := a.validateEffectiveProfile(body, uid); err != nil {
+		return err
+	}
 	path := filepath.Join(a.dir, "config.yaml")
 	old, readErr := os.ReadFile(path)
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
@@ -729,31 +773,38 @@ func (a *App) UseProfile(uid string) error {
 		previousProfile = a.core.ProfileID()
 		a.core.SetProfileID(uid)
 	}
-	rollback := func() {
+	rollback := func(cause error) error {
 		if a.core != nil {
 			a.core.SetProfileID(previousProfile)
 		}
+		var restoreErr error
 		if readErr == nil {
-			_ = os.WriteFile(path, old, 0600)
+			restoreErr = os.WriteFile(path, old, 0600)
 		} else {
-			_ = os.Remove(path)
+			restoreErr = os.Remove(path)
+			if errors.Is(restoreErr, os.ErrNotExist) {
+				restoreErr = nil
+			}
 		}
-		if a.core != nil && a.core.Status().Running && readErr == nil {
-			_ = a.core.Reload()
+		if restoreErr == nil && a.core != nil && a.core.Status().Running && readErr == nil {
+			restoreErr = a.core.Reload()
 		}
+		if restoreErr != nil {
+			return errors.Join(cause, fmt.Errorf("恢复之前的配置失败: %w", restoreErr))
+		}
+		return cause
 	}
 	if a.core != nil && a.core.Status().Running {
 		if err := a.core.Reload(); err != nil {
-			rollback()
-			return err
+			return rollback(err)
 		}
 	}
 	if err := a.profiles.SetCurrent(uid); err != nil {
-		rollback()
-		return err
+		return rollback(err)
 	}
 	a.loadProfiles()
 	a.loadGroups()
+	a.refreshHome()
 	return nil
 }
 
@@ -783,21 +834,39 @@ func (a *App) bindHooks() {
 				a.logs.Clear()
 			}
 		},
-		ImportURL:        a.ImportURL,
-		ImportLocal:      a.ImportLocal,
-		DeleteProfile:    a.DeleteProfile,
-		UpdateProfile:    a.UpdateProfile,
-		SavePrefs:        a.savePrefs,
-		ProbeSite:        a.probeSite,
-		SaveSites:        a.saveSites,
-		InstallService:   a.InstallService,
-		UninstallService: a.UninstallService,
-		CheckUnlock:      a.checkUnlock,
-		OpenDir:          a.openDir,
-		RestartCore:      a.restartCore,
-		Copy:             writeClipboard,
-		Quit:             func() { mygo.App.Quit() },
+		ImportURL:           a.ImportURL,
+		ImportLocal:         a.ImportLocal,
+		DeleteProfile:       a.DeleteProfile,
+		UpdateProfile:       a.UpdateProfile,
+		LoadRewrite:         a.loadRewrite,
+		PreviewRewrite:      a.agentPreview,
+		ApplyRewrite:        a.agentApply,
+		SaveProfileMetadata: a.saveProfileMetadata,
+		SetKernelOption:     a.SetKernelOption,
+		SetKernelPorts:      a.SetKernelPorts,
+		SavePrefs:           a.savePrefs,
+		ProbeSite:           a.probeSite,
+		SaveSites:           a.saveSites,
+		InstallService:      a.InstallService,
+		UninstallService:    a.UninstallService,
+		CheckUnlock:         a.checkUnlock,
+		OpenDir:             a.openDir,
+		RestartCore:         a.restartCore,
+		Copy:                writeClipboard,
+		Quit:                func() { mygo.App.Quit() },
 	}
+}
+
+func (a *App) saveProfileMetadata(uid, name, description string) error {
+	if a.profiles == nil {
+		return errors.New("订阅存储不可用")
+	}
+	if err := a.profiles.UpdateMetadata(uid, name, description); err != nil {
+		return err
+	}
+	a.loadProfiles()
+	a.refreshHome()
+	return nil
 }
 
 func (a *App) SetAutoLaunch(on bool) error {
@@ -868,6 +937,14 @@ func (a *App) persistSelection(group, node string) error {
 
 // SetMode writes the profile mode and reloads the kernel when it is running.
 func (a *App) SetMode(mode string) error {
+	if mode != "rule" && mode != "global" && mode != "direct" {
+		return errors.New("无效的代理模式")
+	}
+	if a.kernelOptions != nil {
+		next := a.kernelOptions.Snapshot()
+		next.Mode = &mode
+		return a.applyKernelOptions(next)
+	}
 	if a.dir == "" {
 		return nil
 	}
@@ -881,6 +958,13 @@ func (a *App) SetMode(mode string) error {
 	}
 	if a.core != nil && a.core.Status().Running {
 		if err := a.core.Reload(); err != nil {
+			restoreErr := os.WriteFile(path, data, 0600)
+			if restoreErr == nil {
+				restoreErr = a.core.Reload()
+			}
+			if restoreErr != nil {
+				return errors.Join(err, fmt.Errorf("恢复原代理模式失败: %w", restoreErr))
+			}
 			return err
 		}
 	}
@@ -893,35 +977,29 @@ func (a *App) SetMode(mode string) error {
 // ImportURL stores a remote subscription and, when it is the current one,
 // installs it as the kernel profile.
 func (a *App) ImportURL(raw string) error {
+	body, err := fetchProfile(raw)
+	if err != nil {
+		return err
+	}
+	return a.importURLData(raw, body)
+}
+
+func (a *App) importURLData(raw string, body []byte) error {
 	if a.profiles == nil {
 		a.profiles = profile.NewStore(a.dir)
 	}
-	if _, err := a.profiles.ImportRemote(raw, func(url string) ([]byte, error) {
-		body, err := fetchProfile(url)
-		if err != nil {
-			return nil, err
-		}
-		if err := validateProfile(body); err != nil {
-			return nil, err
-		}
-		return body, nil
-	}); err != nil {
+	if err := validateProfile(body); err != nil {
 		return err
 	}
-	a.loadProfiles()
-	if a.core != nil {
-		a.core.SetProfileID(a.model.CurrentProfile)
-	}
-	if err := a.installCurrentProfile(); err != nil {
+	before, err := a.profiles.Load()
+	if err != nil {
 		return err
 	}
-	if a.core != nil && a.core.Status().Running {
-		if err := a.core.Reload(); err != nil {
-			return err
-		}
+	item, err := a.profiles.ImportRemote(raw, func(string) ([]byte, error) { return body, nil })
+	if err != nil {
+		return err
 	}
-	a.loadGroups()
-	return nil
+	return a.finishProfileImport(before.Current, item.UID)
 }
 
 func (a *App) ImportLocal(path string) error {
@@ -943,22 +1021,29 @@ func (a *App) ImportLocal(path string) error {
 	if err := validateProfile(body); err != nil {
 		return err
 	}
-	if _, err := a.profiles.ImportLocal(path, body); err != nil {
+	before, err := a.profiles.Load()
+	if err != nil {
 		return err
 	}
-	a.loadProfiles()
-	if a.core != nil {
-		a.core.SetProfileID(a.model.CurrentProfile)
-	}
-	if err := a.installCurrentProfile(); err != nil {
+	item, err := a.profiles.ImportLocal(path, body)
+	if err != nil {
 		return err
 	}
-	if a.core != nil && a.core.Status().Running {
-		if err := a.core.Reload(); err != nil {
+	return a.finishProfileImport(before.Current, item.UID)
+}
+
+func (a *App) finishProfileImport(previous, uid string) error {
+	if previous == "" {
+		if err := a.UseProfile(uid); err != nil {
+			if restoreErr := a.profiles.DiscardFirstImport(uid); restoreErr != nil {
+				return errors.Join(err, fmt.Errorf("回滚导入失败: %w", restoreErr))
+			}
+			a.loadProfiles()
 			return err
 		}
+	} else {
+		a.loadProfiles()
 	}
-	a.loadGroups()
 	return nil
 }
 
@@ -1021,21 +1106,25 @@ func (a *App) DeleteProfile(uid string) error {
 }
 
 func (a *App) savePrefs(p ui.Prefs) error {
-	a.settings.SystemProxy = p.SystemProxy
-	a.settings.TUN = p.TUN
-	a.settings.TrayEvent = p.TrayEvent
-	a.settings.InlineModes = p.InlineModes
-	a.settings.ProxyMenu = p.ProxyMenu
-	a.settings.Lightweight = p.Lightweight
+	next := a.settings
+	next.SystemProxy = p.SystemProxy
+	next.TUN = p.TUN
+	next.TrayEvent = p.TrayEvent
+	next.InlineModes = p.InlineModes
+	next.ProxyMenu = p.ProxyMenu
+	next.Lightweight = p.Lightweight
 	b, err := json.Marshal(p)
 	if err != nil {
 		return err
 	}
-	a.settings.Prefs = string(b)
-	if a.store == nil {
-		return nil
+	next.Prefs = string(b)
+	if a.store != nil {
+		if err := a.store.Save(next); err != nil {
+			return err
+		}
 	}
-	return a.store.Save(a.settings)
+	a.settings = next
+	return nil
 }
 
 func (a *App) openDir(kind string) {

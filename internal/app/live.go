@@ -2,11 +2,13 @@ package app
 
 import (
 	"errors"
+	"runtime"
 	"time"
 
-	"github.com/neko233-com/netflow/internal/clashlog"
-	"github.com/neko233-com/netflow/internal/rules"
 	"github.com/egoist/mygo"
+	"github.com/neko233-com/netflow/internal/clashlog"
+	"github.com/neko233-com/netflow/internal/conn"
+	"github.com/neko233-com/netflow/internal/rules"
 )
 
 func (a *App) closeConnection(id string) error {
@@ -85,10 +87,15 @@ func (a *App) liveLoop(stop <-chan struct{}) {
 				if sampleConn && a.core != nil {
 					active, up, down := a.core.Connections()
 					snap := a.connTrack.Observe(active, up, down, time.Now())
-					a.model.Conns.Active = snap.Active
-					a.model.Conns.Closed = snap.Closed
-					a.model.Conns.Up = snap.UploadTotal
-					a.model.Conns.Down = snap.DownloadTotal
+					a.updateTraffic(snap)
+					if !a.started.IsZero() {
+						a.model.Home.Uptime = time.Since(a.started)
+					}
+					if n%40 == 0 {
+						var mem runtime.MemStats
+						runtime.ReadMemStats(&mem)
+						a.model.Home.Memory = int64(mem.Alloc)
+					}
 				}
 				if a.win != nil {
 					a.win.Invalidate()
@@ -96,4 +103,19 @@ func (a *App) liveLoop(stop <-chan struct{}) {
 			})
 		}
 	}
+}
+
+func (a *App) updateTraffic(snap conn.Snapshot) {
+	if a.model == nil {
+		return
+	}
+	a.model.Conns.Active = snap.Active
+	a.model.Conns.Closed = snap.Closed
+	a.model.Conns.Up = snap.UploadTotal
+	a.model.Conns.Down = snap.DownloadTotal
+	a.model.Home.TotalUp = snap.UploadTotal
+	a.model.Home.TotalDown = snap.DownloadTotal
+	a.model.Home.UpSpeed = snap.UploadSpeed
+	a.model.Home.DownSpeed = snap.DownloadSpeed
+	a.model.Home.Connections = len(snap.Active)
 }
