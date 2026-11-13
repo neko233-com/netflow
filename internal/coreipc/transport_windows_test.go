@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -34,6 +35,38 @@ func TestPrivatePipeChild(t *testing.T) {
 	defer c.Close()
 	if _, err = c.Write([]byte("hello")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWorkerExitDetailChild(t *testing.T) {
+	if os.Getenv("NETFLOW_TEST_WORKER_EXIT") == "1" {
+		os.Exit(37)
+	}
+}
+
+func TestWorkerExitDetailReportsWindowsExitCode(t *testing.T) {
+	if err := exitedWorkerDetail(windows.CurrentProcess(), 0); err != nil {
+		t.Fatalf("live process was reported as exited: %v", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestWorkerExitDetailChild$")
+	cmd.Env = append(os.Environ(), "NETFLOW_TEST_WORKER_EXIT=1")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000 | 0x00004000}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Wait()
+	process, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(cmd.Process.Pid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(process)
+	err = exitedWorkerDetail(process, 10000)
+	if err == nil || !strings.Contains(err.Error(), "37 (0x00000025)") {
+		t.Fatalf("missing worker exit status: %v", err)
 	}
 }
 func TestPrivatePipeChecksProcessIdentity(t *testing.T) {

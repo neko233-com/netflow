@@ -4,6 +4,7 @@ import (
 	"time"
 
 	mygoui "github.com/egoist/mygo/ui"
+	"github.com/neko233-com/netflow"
 )
 
 // Page is one entry in the sidebar. ID is the screenshot file prefix.
@@ -62,8 +63,8 @@ type HomeState struct {
 	LastCheck    string
 }
 
-// AppVersion is the NetFlow version shown with a leading v.
-const AppVersion = "0.2.9-alpha.1"
+// AppVersion is the version from the manifest used to build the application.
+var AppVersion = netflow.Version()
 
 func pageByPath(path string) (Page, bool) {
 	for _, p := range Pages() {

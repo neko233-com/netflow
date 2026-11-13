@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/neko233-com/netflow"
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appdir"
 	"github.com/neko233-com/netflow/internal/migration"
@@ -22,7 +23,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags := flag.NewFlagSet("netflow-agent", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: status, tun on|off, groups, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH")
+		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: version, status, tun on|off, groups, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -31,6 +32,14 @@ func run(args []string, input io.Reader, output io.Writer) error {
 			return nil
 		}
 		return err
+	}
+	if flags.Arg(0) == "version" {
+		if flags.NArg() != 1 {
+			return errors.New("version takes no arguments")
+		}
+		return json.NewEncoder(output).Encode(struct {
+			Version string `json:"version"`
+		}{Version: netflow.Version()})
 	}
 	if *dir == "" {
 		var err error

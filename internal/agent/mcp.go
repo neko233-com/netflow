@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/neko233-com/netflow"
 	"github.com/neko233-com/netflow/internal/appdir"
 	"github.com/neko233-com/netflow/internal/migration"
 )
@@ -15,7 +16,7 @@ type Empty struct{}
 // NewMCP exposes a two-step preview/apply interface over the authenticated
 // local bridge. No subscription URLs, core secrets, or token are returned.
 func NewMCP(client Client) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "netflow", Version: "0.2.9"}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "netflow", Version: netflow.Version()}, nil)
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_status", Description: "List the running core, profiles, active connections and agent-managed rewrite state. Subscription URLs are omitted.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, Status, error) {
 			var out Status

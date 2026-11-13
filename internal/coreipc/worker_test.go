@@ -3,12 +3,42 @@ package coreipc
 import (
 	"errors"
 	"net"
+	"net/rpc"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+type diagnosticRPC struct{}
+
+func (*diagnosticRPC) Fail(_ Empty, _ *Empty) error { return errors.New("remote rejection") }
+
+func TestClientAddsWorkerDetailOnlyForTransportErrors(t *testing.T) {
+	left, right := net.Pipe()
+	server := rpc.NewServer()
+	if err := server.RegisterName("Kernel", &diagnosticRPC{}); err != nil {
+		t.Fatal(err)
+	}
+	go server.ServeConn(right)
+	client, err := NewClient(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	want := errors.New("worker exit detail")
+	calls := 0
+	client.failureDetail = func() error { calls++; return want }
+	if err := client.short("Fail", Empty{}, &Empty{}); err == nil || errors.Is(err, want) || calls != 0 {
+		t.Fatalf("remote rejection was treated as a transport error: %v", err)
+	}
+	_ = right.Close()
+	err = client.short("Fail", Empty{}, &Empty{})
+	if !errors.Is(err, want) || !errors.Is(client.TransportError(), want) || calls != 1 {
+		t.Fatalf("transport failure omitted worker detail: %v; calls=%d", err, calls)
+	}
+}
 
 func TestClientCloseWaitsForWorkerOnce(t *testing.T) {
 	left, right := net.Pipe()

@@ -19,17 +19,18 @@ import (
 // Client is an engine over a private authenticated connection. It never opens
 // a device itself. The application supplies the transport after validation.
 type Client struct {
-	rpc          *rpc.Client
-	mu           sync.Mutex
-	applyMu      sync.Mutex
-	profileID    string
-	dir          string
-	transform    func([]byte, string) ([]byte, error)
-	transportErr error
-	closeOnce    sync.Once
-	closeHook    func() error
-	closeErr     error
-	workerPID    uint32
+	rpc           *rpc.Client
+	mu            sync.Mutex
+	applyMu       sync.Mutex
+	profileID     string
+	dir           string
+	transform     func([]byte, string) ([]byte, error)
+	transportErr  error
+	closeOnce     sync.Once
+	closeHook     func() error
+	closeErr      error
+	workerPID     uint32
+	failureDetail func() error
 }
 
 func NewClient(c io.ReadWriteCloser) (*Client, error) {
@@ -55,15 +56,19 @@ func (c *Client) call(method string, in, out any, timeout time.Duration) error {
 	defer timer.Stop()
 	select {
 	case result := <-done:
-		if result.Error != nil {
+		err := result.Error
+		if err != nil {
 			var remote rpc.ServerError
-			if !errors.As(result.Error, &remote) {
+			if !errors.As(err, &remote) {
+				if c.failureDetail != nil {
+					err = errors.Join(err, c.failureDetail())
+				}
 				c.mu.Lock()
-				c.transportErr = result.Error
+				c.transportErr = err
 				c.mu.Unlock()
 			}
 		}
-		return result.Error
+		return err
 	case <-timer.C:
 		err := fmt.Errorf("kernel %s timed out", method)
 		c.mu.Lock()

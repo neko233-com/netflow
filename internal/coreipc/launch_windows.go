@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -37,6 +38,18 @@ type shellExecuteInfo struct {
 }
 
 var shellExecuteEx = windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteExW")
+
+func exitedWorkerDetail(process windows.Handle, timeout uint32) error {
+	state, err := windows.WaitForSingleObject(process, timeout)
+	if err != nil || state != windows.WAIT_OBJECT_0 {
+		return nil
+	}
+	var code uint32
+	if windows.GetExitCodeProcess(process, &code) != nil {
+		return nil
+	}
+	return fmt.Errorf("特权内核进程已退出，代码 %d (0x%08X)", code, code)
+}
 
 func launchElevated(exe string, args []string) (windows.Handle, error) {
 	return launchWithVerb(exe, args, "runas")
@@ -118,8 +131,24 @@ func LaunchWindows(ctx context.Context, exe string) (*Client, error) {
 		return nil, err
 	}
 	client.workerPID = pid
+	var processMu sync.Mutex
+	var detailOnce sync.Once
+	var detail error
+	closed := false
+	client.failureDetail = func() error {
+		detailOnce.Do(func() {
+			processMu.Lock()
+			defer processMu.Unlock()
+			if !closed {
+				detail = exitedWorkerDetail(proc, 1000)
+			}
+		})
+		return detail
+	}
 	client.closeHook = func() error {
-		defer windows.CloseHandle(proc)
+		processMu.Lock()
+		defer processMu.Unlock()
+		defer func() { closed = true; _ = windows.CloseHandle(proc) }()
 		state, waitErr := windows.WaitForSingleObject(proc, 10000)
 		if waitErr != nil {
 			return waitErr

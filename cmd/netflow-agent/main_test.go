@@ -64,6 +64,30 @@ func TestRealVergeImportThroughCLI(t *testing.T) {
 	}
 }
 
+func TestVersionMatchesPackagingManifestWithoutConfig(t *testing.T) {
+	manifestBytes, err := os.ReadFile(filepath.Join("..", "..", "mygo.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil || manifest.Version == "" {
+		t.Fatalf("invalid packaging version: %v", err)
+	}
+	t.Setenv("NETFLOW_CONFIG_DIR", "relative-path-is-invalid")
+	var output bytes.Buffer
+	if err := run([]string{"version"}, bytes.NewReader(nil), &output); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil || result.Version != manifest.Version {
+		t.Fatalf("version differs from packaging manifest: %s %v", output.String(), err)
+	}
+}
+
 func TestPreviewRejectsTrailingAndOversizedInputBeforeBridge(t *testing.T) {
 	for _, input := range []string{`{"scope":"global","operation":"clear"} {}`, strings.Repeat(" ", (1<<20)+1)} {
 		var out bytes.Buffer

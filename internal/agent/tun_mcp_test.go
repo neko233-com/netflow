@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/neko233-com/netflow"
 )
 
 func TestMCPRequestsTUN(t *testing.T) {
@@ -35,6 +36,9 @@ func TestMCPRequestsTUN(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cs.Close()
+	if got := cs.InitializeResult().ServerInfo.Version; got != netflow.Version() {
+		t.Fatalf("MCP version %q does not match the application version %q", got, netflow.Version())
+	}
 	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "netflow_set_tun", Arguments: map[string]any{"enabled": false}})
 	if err != nil || result.IsError {
 		t.Fatalf("TUN tool failed: %v %+v", err, result)
