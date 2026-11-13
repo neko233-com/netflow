@@ -33,13 +33,12 @@ try {
         docker volume create --label "$label=1" $volume | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Could not create validation volume' }
     }
-    foreach ($name in @('Dockerfile', 'entry.sh', 'download-media.sh', 'bridge.py', 'test_monitor.py', 'install.bat')) {
+    foreach ($name in @('Dockerfile', '.dockerignore', 'entry.sh', 'download-media.sh', 'bridge.py', 'test_monitor.py', 'install.bat')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot "windows-vm/$name") -Destination (Join-Path $context $name) -Force
     }
     $env:GOOS='windows'; $env:GOARCH='amd64'
-    go build -p 1 '-ldflags=-H=windowsgui' -o (Join-Path $context 'netflow-vm-agent.exe') ./cmd/netflow-vm-agent
+    go build -p 1 '-ldflags=-H=windowsgui' -o (Join-Path $payload 'netflow-vm-agent.exe') ./cmd/netflow-vm-agent
     if ($LASTEXITCODE -ne 0) { throw 'Could not build guest agent' }
-    Copy-Item -LiteralPath (Join-Path $context 'netflow-vm-agent.exe') -Destination (Join-Path $payload 'netflow-vm-agent.exe') -Force
     go test -p 1 '-tags=integration,with_gvisor,no_tailscale' -c -o (Join-Path $payload 'netflow-app.test.exe') ./internal/app
     if ($LASTEXITCODE -ne 0) { throw 'Could not build Windows integration test' }
     Remove-Item Env:GOOS,Env:GOARCH

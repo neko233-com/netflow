@@ -79,8 +79,10 @@ def bootstrap_media_agent():
     if not (Path("/storage/windows.boot").exists() or Path("/storage/windows.system").exists()):
         if not setup_rebooted.wait(900):
             return
-    if media_started.wait(90):
-        return
+        # First-logon setup schedules a reboot to enable UAC; wait for it
+        # before trying the non-elevated test agent on a fresh installation.
+        if media_started.wait(90):
+            return
     while not media_started.is_set():
         completed = True
         for drive in "DEFGHIJKLMNOPQRSTUVWXYZ":

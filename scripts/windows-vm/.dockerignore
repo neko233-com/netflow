@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!entry.sh
+!download-media.sh
+!bridge.py
+!test_monitor.py
+!install.bat

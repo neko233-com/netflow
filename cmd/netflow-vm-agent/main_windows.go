@@ -44,7 +44,7 @@ type result struct {
 	Error  string `json:"error,omitempty"`
 }
 
-var httpClient = &http.Client{Timeout: 2 * time.Minute, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect refused") }}
+var httpClient = &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect refused") }}
 
 func validHex(s string, n int) bool {
 	if len(s) != n {
@@ -197,13 +197,37 @@ func event(name string) {
 	}
 }
 
-func setMediaAutostart(media string) error {
-	k, _, err := registry.CreateKey(registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, registry.SET_VALUE)
+// Only remove our exact legacy startup command, never an arbitrary Run value.
+func legacyAutostartCommand(value, systemDrive string) bool {
+	args, err := windows.DecomposeCommandLine(value)
+	if err != nil || len(args) != 1 || !filepath.IsAbs(args[0]) {
+		return false
+	}
+	name := filepath.Clean(args[0])
+	drive := filepath.VolumeName(name)
+	return len(drive) == 2 && (strings.EqualFold(name, drive+`\netflow-vm-agent.exe`) || strings.EqualFold(drive, systemDrive) && strings.EqualFold(name, drive+`\OEM\netflow-vm-agent.exe`))
+}
+
+func removeLegacyAutostart() error {
+	k, err := registry.OpenKey(registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, registry.QUERY_VALUE|registry.SET_VALUE)
+	if errors.Is(err, registry.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	defer k.Close()
-	return k.SetStringValue("NetFlowVMVerify", windows.ComposeCommandLine([]string{filepath.Join(media, "netflow-vm-agent.exe")}))
+	value, _, err := k.GetStringValue("NetFlowVMVerify")
+	if errors.Is(err, registry.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !legacyAutostartCommand(value, os.Getenv("SystemDrive")) {
+		return nil
+	}
+	return k.DeleteValue("NetFlowVMVerify")
 }
 func qemuGuest() bool {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DESCRIPTION\System\BIOS`, registry.QUERY_VALUE)
@@ -257,6 +281,7 @@ func main() {
 		time.Sleep(3 * time.Second)
 	}
 	event("agent-ready")
+	cleanupErr := removeLegacyAutostart()
 	root := filepath.Join(os.Getenv("LOCALAPPDATA"), "NetFlowVMVerify")
 	if !filepath.IsAbs(root) || os.MkdirAll(root, 0700) != nil {
 		return
@@ -264,6 +289,10 @@ func main() {
 	for {
 		m, err := getManifest()
 		if err == nil {
+			if cleanupErr != nil {
+				_ = post(result{ID: m.ID, Error: "cannot remove legacy validation startup: " + cleanupErr.Error()})
+				return
+			}
 			mutexName, e := windows.UTF16PtrFromString(`Local\NetFlowVMVerify-` + m.ID)
 			if e != nil {
 				return
@@ -290,27 +319,24 @@ func main() {
 				}
 				time.Sleep(3 * time.Second)
 			}
-			if e = setMediaAutostart(media); e != nil {
-				_ = post(result{ID: m.ID, Error: "cannot configure validation agent startup: " + e.Error()})
-				return
-			}
 			event("media-agent-ready")
 			marker := filepath.Join(root, "result-"+m.ID+".json")
 			var r result
 			if data, e := os.ReadFile(marker); e == nil && len(data) < 2*1024*1024 && json.Unmarshal(data, &r) == nil && r.ID == m.ID {
-				_ = post(r)
 			} else {
 				event("test-start")
 				r = execute(m, media)
 				event("test-finished")
 				data, _ := json.Marshal(r)
 				_ = os.WriteFile(marker, data, 0600)
-				_ = post(r)
 			}
-			for {
-				_ = post(r)
-				time.Sleep(10 * time.Second)
+			for attempt := 0; attempt < 12; attempt++ {
+				if post(r) == nil {
+					return
+				}
+				time.Sleep(5 * time.Second)
 			}
+			return
 		}
 		time.Sleep(3 * time.Second)
 	}

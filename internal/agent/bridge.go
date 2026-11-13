@@ -154,12 +154,22 @@ type Client struct {
 }
 
 func (c Client) Call(ctx context.Context, method string, args any, out any) error {
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancelCall := context.WithTimeout(ctx, timeout)
+	defer cancelCall()
 	entries, err := os.ReadDir(filepath.Join(c.Dir, "agent"))
 	if err != nil {
 		return errors.New("no running NetFlow agent bridge found")
 	}
 	var active []endpoint
+	var probeErrors []error
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("agent discovery interrupted: %w", err)
+		}
 		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "endpoint-") || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
@@ -179,14 +189,22 @@ func (c Client) Call(ctx context.Context, method string, args any, out any) erro
 		if _, e = hex.DecodeString(ep.Token); e != nil {
 			continue
 		}
-		probeCtx, cancel := context.WithTimeout(ctx, time.Second)
+		// A loaded single-core machine can need longer than a second to
+		// answer even a local ping. This remains bounded by the caller's
+		// context and the client's configured timeout.
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		e = c.call(probeCtx, ep, "ping", nil, nil)
 		cancel()
 		if e == nil {
 			active = append(active, ep)
+		} else {
+			probeErrors = append(probeErrors, e)
 		}
 	}
 	if len(active) == 0 {
+		if len(probeErrors) != 0 {
+			return fmt.Errorf("no running NetFlow agent bridge found; endpoint probe failed: %w", errors.Join(probeErrors...))
+		}
 		return errors.New("no running NetFlow agent bridge found")
 	}
 	if len(active) != 1 {

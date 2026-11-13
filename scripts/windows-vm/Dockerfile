@@ -4,6 +4,5 @@ COPY --chmod=755 download-media.sh /opt/netflow/download-media.sh
 COPY --chmod=644 bridge.py /opt/netflow/bridge.py
 COPY --chmod=644 test_monitor.py /opt/netflow/test_monitor.py
 COPY install.bat /oem/install.bat
-COPY netflow-vm-agent.exe /oem/netflow-vm-agent.exe
 ENV VERSION=10l DISK_SIZE=32G DISK_FMT=qcow2 ALLOCATE=N RAM_SIZE=4G CPU_CORES=1 NETWORK=slirp IP=10.233.42.2 DNSMASQ_DISABLE=Y SAMBA=N SHORTCUT=N VERIFY=Y REMOVE=Y CONNECTIONS=16
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/opt/netflow/entry.sh"]

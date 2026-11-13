@@ -26,6 +26,7 @@ import (
 	"unsafe"
 
 	"github.com/miekg/dns"
+	"github.com/neko233-com/netflow"
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/coreipc"
 	"github.com/neko233-com/netflow/internal/kernelopts"
@@ -156,6 +157,25 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	}
 	t.Log("MSI installation and installed binary hashes verified")
 	agentExe := filepath.Join(install, "netflow-agent.exe")
+	versionCtx, versionCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	versionOutput, versionErr := vmCommand(versionCtx, agentExe, "version").CombinedOutput()
+	versionCancel()
+	var version struct {
+		Version string `json:"version"`
+	}
+	if versionErr != nil || json.Unmarshal(versionOutput, &version) != nil || version.Version != netflow.Version() {
+		t.Fatalf("installed CLI version differs from test manifest: %s %v", versionOutput, versionErr)
+	}
+	key, err := registry.OpenKey(registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, registry.QUERY_VALUE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, startupErr := key.GetStringValue("NetFlowVMVerify")
+	_ = key.Close()
+	if !errors.Is(startupErr, registry.ErrNotExist) {
+		t.Fatalf("validation agent left a startup entry: %v", startupErr)
+	}
+	t.Log("installed CLI version matches and validation agent has no startup entry")
 	verge := t.TempDir()
 	if err := os.Mkdir(filepath.Join(verge, "profiles"), 0700); err != nil {
 		t.Fatal(err)
@@ -323,6 +343,48 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = gui.Process.Kill(); _ = gui.Wait() }()
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+		_ = logFile.Sync()
+		data, _ := os.ReadFile(filepath.Join(dir, "gui.log"))
+		if len(data) > 65536 {
+			data = data[len(data)-65536:]
+		}
+		t.Logf("GUI log tail: %s", data)
+		if handle, openErr := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(gui.Process.Pid)); openErr == nil {
+			var code uint32
+			exitErr := windows.GetExitCodeProcess(handle, &code)
+			_ = windows.CloseHandle(handle)
+			t.Logf("GUI process exit code: %d (0x%08X), query error: %v", code, code, exitErr)
+		} else {
+			t.Logf("GUI process query failed: %v", openErr)
+		}
+		entries, readErr := os.ReadDir(filepath.Join(dir, "agent"))
+		t.Logf("Agent endpoint files: %d, read error: %v", len(entries), readErr)
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasPrefix(entry.Name(), "endpoint-") || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			var endpoint struct {
+				Address string `json:"address"`
+			}
+			content, fileErr := os.ReadFile(filepath.Join(dir, "agent", entry.Name()))
+			if fileErr != nil || json.Unmarshal(content, &endpoint) != nil {
+				continue
+			}
+			host, _, splitErr := net.SplitHostPort(endpoint.Address)
+			if splitErr != nil || host != "127.0.0.1" {
+				continue
+			}
+			connection, dialErr := net.DialTimeout("tcp", endpoint.Address, 3*time.Second)
+			if connection != nil {
+				_ = connection.Close()
+			}
+			t.Logf("Agent loopback endpoint reachable: %v", dialErr == nil)
+		}
+	}()
 	call := func(args ...string) ([]byte, error) {
 		c, done := context.WithTimeout(context.Background(), 15*time.Second)
 		defer done()

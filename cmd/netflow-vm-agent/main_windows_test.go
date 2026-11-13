@@ -42,3 +42,22 @@ func TestVerifyMediaRejectsAlteredFilesAndWrongRun(t *testing.T) {
 		t.Fatal("accepted media from a different run")
 	}
 }
+
+func TestLegacyAutostartCommandMatchesOnlyOwnedPaths(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		want    bool
+	}{
+		{`E:\netflow-vm-agent.exe`, true},
+		{`"D:\netflow-vm-agent.exe"`, true},
+		{`C:\OEM\netflow-vm-agent.exe`, true},
+		{`D:\OEM\netflow-vm-agent.exe`, false},
+		{`E:\other\netflow-vm-agent.exe`, false},
+		{`E:\netflow-vm-agent.exe --other`, false},
+		{`C:\unrelated.exe`, false},
+	} {
+		if got := legacyAutostartCommand(tc.command, "C:"); got != tc.want {
+			t.Errorf("legacyAutostartCommand(%q) = %v, want %v", tc.command, got, tc.want)
+		}
+	}
+}
