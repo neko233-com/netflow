@@ -63,16 +63,14 @@ func Start(dir string, handle Handler) (*Bridge, error) {
 		listener.Close()
 		return nil, err
 	}
-	file, err := os.CreateTemp(parent, fmt.Sprintf("endpoint-%d-*.json", os.Getpid()))
+	file, err := createPrivateEndpoint(parent, fmt.Sprintf("endpoint-%d-", os.Getpid()))
 	if err != nil {
 		listener.Close()
 		return nil, err
 	}
 	fileName := file.Name()
 	e := endpoint{Address: listener.Addr().String(), Token: token, PID: os.Getpid()}
-	if err = file.Chmod(0600); err == nil {
-		err = json.NewEncoder(file).Encode(e)
-	}
+	err = json.NewEncoder(file).Encode(e)
 	if closeErr := file.Close(); err == nil {
 		err = closeErr
 	}
