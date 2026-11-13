@@ -13,6 +13,7 @@ import (
 	"github.com/neko233-com/netflow/internal/appdir"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/migration"
+	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/sysproxy"
 	"github.com/neko233-com/netflow/internal/tun"
 )
@@ -63,6 +64,38 @@ func TestImportedExtensionsApplyAndInvalidateAgentPreview(t *testing.T) {
 	groups, err := a.agentGroups()
 	if err != nil || len(groups.Groups) != 2 || groups.Groups[0].Name != "Select" || groups.Groups[1].Name != "Extra" {
 		t.Fatalf("agent did not expose effective groups: %+v %v", groups, err)
+	}
+	catalogSnapshot, catalogHash, err := a.profiles.LoadSnapshot()
+	if err != nil || len(catalogSnapshot.Items) != 1 {
+		t.Fatal("imported catalog snapshot missing")
+	}
+	changed := catalogSnapshot
+	changed.Items = append(changed.Items[:0:0], catalogSnapshot.Items...)
+	changed.Items[0].Option.VergeExtensions = false
+	if err := a.profiles.Save(changed); err != nil {
+		t.Fatal(err)
+	}
+	before := a.rewrites.Snapshot()
+	after := before
+	after.Global = rewrite.Layer{Prepend: []string{"DOMAIN,extension.test,Extra"}}
+	options := a.kernelOptions.Snapshot()
+	_, rules, hashes, err := a.previewSources(catalogSnapshot, catalogHash, &options, before, after, a.core.ProfileID(), true)
+	if err != nil || len(rules) == 0 || rules[0] != "DOMAIN,extension.test,Extra" || hashes[filepath.Join(dir, "profiles.json")] != catalogHash {
+		t.Fatalf("preview did not use the captured catalog: %v %v", rules, err)
+	}
+	if err := a.profiles.Save(catalogSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	change := agent.Change{Scope: "global", Operation: "set", Layer: after.Global}
+	withGroup, err := a.agentPreview(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.agentApply(withGroup.ProposalID); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetKernelOption("ipv6", false); err != nil {
+		t.Fatalf("kernel option validation omitted imported extension: %v", err)
 	}
 	proposal, err := a.agentPreview(agent.Change{Scope: "global", Operation: "clear"})
 	if err != nil {

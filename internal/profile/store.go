@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -76,24 +77,33 @@ func (s *Store) path() string { return filepath.Join(s.dir, "profiles.json") }
 
 // Load returns an empty file when profiles.json is missing.
 func (s *Store) Load() (File, error) {
+	f, _, err := s.LoadSnapshot()
+	return f, err
+}
+
+// LoadSnapshot associates the parsed catalog with the hash of the exact bytes
+// used to parse it. A missing file is represented by the zero hash.
+func (s *Store) LoadSnapshot() (File, [32]byte, error) {
+	var empty [32]byte
 	if s == nil || s.dir == "" {
-		return File{}, errors.New("profile store has no directory")
+		return File{}, empty, errors.New("profile store has no directory")
 	}
 	b, err := os.ReadFile(s.path())
 	if errors.Is(err, os.ErrNotExist) {
-		return File{}, nil
+		return File{}, empty, nil
 	}
 	if err != nil {
-		return File{}, err
+		return File{}, empty, err
 	}
+	hash := sha256.Sum256(b)
 	if len(strings.TrimSpace(string(b))) == 0 {
-		return File{}, nil
+		return File{}, hash, nil
 	}
 	var f File
 	if err := json.Unmarshal(b, &f); err != nil {
-		return File{}, err
+		return File{}, empty, err
 	}
-	return f, nil
+	return f, hash, nil
 }
 
 // Save writes profiles.json.

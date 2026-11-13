@@ -40,6 +40,27 @@ func TestAgentApplyValidatesPersistsAndRollsBack(t *testing.T) {
 		t.Fatalf("core failed: %s", a.model.Home.Error)
 	}
 	change := agent.Change{Scope: "global", Operation: "set", Layer: rewrite.Layer{Prepend: []string{"DOMAIN,example.test,REJECT"}}}
+	busyProposal, err := a.agentPreview(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.tunBusy = true
+	if _, err := a.agentPreview(change); err == nil {
+		t.Fatal("preview accepted an ongoing TUN transition")
+	}
+	if _, err := a.agentApply(busyProposal.ProposalID); err == nil {
+		t.Fatal("apply accepted an ongoing TUN transition")
+	}
+	a.tunBusy = false
+	changedNetwork, err := a.agentPreview(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.settings.TUN = true
+	if _, err := a.agentApply(changedNetwork.ProposalID); err == nil {
+		t.Fatal("apply accepted a proposal after TUN settings changed")
+	}
+	a.settings.TUN = false
 	first, err := a.agentPreview(change)
 	if err != nil {
 		t.Fatal(err)

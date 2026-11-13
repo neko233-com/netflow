@@ -107,6 +107,10 @@ func (a *App) applyKernelOptions(next kernelopts.Options) error {
 	if err != nil {
 		return err
 	}
+	base, err = a.applyProfileVergeExtensions(base, a.core.ProfileID())
+	if err != nil {
+		return err
+	}
 	base, err = a.applyProfileTUN(base)
 	if err != nil {
 		return err

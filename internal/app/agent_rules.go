@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,10 @@ type agentProposal struct {
 	activeProfile string
 	sources       map[string][32]byte
 	expires       time.Time
+	tunEnabled    bool
+	tunSetting    bool
+	mode          string
+	options       *kernelopts.Options
 }
 
 func (a *App) agentStatus() (agent.Status, error) {
@@ -53,8 +58,12 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 	if a.rewrites == nil || a.core == nil || a.profiles == nil {
 		return agent.Preview{}, errors.New("agent service is not ready")
 	}
-	if !a.core.Status().Running {
+	status := a.core.Status()
+	if !status.Running {
 		return agent.Preview{}, errors.New("core is not running")
+	}
+	if a.tunBusy {
+		return agent.Preview{}, errors.New("TUN transition in progress; preview again after it completes")
 	}
 	if change.Operation != "set" && change.Operation != "clear" {
 		return agent.Preview{}, errors.New("operation must be set or clear")
@@ -66,7 +75,7 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 		return agent.Preview{}, err
 	}
 	active := a.core.ProfileID()
-	catalog, err := a.profiles.Load()
+	catalog, catalogHash, err := a.profiles.LoadSnapshot()
 	if err != nil {
 		return agent.Preview{}, err
 	}
@@ -138,14 +147,19 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 			warnings = append(warnings, "Rules affect new connections sharing the destination, port, network and source IP; other matching connections can also be affected.", "Existing sockets are not rerouted. Closing the selected connection is optional and does not guarantee reconnection.")
 		}
 	}
-	if a.core.Status().Mode != "rule" {
+	if status.Mode != "rule" {
 		warnings = append(warnings, "The core is not in rule mode, so rule changes will not control routing until rule mode is selected.")
 	}
 	if err := state.Validate(); err != nil {
 		return agent.Preview{}, err
 	}
 	current := a.rewrites.Snapshot()
-	before, after, hashes, err := a.previewSources(catalog.Items, current, state, target, change.Scope == "global")
+	var options *kernelopts.Options
+	if a.kernelOptions != nil {
+		value := a.kernelOptions.Snapshot()
+		options = &value
+	}
+	before, after, hashes, err := a.previewSources(catalog, catalogHash, options, current, state, target, change.Scope == "global")
 	if err != nil {
 		return agent.Preview{}, err
 	}
@@ -172,16 +186,16 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 			expires = c.ExpiresAt
 		}
 	}
-	a.agentProposals[id] = agentProposal{change: change, state: state, revision: revision, activeProfile: active, sources: hashes, expires: expires}
+	a.agentProposals[id] = agentProposal{change: change, state: state, revision: revision, activeProfile: active, sources: hashes, expires: expires, tunEnabled: status.TUN, tunSetting: a.settings.TUN, mode: status.Mode, options: options}
 	return agent.Preview{ProposalID: id, Revision: revision, ActiveProfile: active, TargetProfile: target, RulesBefore: before, RulesAfter: after, Warnings: warnings, ExpiresAt: expires}, nil
 }
 
 // previewSources validates the whole effective config for the selected profile.
 // A global change is also checked against every installed subscription.
-func (a *App) previewSources(items []profile.CatalogItem, before, after rewrite.State, target string, all bool) ([]string, []string, map[string][32]byte, error) {
+func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options *kernelopts.Options, before, after rewrite.State, target string, all bool) ([]string, []string, map[string][32]byte, error) {
 	active := a.core.ProfileID()
 	sources := map[string]string{active: filepath.Join(a.dir, "config.yaml")}
-	for _, item := range items {
+	for _, item := range catalog.Items {
 		if item.UID == active {
 			continue
 		}
@@ -197,13 +211,7 @@ func (a *App) previewSources(items []profile.CatalogItem, before, after rewrite.
 	foundTarget := false
 	hashes := make(map[string][32]byte, len(sources))
 	catalogPath := filepath.Join(a.dir, "profiles.json")
-	if data, err := os.ReadFile(catalogPath); err == nil {
-		hashes[catalogPath] = sha256.Sum256(data)
-	} else if errors.Is(err, os.ErrNotExist) {
-		hashes[catalogPath] = [32]byte{}
-	} else {
-		return nil, nil, nil, err
-	}
+	hashes[catalogPath] = catalogHash
 	if a.kernelOptions != nil {
 		path := filepath.Join(a.dir, "kernel-options.json")
 		if data, err := os.ReadFile(path); err == nil {
@@ -225,7 +233,7 @@ func (a *App) previewSources(items []profile.CatalogItem, before, after rewrite.
 		}
 		var archivePath string
 		var archiveHash [32]byte
-		base, archivePath, archiveHash, err = a.applyProfileVergeExtensionsSnapshot(base, id)
+		base, archivePath, archiveHash, err = a.composeVergeExtensionsFromCatalog(base, id, catalog)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -239,7 +247,7 @@ func (a *App) previewSources(items []profile.CatalogItem, before, after rewrite.
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		base, err = a.applyProfileDNS(base, id)
+		base, err = composeProfileDNSFromCatalog(base, id, catalog)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -251,8 +259,8 @@ func (a *App) previewSources(items []profile.CatalogItem, before, after rewrite.
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		if a.kernelOptions != nil {
-			effective, err = kernelopts.Compose(effective, a.kernelOptions.Snapshot())
+		if options != nil {
+			effective, err = kernelopts.Compose(effective, *options)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -280,8 +288,15 @@ func (a *App) agentApply(id string) (agent.ApplyResult, error) {
 	if a.core.ProfileID() != p.activeProfile || a.rewrites.Snapshot().Revision != p.revision {
 		return agent.ApplyResult{}, errors.New("configuration changed; preview again")
 	}
-	if !a.core.Status().Running {
+	status := a.core.Status()
+	if !status.Running {
 		return agent.ApplyResult{}, errors.New("core is not running")
+	}
+	if a.tunBusy || status.TUN != p.tunEnabled || status.Mode != p.mode || a.settings.TUN != p.tunSetting {
+		return agent.ApplyResult{}, errors.New("network state changed; preview again")
+	}
+	if (a.kernelOptions == nil) != (p.options == nil) || (p.options != nil && !reflect.DeepEqual(a.kernelOptions.Snapshot(), *p.options)) {
+		return agent.ApplyResult{}, errors.New("kernel options changed; preview again")
 	}
 	for path, expected := range p.sources {
 		data, err := os.ReadFile(path)

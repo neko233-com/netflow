@@ -1,5 +1,6 @@
 """Exercise setup-media removal in throwaway, paused QEMU instances."""
 import ast
+import json
 import os
 from pathlib import Path
 import re
@@ -10,8 +11,8 @@ import time
 
 source = Path("/opt/netflow/bridge.py")
 tree = ast.parse(source.read_text(encoding="utf-8"), str(source))
-functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {"monitor_command", "detach_setup_media", "desktop_ready", "start_media_from_desktop"}]
-if len(functions) != 4:
+functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {"monitor_command", "detach_setup_media", "desktop_ready", "start_media_from_desktop", "bootstrap_media_agent"}]
+if len(functions) != 5:
     raise RuntimeError("setup-media monitor functions missing")
 scope = {"re": re, "socket": socket, "time": time, "Path": Path}
 exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), "exec"), scope)
@@ -36,10 +37,50 @@ if not scope["desktop_ready"](None):
 scope["time"] = type("NoSleep", (), {"sleep": staticmethod(lambda _seconds: None)})
 commands.clear()
 scope["start_media_from_desktop"](None, "D")
-if commands[:3] != ["sendkey esc 100", "sendkey meta_l-r 100", "sendkey ctrl-a 100"] or commands[-1] != "sendkey ret 100" or not all(command.startswith("sendkey ") for command in commands):
+if commands[:5] != ["sendkey esc 100"] * 3 + ["sendkey meta_l-r 100", "sendkey ctrl-a 100"] or commands[-1] != "sendkey ret 100" or not all(command.startswith("sendkey ") for command in commands):
     raise AssertionError("unexpected media bootstrap input")
 scope["monitor_command"], scope["time"] = original_monitor, time
 screen.unlink()
+
+# No agent acknowledgement after one complete drive scan is an explicit
+# failure, while a successful acknowledgement must not produce one.
+class ImmediateEvent:
+    def __init__(self):
+        self.set_value = False
+    def is_set(self):
+        return self.set_value
+    def wait(self, _timeout):
+        return self.set_value
+    def set(self):
+        self.set_value = True
+
+class FakeSocket:
+    def __enter__(self): return self
+    def __exit__(self, *_args): pass
+    def settimeout(self, _timeout): pass
+    def connect(self, _address): pass
+    def recv(self, _size): return b"(qemu) "
+
+with tempfile.TemporaryDirectory(prefix="netflow-bootstrap-test-") as directory:
+    base = Path(directory)
+    fake_socket = type("FakeSocketModule", (), {"AF_UNIX": 1, "SOCK_STREAM": 1, "socket": staticmethod(lambda *_args: FakeSocket())})
+    scope.update({"Path": lambda value: base if value == "/storage/windows.boot" else Path(value), "RESULTS": base, "RUN_ID": "a" * 32, "os": os, "json": json, "socket": fake_socket, "desktop_ready": lambda _conn: True, "time": type("NoSleep", (), {"sleep": staticmethod(lambda _seconds: None)}), "print": lambda *_args, **_kwargs: None})
+    attempted = []
+    scope["media_started"] = ImmediateEvent()
+    scope["start_media_from_desktop"] = lambda _conn, drive: attempted.append(drive)
+    scope["bootstrap_media_agent"]()
+    result = json.loads((base / ("a" * 32 + ".json")).read_text())
+    if result["ok"] or "security history" not in result["error"] or "".join(attempted) != "DEFGHIJKLMNOPQRSTUVWXYZ":
+        raise AssertionError("failed media bootstrap did not report its error")
+    (base / ("a" * 32 + ".json")).unlink()
+    scope["media_started"] = ImmediateEvent()
+    scope["start_media_from_desktop"] = lambda _conn, _drive: scope["media_started"].set()
+    scope["bootstrap_media_agent"]()
+    if (base / ("a" * 32 + ".json")).exists():
+        raise AssertionError("acknowledged media bootstrap was reported as failed")
+
+scope["Path"], scope["socket"], scope["time"] = Path, socket, time
+del scope["print"]
 
 monitor = Path("/run/shm/monitor.sock")
 if monitor.exists():

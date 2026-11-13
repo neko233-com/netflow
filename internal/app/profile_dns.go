@@ -38,6 +38,13 @@ func (a *App) applyProfileDNS(data []byte, id string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return composeProfileDNSFromCatalog(data, id, catalog)
+}
+
+func composeProfileDNSFromCatalog(data []byte, id string, catalog profile.File) ([]byte, error) {
+	if id == "" {
+		return data, nil
+	}
 	for _, item := range catalog.Items {
 		if item.UID == id {
 			return composeProfileDNS(data, dnsOverride{enabled: item.Option.DNSEnabled, text: item.Option.DNSOverride, merge: item.Option.DNSVergeMerge, hosts: item.Option.DNSVergeHosts})

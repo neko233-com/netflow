@@ -55,8 +55,11 @@ def desktop_ready(conn):
 
 def start_media_from_desktop(conn, drive):
     """Start only our fixed executable; no shell or guest command is used."""
-    monitor_command(conn, "sendkey esc 100")
-    time.sleep(.5)
+    # An unsuccessful drive attempt can leave both an error dialog and the
+    # Run dialog open. Close both before trying the next fixed path.
+    for _ in range(3):
+        monitor_command(conn, "sendkey esc 100")
+        time.sleep(.5)
     monitor_command(conn, "sendkey meta_l-r 100")
     # The Run dialog may take several seconds to receive focus on a cold,
     # single-CPU guest. Clear its history only after it has opened.
@@ -79,6 +82,7 @@ def bootstrap_media_agent():
     if media_started.wait(90):
         return
     while not media_started.is_set():
+        completed = True
         for drive in "DEFGHIJKLMNOPQRSTUVWXYZ":
             if media_started.is_set():
                 return
@@ -93,13 +97,22 @@ def bootstrap_media_agent():
                             raise OSError("QEMU monitor closed")
                         greeting += part
                     if not desktop_ready(conn):
+                        completed = False
                         break
                     print("Windows guest: starting read-only media agent at " + drive + ":", flush=True)
                     start_media_from_desktop(conn, drive)
             except (OSError, ValueError):
+                completed = False
                 break
-            if media_started.wait(25):
+            if media_started.wait(10):
                 return
+        if completed and not media_started.is_set():
+            # Do not loop indefinitely or report success when Windows refuses
+            # to start the agent (for example due to a security detection).
+            tmp = RESULTS / (RUN_ID + ".tmp")
+            tmp.write_text(json.dumps({"id": RUN_ID, "ok": False, "output": "", "error": "could not start the read-only media agent; check guest security history and optical media"}), encoding="utf-8")
+            os.replace(tmp, RESULTS / (RUN_ID + ".json"))
+            return
         if media_started.wait(15):
             return
 
