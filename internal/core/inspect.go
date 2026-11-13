@@ -40,19 +40,28 @@ func (c *Core) Connections() ([]conn.Item, int64, int64) {
 
 // CloseConnection closes one tracked connection. A missing id is not an error.
 func (c *Core) CloseConnection(id string) error {
+	_, err := c.CloseExistingConnection(id)
+	return err
+}
+
+// CloseExistingConnection reports whether a live tracker was found and closed.
+func (c *Core) CloseExistingConnection(id string) (bool, error) {
 	if c == nil {
-		return errors.New("core is nil")
+		return false, errors.New("core is nil")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.running || statistic.DefaultManager == nil {
-		return errors.New("core is not running")
+		return false, errors.New("core is not running")
 	}
 	tr := statistic.DefaultManager.Get(id)
 	if tr == nil {
-		return nil
+		return false, nil
 	}
-	return tr.Close()
+	if err := tr.Close(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // CloseAllConnections closes every tracked connection.

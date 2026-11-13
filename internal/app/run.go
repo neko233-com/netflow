@@ -1,10 +1,7 @@
 package app
 
 import (
-	"bytes"
-	"image"
-	"image/color"
-	"image/png"
+	_ "embed"
 	"log"
 	"runtime"
 
@@ -23,6 +20,7 @@ func (a *App) Run() error {
 	var quitting bool
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { quitting = true })
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		a.stopAgent()
 		a.stopLive()
 		if a.settings.SystemProxy {
 			if restore, ok := a.proxy.(interface{ Restore() error }); ok {
@@ -61,6 +59,9 @@ func (a *App) ready(quitting *bool) {
 		Content:        mygoui.View(a.model.View),
 	})
 	a.startLive()
+	if err := a.startAgent(); err != nil {
+		a.model.Notice = "Agent 接口启动失败: " + err.Error()
+	}
 	a.win.OnClose(func(e *mygo.CloseEvent) {
 		if quitting != nil && *quitting {
 			return
@@ -120,26 +121,7 @@ func (a *App) showMain() {
 	a.win.Focus()
 }
 
-// trayIcon draws a template mark for the menu bar. macOS tints a black
-// glyph; other platforms get the same shape in blue so it stays visible.
-func trayIcon() []byte {
-	const n = 32
-	img := image.NewNRGBA(image.Rect(0, 0, n, n))
-	ink := color.NRGBA{A: 255}
-	if runtime.GOOS != "darwin" {
-		ink = color.NRGBA{R: 37, G: 99, B: 235, A: 255}
-	}
-	for y := 0; y < n; y++ {
-		for x := 0; x < n; x++ {
-			dx := float64(x) - 15.5
-			dy := float64(y) - 15.5
-			d2 := dx*dx + dy*dy
-			if d2 < 13*13 && d2 > 8*8 && dx < 4 {
-				img.SetNRGBA(x, y, ink)
-			}
-		}
-	}
-	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
-	return buf.Bytes()
-}
+//go:embed assets/tray.png
+var trayArtwork []byte
+
+func trayIcon() []byte { return trayArtwork }

@@ -40,10 +40,23 @@ type ProxyNode struct {
 
 // Core controls the process-wide mihomo singleton.
 type Core struct {
-	mu      sync.Mutex
-	running bool
-	dir     string
+	mu        sync.Mutex
+	running   bool
+	dir       string
+	profileID string
+	transform func([]byte, string) ([]byte, error)
 }
+
+// SetTransformer installs an in-memory transformation; the original config
+// on disk remains unchanged.
+func (c *Core) SetTransformer(fn func([]byte, string) ([]byte, error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.transform = fn
+}
+
+func (c *Core) SetProfileID(id string) { c.mu.Lock(); defer c.mu.Unlock(); c.profileID = id }
+func (c *Core) ProfileID() string      { c.mu.Lock(); defer c.mu.Unlock(); return c.profileID }
 
 // New returns a core that is not running.
 func New() *Core { return &Core{} }
@@ -68,7 +81,7 @@ func (c *Core) Start(homeDir string) error {
 	C.SetHomeDir(homeDir)
 	C.SetConfig(filepath.Join(homeDir, configFileName))
 
-	if err := apply(); err != nil {
+	if err := c.apply(); err != nil {
 		releaseListeners()
 		return err
 	}
@@ -88,7 +101,7 @@ func (c *Core) Reload() error {
 	if !c.running {
 		return errors.New("core is not running")
 	}
-	return apply()
+	return c.apply()
 }
 
 // Stop closes listeners, the external controller and provider update
@@ -150,7 +163,7 @@ func (c *Core) ProviderProxies(name string) []ProxyNode {
 	return out
 }
 
-func apply() error {
+func (c *Core) apply() error {
 	homeDir := C.Path.HomeDir()
 	path := C.Path.Config()
 	if err := os.MkdirAll(homeDir, 0o700); err != nil {
@@ -165,6 +178,12 @@ func apply() error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
+	}
+	if c.transform != nil {
+		data, err = c.transform(data, c.profileID)
+		if err != nil {
+			return fmt.Errorf("compose agent rules: %w", err)
+		}
 	}
 	// Parse once for the controller address, then hub.Parse a copy that
 	// does not start it. mihomo v1.19.33's hub.ApplyConfig launches the

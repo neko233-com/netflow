@@ -37,7 +37,7 @@ def main():
     modules = {}
     for goos, goarch in TARGETS:
         env = dict(os.environ, GOOS=goos, GOARCH=goarch, CGO_ENABLED="0", GOMAXPROCS="1", GOFLAGS="-p=1")
-        data = subprocess.check_output(["go", "list", "-deps", "-json", "./cmd/clash-go"], cwd=ROOT, env=env, text=True, encoding="utf-8")
+        data = subprocess.check_output(["go", "list", "-deps", "-json", "./cmd/clash-go", "./cmd/netflow-agent"], cwd=ROOT, env=env, text=True, encoding="utf-8")
         for package in objects(data):
             module = package.get("Module")
             if not module or module.get("Main"):

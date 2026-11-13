@@ -4,6 +4,7 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appconfig"
 	"github.com/neko233-com/netflow/internal/appdir"
 	"github.com/neko233-com/netflow/internal/autostart"
@@ -20,6 +22,7 @@ import (
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/profile"
+	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/service"
 	"github.com/neko233-com/netflow/internal/sitetest"
 	"github.com/neko233-com/netflow/internal/sysproxy"
@@ -54,12 +57,16 @@ type App struct {
 	svc       service.Manager
 	core      *core.Core
 
-	settings appconfig.Settings
-	model    *ui.Model
-	dir      string
-	profiles *profile.Store
-	sites    *sitetest.Store
-	started  time.Time
+	settings        appconfig.Settings
+	model           *ui.Model
+	dir             string
+	profiles        *profile.Store
+	sites           *sitetest.Store
+	started         time.Time
+	rewrites        *rewrite.Store
+	agentBridge     *agent.Bridge
+	agentProposals  map[string]agentProposal
+	agentExpiryStop chan struct{}
 
 	win  *mygo.Window
 	tray *mygo.Tray
@@ -139,6 +146,20 @@ func (a *App) Prepare() error {
 	}
 	a.loadProfiles()
 	a.loadSites()
+	a.rewrites, err = rewrite.Open(dir)
+	if err != nil {
+		return fmt.Errorf("读取 Agent 规则: %w", err)
+	}
+	a.core.SetTransformer(func(base []byte, profileID string) ([]byte, error) {
+		state := a.rewrites.Snapshot()
+		now := time.Now()
+		if !rewrite.HasActive(state, profileID, now) {
+			return base, nil
+		}
+		result, _, err := rewrite.Compose(base, state, profileID, now)
+		return result, err
+	})
+	a.core.SetProfileID(a.model.CurrentProfile)
 	if err := a.installCurrentProfile(); err != nil {
 		a.model.Notice = err.Error()
 	}
@@ -703,7 +724,15 @@ func (a *App) UseProfile(uid string) error {
 	if err := os.WriteFile(path, profile.EnsureMixedPort(body, 7897), 0600); err != nil {
 		return err
 	}
+	previousProfile := ""
+	if a.core != nil {
+		previousProfile = a.core.ProfileID()
+		a.core.SetProfileID(uid)
+	}
 	rollback := func() {
+		if a.core != nil {
+			a.core.SetProfileID(previousProfile)
+		}
 		if readErr == nil {
 			_ = os.WriteFile(path, old, 0600)
 		} else {
@@ -880,6 +909,9 @@ func (a *App) ImportURL(raw string) error {
 		return err
 	}
 	a.loadProfiles()
+	if a.core != nil {
+		a.core.SetProfileID(a.model.CurrentProfile)
+	}
 	if err := a.installCurrentProfile(); err != nil {
 		return err
 	}
@@ -915,6 +947,9 @@ func (a *App) ImportLocal(path string) error {
 		return err
 	}
 	a.loadProfiles()
+	if a.core != nil {
+		a.core.SetProfileID(a.model.CurrentProfile)
+	}
 	if err := a.installCurrentProfile(); err != nil {
 		return err
 	}
@@ -931,7 +966,56 @@ func (a *App) DeleteProfile(uid string) error {
 	if a.profiles == nil {
 		return errors.New("订阅存储不可用")
 	}
+	var old rewrite.State
+	var revision uint64
+	changed := false
+	if a.rewrites != nil {
+		catalog, err := a.profiles.Load()
+		if err != nil {
+			return err
+		}
+		if catalog.Current == uid {
+			return errors.New("请先切换到其他订阅，再删除当前订阅")
+		}
+		old = a.rewrites.Snapshot()
+		next := a.rewrites.Snapshot()
+		if _, ok := next.Profiles[uid]; ok {
+			delete(next.Profiles, uid)
+			changed = true
+		}
+		kept := next.Connections[:0]
+		for _, item := range next.Connections {
+			if item.ProfileID == uid {
+				changed = true
+			} else {
+				kept = append(kept, item)
+			}
+		}
+		next.Connections = kept
+		if changed {
+			saved, err := a.rewrites.Replace(next, old.Revision)
+			if err != nil {
+				return err
+			}
+			revision = saved.Revision
+		}
+	}
 	err := a.profiles.Delete(uid)
+	if err != nil && changed {
+		catalog, loadErr := a.profiles.Load()
+		stillExists := loadErr != nil
+		for _, item := range catalog.Items {
+			if item.UID == uid {
+				stillExists = true
+				break
+			}
+		}
+		if stillExists {
+			if _, restoreErr := a.rewrites.Replace(old, revision); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore profile rules: %w", restoreErr))
+			}
+		}
+	}
 	a.loadProfiles()
 	return err
 }

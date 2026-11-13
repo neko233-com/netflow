@@ -17,3 +17,7 @@ coverage.out
 /settings.json
 /profiles.json
 /profiles/
+/agent-rules.json
+/agent/
+/resources/windows-amd64/
+/resources/darwin-arm64/
