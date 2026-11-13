@@ -12,7 +12,7 @@ NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 U
 
 - 已接入 mihomo 内核、订阅 URL 导入、配置激活、代理组切换、节点测速、代理与规则集合更新、模式切换、规则和连接显示、日志与托盘界面。部分功能仍需更完整的真实环境回归。
 - 系统接入聚焦虚拟网卡（TUN），界面和托盘不再提供系统代理开关。Windows 升级启动时只恢复仍由旧版 NetFlow 持有的系统代理备份，不覆盖其他应用的设置。
-- 开发分支增加了 Windows TUN 的实验性独立特权内核：开启时会请求管理员授权，常见的活动 TUN 网卡会被拒绝以减少冲突；每次重新启动应用后需重新开启并授权。当前授权需要使用同一 Windows 账户。切换进程时两侧缓存独立，Fake-IP 缓存连续性尚未验证。该实现尚未在 Windows 上验证真实 Wintun、DNS、路由和异常恢复，不应当作生产支持；已发布的 v0.2.7 预览包不含此实现。macOS TUN 的特权服务尚未实现。Linux Docker 测试覆盖独立网络命名空间中的 IPv4 TUN、规则、DNS/Fake-IP 流量及连接断开后的清理。
+- Windows TUN 使用实验性独立特权内核：开启时会请求管理员授权，常见的活动 TUN 网卡会被拒绝以减少冲突；每次重新启动应用后需重新开启并授权。当前授权需要使用同一 Windows 账户。切换进程时两侧缓存独立，Fake-IP 缓存连续性尚未验证。该实现尚未在 Windows 上验证真实 Wintun、DNS、路由和异常恢复，不应当作生产支持。macOS TUN 的特权服务尚未实现。Linux Docker 测试覆盖独立网络命名空间中的 IPv4 TUN、规则、DNS/Fake-IP 流量及连接断开后的清理。
 - 支持本地文件选择或拖放导入、远程订阅后台下载、按订阅设置自动更新、批量更新与删除、重新激活订阅，并显示服务端提供的订阅流量及到期时间。可设置订阅下载的 User-Agent、超时、代理和证书验证；内核代理或系统手动 HTTP(S) 代理不可用时返回错误，不会改为直连。系统代理选项不处理 PAC、自动检测或绕过列表；同时启用时优先内核代理。删除时会保留当前订阅。Windows 开机自启通过当前用户注册表实现，静默启动依赖托盘；部分设置尚未接入。
 - 代理模式、局域网、IPv6、统一延迟、日志等级和监听端口可在界面中修改，作为全局覆写持久化，不修改订阅原文件；设置失败会尝试恢复。旧版 NetFlow 遗留的系统代理会在升级时安全恢复。链式代理尚未接入内核；其他设置页面中的部分控件仍只保存界面偏好，请以实际功能和错误提示为准。
 - TUN 协议栈可跟随订阅，也可持久化覆写为 System、Mixed、gVisor 或 Mips；发布构建包含 gVisor，Tailscale 出站未包含。更改协议栈会重新加载内核。
@@ -25,7 +25,7 @@ NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 U
 
 ## Agent 规则重写
 
-启动 NetFlow 后，随安装包提供的 `netflow-agent.exe` 支持命令行和 MCP 标准输入输出接口。开发分支的 `tun on` / `tun off` 会请求切换；若返回 `pending`，应通过 `status` 查看 `tun_pending` 与 `tun_error`，开启时可能弹出管理员授权。它通过当前用户配置目录中的临时令牌连接本机随机端口，不监听外网；应保护配置目录及令牌，Windows 文件权限继承自所在目录，同一账户下的进程也能调用该接口。退出程序后临时端点被删除。
+启动 NetFlow 后，随安装包提供的 `netflow-agent.exe` 支持命令行和 MCP 标准输入输出接口。`tun on` / `tun off` 会请求切换；若返回 `pending`，应通过 `status` 查看 `tun_pending` 与 `tun_error`，开启时可能弹出管理员授权。它通过当前用户配置目录中的临时令牌连接本机随机端口，不监听外网；Windows 上令牌文件以当前用户和 SYSTEM 专用的访问控制列表创建，同一账户下的进程仍能调用该接口。退出程序后临时端点被删除。
 
 ```powershell
 $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
@@ -70,6 +70,8 @@ go build -o build/NetFlow.exe ./cmd/clash-go
 Windows 默认将用户数据保存在 `%APPDATA%\netflow`。开发时可通过绝对路径环境变量 `NETFLOW_CONFIG_DIR` 指定隔离的配置目录。配置、订阅链接、日志、代理备份及其他用户数据不应提交到仓库。
 
 在 Windows 上安装 WiX Toolset 3.14 后，运行 `pwsh -File scripts/build-release.ps1` 可构建上述两个平台并生成 ZIP、Windows MSI 和 SHA-256 校验文件。打包脚本不创建 DMG，也不会替代 macOS 原机运行测试、签名或公证。更新依赖后运行 `python scripts/collect_licenses.py` 并检查 [第三方许可清单](LICENSES/third_party/README.md)。
+
+开发中的隔离 Windows 验证器可通过 `pwsh -File scripts/test-windows-vm.ps1` 运行。它需要支持嵌套 KVM 的 Docker Desktop、约 4 GB 内存和足够磁盘空间；首次运行从微软下载约 4.9 GB 的 Windows 10 LTSC 评估镜像，并在专用 Docker 卷中创建一个 32 GB 上限的稀疏虚拟磁盘，后续运行复用该磁盘。测试只在经过 QEMU、单磁盘及非提升令牌检查的来宾中执行，不会切换宿主机 TUN。来宾内为无人值守测试启用 UAC 但自动同意该来宾的管理员提示；不要将其用于日常工作。验证器本身仍需首次完整运行通过，不能将脚本的存在视为 Windows TUN 已通过验证。
 
 ## 许可与来源
 

@@ -1,0 +1,4 @@
+scripts/windows-vm/*.sh text eol=lf
+scripts/windows-vm/*.py text eol=lf
+scripts/windows-vm/Dockerfile text eol=lf
+scripts/windows-vm/*.bat text eol=crlf
