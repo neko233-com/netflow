@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,29 @@ func TestProfileDNSIsAppliedAndAgentPreviewExpiresOnChange(t *testing.T) {
 	if err != nil || response == nil || len(response.Answer) == 0 || response.Answer[0].(*mdns.A).A.String() != "192.0.2.42" {
 		t.Fatalf("real DNS override did not answer: %v %v", response, err)
 	}
+	catalog, err := a.profiles.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog.Items[0].Option.DNSVergeMerge = true
+	catalog.Items[0].Option.DNSVergeHosts = "imported.example: 192.0.2.7\n"
+	if err := a.profiles.Save(catalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.setProfileDNS(id, true, override); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err = a.profiles.Load()
+	if err != nil || !catalog.Items[0].Option.DNSVergeMerge {
+		t.Fatal("unchanged migrated DNS lost its merge semantics")
+	}
+	if err := a.setProfileDNS(id, true, override+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err = a.profiles.Load()
+	if err != nil || catalog.Items[0].Option.DNSVergeMerge || catalog.Items[0].Option.DNSVergeHosts == "" {
+		t.Fatal("editing DNS did not preserve hosts and switch to the native override")
+	}
 	preview, err := a.agentPreview(agent.Change{Scope: "global", Operation: "clear"})
 	if err != nil {
 		t.Fatal(err)
@@ -105,12 +129,32 @@ func TestProfileDNSIsAppliedAndAgentPreviewExpiresOnChange(t *testing.T) {
 	if err := a.setProfileDNS(id, true, override); err == nil {
 		t.Fatal("reload failure was ignored")
 	}
-	catalog, err := a.profiles.Load()
+	catalog, err = a.profiles.Load()
 	if err != nil || catalog.Items[0].Option.DNSEnabled || calls != 2 {
 		t.Fatalf("invalid override persisted: %+v %v", catalog, err)
 	}
 	original, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
 	if err != nil || string(original) != base {
 		t.Fatalf("subscription was modified: %q %v", original, err)
+	}
+}
+
+func TestMigratedDNSCompositionAndEditedOverride(t *testing.T) {
+	base := []byte("dns:\n  enable: true\n  fallback: [9.9.9.9]\n  nameserver: [8.8.8.8]\n")
+	option := dnsOverride{enabled: true, merge: true, text: "nameserver: [1.1.1.1]\n", hosts: "imported.example: 192.0.2.7\n"}
+	merged, err := composeProfileDNS(base, option)
+	if err != nil || !strings.Contains(string(merged), "9.9.9.9") || !strings.Contains(string(merged), "imported.example") {
+		t.Fatalf("migration composition: %s %v", merged, err)
+	}
+	option.merge = false
+	option.text = "enable: false\n"
+	edited, err := composeProfileDNS(base, option)
+	if err != nil || strings.Contains(string(edited), "9.9.9.9") || !strings.Contains(string(edited), "imported.example") {
+		t.Fatalf("edited override: %s %v", edited, err)
+	}
+	option.enabled = false
+	disabled, err := composeProfileDNS(base, option)
+	if err != nil || string(disabled) != string(base) {
+		t.Fatalf("disabled override: %s %v", disabled, err)
 	}
 }

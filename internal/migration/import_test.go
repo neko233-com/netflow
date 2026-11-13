@@ -145,6 +145,56 @@ func TestImportVergePreservesExistingActiveProfile(t *testing.T) {
 	}
 }
 
+func TestImportVergeDNSFormatsPreserveSubscriptionAndHosts(t *testing.T) {
+	for _, tc := range []struct {
+		name, dns string
+		wantDNS   bool
+	}{
+		{"current", "dns:\n  nameserver: [1.1.1.1]\n  fallback: []\nhosts:\n  imported.example: 192.0.2.7\n", true},
+		{"legacy", "nameserver: [1.1.1.1]\nfallback: []\nhosts:\n  imported.example: 192.0.2.7\n", true},
+		{"aliases", "defaults: &d {nameserver: [1.1.1.1]}\nhost_defaults: &h {imported.example: 192.0.2.7}\ndns:\n  <<: *d\n  fallback: []\nhosts: *h\n", true},
+		{"hosts-only", "hosts:\n  imported.example: 192.0.2.7\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := fixture(t)
+			body := []byte("dns:\n  enable: true\n  nameserver: [8.8.8.8]\n  fallback: [9.9.9.9]\n  use-hosts: true\nrules: ['MATCH,DIRECT']\n")
+			if err := os.WriteFile(filepath.Join(source, "profiles", "p1.yaml"), body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, "dns_config.yaml"), []byte(tc.dns), 0600); err != nil {
+				t.Fatal(err)
+			}
+			s, err := ReadVerge(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := t.TempDir()
+			if _, err = s.ImportVerge(target); err != nil {
+				t.Fatal(err)
+			}
+			catalog, err := profile.NewStore(target).Load()
+			if err != nil || len(catalog.Items) != 1 {
+				t.Fatalf("catalog: %+v %v", catalog, err)
+			}
+			option := catalog.Items[0].Option
+			if !option.DNSEnabled || !option.DNSVergeMerge || option.DNSVergeHosts == "" || (option.DNSOverride != "") != tc.wantDNS {
+				t.Fatalf("migration options: %+v", option)
+			}
+			out, err := profile.ComposeVergeDNS(body, option.DNSOverride, option.DNSVergeHosts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(out, []byte("9.9.9.9")) || !bytes.Contains(out, []byte("imported.example")) || (tc.wantDNS && !bytes.Contains(out, []byte("1.1.1.1"))) {
+				t.Fatalf("incorrect DNS: %s", out)
+			}
+			original, err := os.ReadFile(filepath.Join(target, catalog.Items[0].File))
+			if err != nil || !bytes.Equal(original, body) {
+				t.Fatal("migration altered the subscription")
+			}
+		})
+	}
+}
+
 // Opt-in read-only integration with the user's real Verge data; target is temporary.
 func TestRealVergeImport(t *testing.T) {
 	source := os.Getenv("NETFLOW_TEST_VERGE_SOURCE")

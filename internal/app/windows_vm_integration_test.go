@@ -163,7 +163,20 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(verge, "profiles.yaml"), []byte("current: p1\nitems:\n  - {uid: p1, type: remote, name: Test, url: 'https://example.test/sub', file: p1.yaml}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(verge, "profiles", "p1.yaml"), []byte("mixed-port: 0\nrules: ['MATCH,DIRECT']\n"), 0600); err != nil {
+	reservation, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrationDNS := reservation.LocalAddr().String()
+	_ = reservation.Close()
+	vergeConfig := fmt.Sprintf("mixed-port: 0\nport: 0\nsocks-port: 0\nipv6: false\ndns:\n  enable: true\n  listen: '%s'\n  enhanced-mode: redir-host\n  use-hosts: true\n  nameserver: ['127.0.0.1:3']\n  fallback: ['127.0.0.1:2']\nrules: ['MATCH,DIRECT']\n", migrationDNS)
+	if err := os.WriteFile(filepath.Join(verge, "profiles", "p1.yaml"), []byte(vergeConfig), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(verge, "verge.yaml"), []byte("profile_dns_settings:\n  p1: {enabled: true}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(verge, "dns_config.yaml"), []byte("dns:\n  nameserver: ['127.0.0.1:1']\n  fallback: []\nhosts:\n  imported.netflow-test.example: 192.0.2.77\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	migrationTarget := t.TempDir()
@@ -183,6 +196,45 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		}
 	}
 	t.Log("installed CLI previewed and imported a Clash Verge profile")
+	func() {
+		if err := os.WriteFile(filepath.Join(migrationTarget, "settings.json"), []byte(`{"prefs":"{\"SilentStart\":true}"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		gui := vmCommand(ctx, filepath.Join(install, "NetFlow.exe"))
+		gui.Env = append(os.Environ(), "NETFLOW_CONFIG_DIR="+migrationTarget, "GOMAXPROCS=1")
+		log, err := os.Create(filepath.Join(migrationTarget, "migration-gui.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer log.Close()
+		gui.Stdout, gui.Stderr = log, log
+		if err := gui.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = gui.Process.Kill(); _ = gui.Wait() }()
+		query := new(dns.Msg)
+		query.SetQuestion("imported.netflow-test.example.", dns.TypeA)
+		var response *dns.Msg
+		deadline := time.Now().Add(60 * time.Second)
+		for time.Now().Before(deadline) {
+			response, _, err = (&dns.Client{Timeout: time.Second}).Exchange(query, migrationDNS)
+			if err == nil && response != nil && len(response.Answer) > 0 {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if err != nil || response == nil || len(response.Answer) == 0 {
+			data, _ := os.ReadFile(filepath.Join(migrationTarget, "migration-gui.log"))
+			t.Fatalf("migrated DNS did not start: %v %s", err, data)
+		}
+		answer, ok := response.Answer[0].(*dns.A)
+		if !ok || answer.A.String() != "192.0.2.77" {
+			t.Fatalf("migrated hosts not applied: %v", response.Answer)
+		}
+	}()
+	t.Log("migrated DNS retained subscription settings and served the imported hosts entry")
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
 	if err != nil {
 		t.Fatal(err)
@@ -294,9 +346,27 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	t.Log("persistent Fake-IP mappings survived the switch to the privileged worker")
 	query := new(dns.Msg)
 	query.SetQuestion("netflow-test.example.", dns.TypeA)
-	answer, _, err := (&dns.Client{Net: "udp", Timeout: 5 * time.Second}).Exchange(query, "8.8.8.8:53")
-	if err != nil || len(answer.Answer) == 0 {
-		t.Fatalf("TUN DNS interception: %v", err)
+	var answer *dns.Msg
+	var firstErr error
+	readyAt := time.Now()
+	deadline = readyAt.Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		answer, _, err = (&dns.Client{Net: "udp", Timeout: 3 * time.Second}).Exchange(query, "8.8.8.8:53")
+		if err == nil && answer != nil && len(answer.Answer) > 0 {
+			break
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil || answer == nil || len(answer.Answer) == 0 {
+		routes, servers, networkErr := vmNetworkSnapshot()
+		data, _ := os.ReadFile(filepath.Join(dir, "gui.log"))
+		t.Fatalf("TUN DNS interception: %v (first %v, network %v, routes %v, DNS %v, GUI %s)", err, firstErr, networkErr, routes, servers, data)
+	}
+	if firstErr != nil {
+		t.Logf("TUN DNS became ready after %s; first request: %v", time.Since(readyAt).Round(time.Millisecond), firstErr)
 	}
 	record, ok := answer.Answer[0].(*dns.A)
 	if !ok || !strings.HasPrefix(record.A.String(), "198.18.") {

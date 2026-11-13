@@ -231,12 +231,14 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 				item.Selected = append(item.Selected, profile.SelectedNode{Name: sel.Name, Now: sel.Now})
 			}
 		}
-		if s.dnsFlags[v.UID] && len(s.dns) > 0 {
-			if _, e := profile.ComposeDNS(body, string(s.dns)); e != nil {
+		if s.dnsFlags[v.UID] && (len(s.dns) > 0 || len(s.dnsHosts) > 0) {
+			if _, e := profile.ComposeVergeDNS(body, string(s.dns), string(s.dnsHosts)); e != nil {
 				return ImportResult{}, fmt.Errorf("DNS 覆写无效: %w", e)
 			}
 			item.Option.DNSEnabled = true
 			item.Option.DNSOverride = string(s.dns)
+			item.Option.DNSVergeMerge = true
+			item.Option.DNSVergeHosts = string(s.dnsHosts)
 		}
 		if v.Option.Rules != "" {
 			layer, e := s.ruleLayer(v.Option.Rules)

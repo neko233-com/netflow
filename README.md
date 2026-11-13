@@ -56,6 +56,8 @@ $source = "$env:APPDATA\io.github.clash-verge-rev.clash-verge-rev"
 
 导入会合并订阅，保留已有订阅、节点选择、流量信息、下载选项及可转换的规则；已有当前订阅不会被替换。原始 Verge 扩展会保存在 NetFlow 配置目录的私有存档中，其中脚本、合并、节点和代理组扩展不会在 NetFlow 自动执行或应用。迁出时会尝试恢复关联的原始扩展；未关联的全局扩展、临时连接规则和部分配置无法完整迁出，规则追加顺序也可能不同。迁出备份可能包含脚本和订阅凭据，目标 Verge 可能执行其中的脚本。系统代理、TUN 和开机自启不会自动启用。对应 MCP 工具是 `netflow_migration_preview`、`netflow_migration_import` 和 `netflow_migration_export`，迁入和迁出同样要求先关闭 NetFlow。迁出不会覆盖已有文件。
 
+新迁入的 Verge DNS 设置按字段覆盖订阅中的 DNS，保留未设置的原字段，并应用非空 hosts；编辑 DNS 内容后，该订阅改用 NetFlow 的整段 DNS 覆写，已迁入的 hosts 仍保留。旧版本已经迁入的订阅不会自动改变 DNS 行为，可在新的配置目录重新迁入以使用新的合并方式。
+
 ## 开发
 
 需要 Go 1.27.3（Go 可通过 `GOTOOLCHAIN=auto` 下载所需工具链）。Windows 开发示例：

@@ -203,7 +203,14 @@ func ExportVerge(target, destination string) (ExportResult, error) {
 			if len(mergeDoc.Content) == 0 {
 				mergeBody = []byte("{}")
 			}
-			mergeBody, err = profile.ComposeDNS(mergeBody, p.Option.DNSOverride)
+			if p.Option.DNSVergeMerge {
+				mergeBody, err = profile.ComposeVergeDNS(mergeBody, p.Option.DNSOverride, p.Option.DNSVergeHosts)
+			} else {
+				mergeBody, err = profile.ComposeDNS(mergeBody, p.Option.DNSOverride)
+				if err == nil && p.Option.DNSVergeHosts != "" {
+					mergeBody, err = profile.ComposeVergeDNS(mergeBody, "", p.Option.DNSVergeHosts)
+				}
+			}
 			if err != nil {
 				return ExportResult{}, err
 			}

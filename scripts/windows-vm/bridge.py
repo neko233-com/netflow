@@ -4,6 +4,7 @@ import json
 import os
 import re
 import socket
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,6 +18,9 @@ if len(RUN_ID) != 32 or any(c not in "0123456789abcdef" for c in RUN_ID):
 RESULTS.mkdir(parents=True, exist_ok=True)
 files = {}
 manifest = None
+media_started = threading.Event()
+media_ready = threading.Event()
+setup_rebooted = threading.Event()
 
 def monitor_command(conn, command):
     conn.sendall((command + "\n").encode("ascii"))
@@ -27,6 +31,77 @@ def monitor_command(conn, command):
             raise OSError("invalid QEMU monitor response")
         data += block
     return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", data.decode("utf-8", "replace"))
+
+def desktop_ready(conn):
+    """Recognize the disposable guest's Windows taskbar before sending keys."""
+    target = Path("/tmp/netflow-desktop.ppm")
+    monitor_command(conn, "screendump " + str(target))
+    data = target.read_bytes()
+    header = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", data)
+    if not header:
+        return False
+    width, height = map(int, header.groups())
+    pixels = data[header.end():]
+    if width < 640 or height < 480 or width > 4096 or height > 2160 or len(pixels) != width * height * 3:
+        return False
+    light = dark = 0
+    for y in range(height - 36, height - 4):
+        for x in range(4, 44):
+            offset = (y * width + x) * 3
+            r, g, b = pixels[offset:offset + 3]
+            light += r > 190 and g > 190 and b > 190
+            dark += r < 95 and g < 95 and b < 95
+    return light > 20 and dark > 300
+
+def start_media_from_desktop(conn, drive):
+    """Start only our fixed executable; no shell or guest command is used."""
+    monitor_command(conn, "sendkey esc 100")
+    time.sleep(.5)
+    monitor_command(conn, "sendkey meta_l-r 100")
+    # The Run dialog may take several seconds to receive focus on a cold,
+    # single-CPU guest. Clear its history only after it has opened.
+    time.sleep(4)
+    monitor_command(conn, "sendkey ctrl-a 100")
+    command = drive + r":\netflow-vm-agent.exe"
+    for char in command:
+        key = {":": "shift-semicolon", "\\": "backslash", ".": "dot", "-": "minus"}.get(char, char)
+        if len(key) == 1 and key.isupper():
+            key = "shift-" + key.lower()
+        monitor_command(conn, "sendkey " + key + " 75")
+        time.sleep(.1)
+    monitor_command(conn, "sendkey ret 100")
+
+def bootstrap_media_agent():
+    # Fresh installations complete their first-logon setup and reboot first.
+    if not (Path("/storage/windows.boot").exists() or Path("/storage/windows.system").exists()):
+        if not setup_rebooted.wait(900):
+            return
+    if media_started.wait(90):
+        return
+    while not media_started.is_set():
+        for drive in "DEFGHIJKLMNOPQRSTUVWXYZ":
+            if media_started.is_set():
+                return
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+                    conn.settimeout(10)
+                    conn.connect("/run/shm/monitor.sock")
+                    greeting = b""
+                    while b"(qemu) " not in greeting:
+                        part = conn.recv(65536)
+                        if not part:
+                            raise OSError("QEMU monitor closed")
+                        greeting += part
+                    if not desktop_ready(conn):
+                        break
+                    print("Windows guest: starting read-only media agent at " + drive + ":", flush=True)
+                    start_media_from_desktop(conn, drive)
+            except (OSError, ValueError):
+                break
+            if media_started.wait(25):
+                return
+        if media_started.wait(15):
+            return
 
 def detach_setup_media():
     # SetupComplete has copied C:\OEM before FirstLogonCommands runs. Only
@@ -108,16 +183,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_bytes(200, body, "application/json")
             except (OSError, ValueError):
                 return self.send_bytes(503, b"Invalid test payload", "text/plain")
-        if self.path.startswith("/v1/files/"):
-            name = self.path.removeprefix("/v1/files/")
-            if name in FILES:
-                with (PAYLOAD / name).open("rb") as src:
-                    self.send_response(200)
-                    self.send_header("Content-Length", str(files[name]["size"]))
-                    self.end_headers()
-                    while block := src.read(1024 * 1024):
-                        self.wfile.write(block)
-                return
         self.send_error(404)
 
     def do_POST(self):
@@ -127,11 +192,21 @@ class Handler(BaseHTTPRequestHandler):
                 if not 1 <= length <= 64:
                     raise ValueError("invalid event size")
                 event = self.rfile.read(length).decode("ascii")
-                if event not in {"setup-start", "setup-refused", "setup-reboot", "agent-elevated", "agent-ready", "agent-update", "test-start", "test-finished"}:
+                if event not in {"setup-start", "setup-refused", "setup-reboot", "agent-elevated", "agent-ready", "media-agent-starting", "media-agent-ready", "media-agent-refused", "test-start", "test-finished"}:
                     raise ValueError("invalid event")
                 print("Windows guest: " + event, flush=True)
                 if event == "setup-start":
                     detach_setup_media()
+                elif event == "setup-reboot":
+                    setup_rebooted.set()
+                elif event == "media-agent-starting":
+                    media_started.set()
+                elif event == "media-agent-ready":
+                    media_ready.set()
+                elif event == "media-agent-refused" and not media_ready.is_set():
+                    tmp = RESULTS / (RUN_ID + ".tmp")
+                    tmp.write_text(json.dumps({"id": RUN_ID, "ok": False, "output": "", "error": "guest did not pass QEMU and single-disk checks"}), encoding="utf-8")
+                    os.replace(tmp, RESULTS / (RUN_ID + ".json"))
                 return self.send_bytes(200, b"OK", "text/plain")
             except (ValueError, UnicodeDecodeError, OSError) as err:
                 print("Windows guest event failed: " + str(err), flush=True)
@@ -154,4 +229,5 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, OSError, json.JSONDecodeError):
             self.send_error(400)
 
+threading.Thread(target=bootstrap_media_agent, daemon=True).start()
 ThreadingHTTPServer(("127.0.0.1", 18765), Handler).serve_forever()

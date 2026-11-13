@@ -10,11 +10,36 @@ import time
 
 source = Path("/opt/netflow/bridge.py")
 tree = ast.parse(source.read_text(encoding="utf-8"), str(source))
-functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {"monitor_command", "detach_setup_media"}]
-if len(functions) != 2:
+functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {"monitor_command", "detach_setup_media", "desktop_ready", "start_media_from_desktop"}]
+if len(functions) != 4:
     raise RuntimeError("setup-media monitor functions missing")
-scope = {"re": re, "socket": socket, "time": time}
+scope = {"re": re, "socket": socket, "time": time, "Path": Path}
 exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), "exec"), scope)
+
+# Verify desktop recognition and fixed keyboard input without a live guest.
+screen = Path("/tmp/netflow-desktop.ppm")
+original_monitor = scope["monitor_command"]
+commands = []
+scope["monitor_command"] = lambda _conn, command: commands.append(command)
+width, height = 640, 480
+pixels = bytearray(width * height * 3)
+screen.write_bytes(f"P6\n{width} {height}\n255\n".encode() + pixels)
+if scope["desktop_ready"](None):
+    raise AssertionError("blank screen accepted as a desktop")
+for y in range(height - 36, height - 32):
+    for x in range(4, 20):
+        offset = (y * width + x) * 3
+        pixels[offset:offset + 3] = b"\xff\xff\xff"
+screen.write_bytes(f"P6\n{width} {height}\n255\n".encode() + pixels)
+if not scope["desktop_ready"](None):
+    raise AssertionError("desktop taskbar was not recognized")
+scope["time"] = type("NoSleep", (), {"sleep": staticmethod(lambda _seconds: None)})
+commands.clear()
+scope["start_media_from_desktop"](None, "D")
+if commands[:3] != ["sendkey esc 100", "sendkey meta_l-r 100", "sendkey ctrl-a 100"] or commands[-1] != "sendkey ret 100" or not all(command.startswith("sendkey ") for command in commands):
+    raise AssertionError("unexpected media bootstrap input")
+scope["monitor_command"], scope["time"] = original_monitor, time
+screen.unlink()
 
 monitor = Path("/run/shm/monitor.sock")
 if monitor.exists():

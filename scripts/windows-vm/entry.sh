@@ -10,4 +10,8 @@ until python3 -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.
   sleep 1
 done
 /opt/netflow/download-media.sh
+# A read-only CD carries the fixed test payload. It is not a virtual hard
+# disk and avoids downloading or self-updating executables inside the guest.
+genisoimage -quiet -J -R -V NETFLOWVM -o /tmp/netflow-payload.iso /payload
+export ARGUMENTS="${ARGUMENTS:-} -device ich9-ahci,id=netflow-cd-ahci -drive id=netflow-cd,file=/tmp/netflow-payload.iso,format=raw,if=none,media=cdrom,readonly=on -device ide-cd,drive=netflow-cd,bus=netflow-cd-ahci.0"
 exec /run/entry.sh

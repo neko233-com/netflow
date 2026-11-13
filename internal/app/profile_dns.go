@@ -12,6 +12,22 @@ import (
 type dnsOverride struct {
 	enabled bool
 	text    string
+	merge   bool
+	hosts   string
+}
+
+func composeProfileDNS(data []byte, override dnsOverride) ([]byte, error) {
+	if !override.enabled {
+		return data, nil
+	}
+	if override.merge {
+		return profile.ComposeVergeDNS(data, override.text, override.hosts)
+	}
+	data, err := profile.ComposeDNS(data, override.text)
+	if err != nil || override.hosts == "" {
+		return data, err
+	}
+	return profile.ComposeVergeDNS(data, "", override.hosts)
 }
 
 func (a *App) applyProfileDNS(data []byte, id string) ([]byte, error) {
@@ -24,10 +40,7 @@ func (a *App) applyProfileDNS(data []byte, id string) ([]byte, error) {
 	}
 	for _, item := range catalog.Items {
 		if item.UID == id {
-			if !item.Option.DNSEnabled {
-				return data, nil
-			}
-			return profile.ComposeDNS(data, item.Option.DNSOverride)
+			return composeProfileDNS(data, dnsOverride{enabled: item.Option.DNSEnabled, text: item.Option.DNSOverride, merge: item.Option.DNSVergeMerge, hosts: item.Option.DNSVergeHosts})
 		}
 	}
 	return nil, errors.New("DNS 覆写对应的订阅不存在")
@@ -58,13 +71,16 @@ func (a *App) setProfileDNS(id string, enabled bool, text string) error {
 	if err != nil {
 		return err
 	}
-	if err := a.validateEffectiveProfileWithDNS(body, id, &dnsOverride{enabled: enabled, text: text}); err != nil {
+	option := catalog.Items[index].Option
+	merge := option.DNSVergeMerge && text == option.DNSOverride
+	if err := a.validateEffectiveProfileWithDNS(body, id, &dnsOverride{enabled: enabled, text: text, merge: merge, hosts: option.DNSVergeHosts}); err != nil {
 		return err
 	}
 	old := catalog
 	old.Items = append([]profile.CatalogItem(nil), catalog.Items...)
 	catalog.Items[index].Option.DNSEnabled = enabled
 	catalog.Items[index].Option.DNSOverride = text
+	catalog.Items[index].Option.DNSVergeMerge = merge
 	if err := a.profiles.Save(catalog); err != nil {
 		return err
 	}

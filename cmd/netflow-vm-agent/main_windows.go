@@ -1,7 +1,7 @@
 //go:build windows
 
 // netflow-vm-agent runs only inside the disposable Windows validation guest.
-// It polls a private QEMU slirp endpoint for a fixed test executable and MSI.
+// It verifies a fixed test executable and MSI on read-only QEMU media.
 package main
 
 import (
@@ -94,44 +94,51 @@ func digestFile(path string) (string, int64, error) {
 	n, err := io.Copy(h, f)
 	return hex.EncodeToString(h.Sum(nil)), n, err
 }
-func acquire(dir, name string, a artifact) (string, error) {
-	ext := filepath.Ext(name)
-	path := filepath.Join(dir, a.SHA256+ext)
-	if sum, n, err := digestFile(path); err == nil && sum == a.SHA256 && n == a.Size {
-		return path, nil
-	}
-	resp, err := httpClient.Get(base + "/v1/files/" + name)
+func findMedia(m manifest) (string, error) {
+	drives, err := windows.GetLogicalDrives()
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return "", errors.New("artifact unavailable")
+	var found string
+	for i := 0; i < 26; i++ {
+		if drives&(1<<i) == 0 {
+			continue
+		}
+		root := string(rune('A'+i)) + `:\`
+		name, err := windows.UTF16PtrFromString(root)
+		if err != nil || windows.GetDriveType(name) != windows.DRIVE_CDROM {
+			continue
+		}
+		id, err := os.ReadFile(filepath.Join(root, "media-id.txt"))
+		if err != nil || string(id) != m.ID {
+			continue
+		}
+		if found != "" {
+			return "", errors.New("multiple matching validation media")
+		}
+		found = root
 	}
-	file, err := os.CreateTemp(dir, "artifact-*.partial")
-	if err != nil {
+	if found == "" {
+		return "", errors.New("validation media unavailable")
+	}
+	if err := verifyMedia(found, m); err != nil {
 		return "", err
 	}
-	tmp := file.Name()
-	defer os.Remove(tmp)
-	h := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(file, h), io.LimitReader(resp.Body, a.Size+1))
-	closeErr := file.Close()
-	if copyErr != nil {
-		return "", copyErr
+	return found, nil
+}
+func verifyMedia(root string, m manifest) error {
+	id, err := os.ReadFile(filepath.Join(root, "media-id.txt"))
+	if err != nil || string(id) != m.ID {
+		return errors.New("validation media identity mismatch")
 	}
-	if closeErr != nil {
-		return "", closeErr
+	for _, name := range []string{"netflow-app.test.exe", "NetFlow.msi", "netflow-vm-agent.exe"} {
+		a := m.Files[name]
+		sum, size, err := digestFile(filepath.Join(root, name))
+		if err != nil || sum != a.SHA256 || size != a.Size {
+			return errors.New("validation media digest mismatch")
+		}
 	}
-	if n != a.Size || hex.EncodeToString(h.Sum(nil)) != a.SHA256 {
-		return "", errors.New("artifact digest mismatch")
-	}
-	// Destination is a content-addressed file under this application's cache.
-	_ = os.Remove(path)
-	if err = os.Rename(tmp, path); err != nil {
-		return "", err
-	}
-	return path, nil
+	return nil
 }
 
 type cappedBuffer struct{ bytes.Buffer }
@@ -146,18 +153,10 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	}
 	return n, nil
 }
-func execute(m manifest, dir string) result {
+func execute(m manifest, media string) result {
 	out := result{ID: m.ID}
-	exe, err := acquire(dir, "netflow-app.test.exe", m.Files["netflow-app.test.exe"])
-	if err != nil {
-		out.Error = err.Error()
-		return out
-	}
-	msi, err := acquire(dir, "NetFlow.msi", m.Files["NetFlow.msi"])
-	if err != nil {
-		out.Error = err.Error()
-		return out
-	}
+	exe := filepath.Join(media, "netflow-app.test.exe")
+	msi := filepath.Join(media, "NetFlow.msi")
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, exe, "-test.v", "-test.run=^TestWindowsVMEndToEnd$", "-test.timeout=10m")
@@ -167,7 +166,7 @@ func execute(m manifest, dir string) result {
 	var output cappedBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
-	err = cmd.Run()
+	err := cmd.Run()
 	out.Output = output.String()
 	if err != nil {
 		out.Error = err.Error()
@@ -198,78 +197,25 @@ func event(name string) {
 	}
 }
 
-// The disk persists between validation runs. Replace its logon agent when the
-// host supplies a newer verified build, without rebuilding Windows or its disk.
-func updateAgent(m manifest, dir string) (bool, error) {
-	current, err := os.Executable()
+func setMediaAutostart(media string) error {
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, registry.SET_VALUE)
 	if err != nil {
-		return false, err
-	}
-	currentHash, _, err := digestFile(current)
-	if err != nil {
-		return false, err
-	}
-	if currentHash == m.Files["netflow-vm-agent.exe"].SHA256 {
-		return false, nil
-	}
-	next, err := acquire(dir, "netflow-vm-agent.exe", m.Files["netflow-vm-agent.exe"])
-	if err != nil {
-		return false, err
-	}
-	k, _, err := registry.CreateKey(registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, registry.QUERY_VALUE|registry.SET_VALUE)
-	if err != nil {
-		return false, err
+		return err
 	}
 	defer k.Close()
-	previous, _, previousErr := k.GetStringValue("NetFlowVMVerify")
-	if err := k.SetStringValue("NetFlowVMVerify", windows.ComposeCommandLine([]string{next})); err != nil {
-		return false, err
-	}
-	cmd := exec.Command(next)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000 | 0x00004000}
-	if err := cmd.Start(); err != nil {
-		if previousErr == nil {
-			_ = k.SetStringValue("NetFlowVMVerify", previous)
-		} else {
-			_ = k.DeleteValue("NetFlowVMVerify")
-		}
-		return false, err
-	}
-	_ = cmd.Process.Release()
-	event("agent-update")
-	return true, nil
+	return k.SetStringValue("NetFlowVMVerify", windows.ComposeCommandLine([]string{filepath.Join(media, "netflow-vm-agent.exe")}))
 }
-
-func pruneCache(dir string, m manifest) {
-	keep := map[string]bool{}
-	for name, a := range m.Files {
-		keep[a.SHA256+filepath.Ext(name)] = true
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || keep[name] || name == "result-"+m.ID+".json" {
-			continue
-		}
-		ext := filepath.Ext(name)
-		stem := strings.TrimSuffix(name, ext)
-		if ((ext == ".exe" || ext == ".msi") && validHex(stem, 64)) || (ext == ".json" && strings.HasPrefix(stem, "result-") && validHex(strings.TrimPrefix(stem, "result-"), 32)) {
-			// Only known content-addressed files are removed; no recursive cleanup.
-			_ = os.Remove(filepath.Join(dir, name))
-		}
-	}
-}
-func disposableGuest() bool {
+func qemuGuest() bool {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DESCRIPTION\System\BIOS`, registry.QUERY_VALUE)
 	if err != nil {
 		return false
 	}
 	manufacturer, _, err := k.GetStringValue("SystemManufacturer")
 	_ = k.Close()
-	if err != nil || !strings.Contains(strings.ToLower(manufacturer), "qemu") {
+	return err == nil && strings.Contains(strings.ToLower(manufacturer), "qemu")
+}
+func disposableGuest() bool {
+	if !qemuGuest() {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -291,14 +237,24 @@ func disposableGuest() bool {
 	return count == 1 && matches
 }
 func main() {
-	if !disposableGuest() {
+	if !qemuGuest() {
 		return
 	}
-	// Setup initially logs in with UAC disabled. The OEM bootstrap enables it
-	// and reboots; do not run the test until this process has a filtered token.
+	// First-logon setup runs elevated and reboots before verification.
 	if windows.GetCurrentProcessToken().IsElevated() {
 		event("agent-elevated")
 		return
+	}
+	// This event only tells the isolated host that the media executable has
+	// started; no testing or system changes occur before the full disk check.
+	event("media-agent-starting")
+	deadline := time.Now().Add(3 * time.Minute)
+	for !disposableGuest() {
+		if time.Now().After(deadline) {
+			event("media-agent-refused")
+			return
+		}
+		time.Sleep(3 * time.Second)
 	}
 	event("agent-ready")
 	root := filepath.Join(os.Getenv("LOCALAPPDATA"), "NetFlowVMVerify")
@@ -306,33 +262,56 @@ func main() {
 		return
 	}
 	for {
-		delay := 3 * time.Second
 		m, err := getManifest()
 		if err == nil {
-			updated, e := updateAgent(m, root)
+			mutexName, e := windows.UTF16PtrFromString(`Local\NetFlowVMVerify-` + m.ID)
 			if e != nil {
-				time.Sleep(3 * time.Second)
-				continue
-			}
-			if updated {
 				return
 			}
-			pruneCache(root, m)
+			mutex, e := windows.CreateMutex(nil, true, mutexName)
+			if e != nil {
+				if mutex != 0 {
+					_ = windows.CloseHandle(mutex)
+				}
+				return
+			}
+			defer windows.CloseHandle(mutex)
+			defer windows.ReleaseMutex(mutex)
+			var media string
+			mediaDeadline := time.Now().Add(2 * time.Minute)
+			for {
+				media, e = findMedia(m)
+				if e == nil {
+					break
+				}
+				if time.Now().After(mediaDeadline) {
+					_ = post(result{ID: m.ID, Error: e.Error()})
+					return
+				}
+				time.Sleep(3 * time.Second)
+			}
+			if e = setMediaAutostart(media); e != nil {
+				_ = post(result{ID: m.ID, Error: "cannot configure validation agent startup: " + e.Error()})
+				return
+			}
+			event("media-agent-ready")
 			marker := filepath.Join(root, "result-"+m.ID+".json")
 			var r result
 			if data, e := os.ReadFile(marker); e == nil && len(data) < 2*1024*1024 && json.Unmarshal(data, &r) == nil && r.ID == m.ID {
-				if post(r) == nil {
-					delay = 10 * time.Second
-				}
+				_ = post(r)
 			} else {
 				event("test-start")
-				r = execute(m, root)
+				r = execute(m, media)
 				event("test-finished")
 				data, _ := json.Marshal(r)
 				_ = os.WriteFile(marker, data, 0600)
 				_ = post(r)
 			}
+			for {
+				_ = post(r)
+				time.Sleep(10 * time.Second)
+			}
 		}
-		time.Sleep(delay)
+		time.Sleep(3 * time.Second)
 	}
 }

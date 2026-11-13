@@ -64,7 +64,7 @@ type Source struct {
 	files     map[string][]byte
 	dns       []byte
 	dnsFlags  map[string]bool
-	dnsHosts  bool
+	dnsHosts  []byte
 	originDir string
 }
 
@@ -92,6 +92,18 @@ func readBounded(r io.Reader, limit int64) ([]byte, error) {
 		return nil, errors.New("迁移文件过大")
 	}
 	return b, nil
+}
+
+func marshalResolved(node *yaml.Node) ([]byte, error) {
+	var value any
+	if err := node.Decode(&value); err != nil {
+		return nil, err
+	}
+	resolved, err := profile.MaterializeYAMLNode(node)
+	if err != nil {
+		return nil, err
+	}
+	return yaml.Marshal(resolved)
 }
 
 // ReadVerge accepts an application data directory or a Verge backup ZIP.
@@ -261,20 +273,47 @@ func ReadVerge(source string) (*Source, error) {
 		}
 	}
 	if b := files["dns_config.yaml"]; len(b) > 0 {
-		var d struct {
-			DNS   yaml.Node `yaml:"dns"`
-			Hosts yaml.Node `yaml:"hosts"`
-		}
+		var d yaml.Node
 		if err := yaml.Unmarshal(b, &d); err != nil {
 			return nil, fmt.Errorf("dns_config.yaml 无效: %w", err)
 		}
-		if d.DNS.Kind == yaml.MappingNode {
-			s.dns, err = yaml.Marshal(&d.DNS)
+		if len(d.Content) != 1 || d.Content[0].Kind != yaml.MappingNode {
+			return nil, errors.New("dns_config.yaml 必须是 YAML 映射")
+		}
+		root := d.Content[0]
+		legacy := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		var dns *yaml.Node
+		for i := 0; i+1 < len(root.Content); i += 2 {
+			key, value := root.Content[i], root.Content[i+1]
+			switch key.Value {
+			case "dns":
+				dns = value
+			case "hosts":
+				if value.Kind == yaml.AliasNode {
+					value = value.Alias
+				}
+				if value != nil && value.Kind == yaml.MappingNode && len(value.Content) > 0 {
+					s.dnsHosts, err = marshalResolved(value)
+					if err != nil {
+						return nil, err
+					}
+				}
+			default:
+				legacy.Content = append(legacy.Content, key, value)
+			}
+		}
+		if dns == nil && len(legacy.Content) > 0 {
+			dns = legacy
+		}
+		if dns != nil && dns.Kind == yaml.AliasNode {
+			dns = dns.Alias
+		}
+		if dns != nil && dns.Kind == yaml.MappingNode {
+			s.dns, err = marshalResolved(dns)
 			if err != nil {
 				return nil, err
 			}
 		}
-		s.dnsHosts = d.Hosts.Kind == yaml.MappingNode && len(d.Hosts.Content) > 0
 	}
 	for _, item := range s.index.Items {
 		if item.Type != "remote" && item.Type != "local" {
@@ -292,8 +331,8 @@ func ReadVerge(source string) (*Source, error) {
 		if err := validProfile(body); err != nil {
 			return nil, fmt.Errorf("订阅数据无效: %w", err)
 		}
-		if s.dnsFlags[item.UID] && len(s.dns) > 0 {
-			if _, err := profile.ComposeDNS(body, string(s.dns)); err != nil {
+		if s.dnsFlags[item.UID] && (len(s.dns) > 0 || len(s.dnsHosts) > 0) {
+			if _, err := profile.ComposeVergeDNS(body, string(s.dns), string(s.dnsHosts)); err != nil {
 				return nil, fmt.Errorf("DNS 覆写无效: %w", err)
 			}
 		}
@@ -339,7 +378,7 @@ func (s *Source) Preview() Preview {
 		if item.Option.Script != "" {
 			unsupported["脚本扩展会保留，但不会自动执行"] = true
 		}
-		if s.dnsFlags[item.UID] && len(s.dns) == 0 {
+		if s.dnsFlags[item.UID] && len(s.dns) == 0 && len(s.dnsHosts) == 0 {
 			unsupported["有订阅启用 DNS 覆写，但源配置缺少 DNS 内容"] = true
 		}
 		if item.Option.Rules != "" {
@@ -351,10 +390,7 @@ func (s *Source) Preview() Preview {
 			unsupported["合并、节点和代理组扩展会保留，尚未自动应用"] = true
 		}
 	}
-	if s.dnsHosts {
-		unsupported["DNS 覆写中的 hosts 不会自动应用"] = true
-	}
-	for _, msg := range []string{"脚本扩展会保留，但不会自动执行", "合并、节点和代理组扩展会保留，尚未自动应用", "追加规则在 NetFlow 中位于 MATCH 前，顺序可能与 Verge 不同", "有订阅启用 DNS 覆写，但源配置缺少 DNS 内容", "DNS 覆写中的 hosts 不会自动应用", "文件型规则或代理集合的外部文件未迁入，可能需要重新下载或修正路径"} {
+	for _, msg := range []string{"脚本扩展会保留，但不会自动执行", "合并、节点和代理组扩展会保留，尚未自动应用", "追加规则在 NetFlow 中位于 MATCH 前，顺序可能与 Verge 不同", "有订阅启用 DNS 覆写，但源配置缺少 DNS 内容", "文件型规则或代理集合的外部文件未迁入，可能需要重新下载或修正路径"} {
 		if unsupported[msg] {
 			out.Warnings = append(out.Warnings, msg)
 		}

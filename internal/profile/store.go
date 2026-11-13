@@ -51,6 +51,8 @@ type CatalogOption struct {
 	TimeoutSeconds  int    `json:"timeout,omitempty"`
 	DNSEnabled      bool   `json:"dns_override_enabled,omitempty"`
 	DNSOverride     string `json:"dns_override,omitempty"`
+	DNSVergeMerge   bool   `json:"dns_verge_merge,omitempty"`
+	DNSVergeHosts   string `json:"dns_verge_hosts,omitempty"`
 	VergeArchive    string `json:"verge_archive,omitempty"`
 	VergeUID        string `json:"verge_uid,omitempty"`
 }

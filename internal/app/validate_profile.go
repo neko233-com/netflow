@@ -43,8 +43,8 @@ func (a *App) validateEffectiveProfileWithDNS(body []byte, profileID string, dns
 	}
 	if dns == nil {
 		data, err = a.applyProfileDNS(data, profileID)
-	} else if dns.enabled {
-		data, err = profile.ComposeDNS(data, dns.text)
+	} else {
+		data, err = composeProfileDNS(data, *dns)
 	}
 	if err != nil {
 		return err

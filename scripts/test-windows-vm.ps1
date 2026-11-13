@@ -2,6 +2,7 @@ param([int]$TimeoutMinutes = 45)
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $previous = Get-Location
+$guestStarted = $false
 try {
     Set-Location -LiteralPath $repo
     (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
@@ -58,9 +59,11 @@ try {
     docker run --rm --network none --cpus=1 --entrypoint python3 netflow-windows-vm:local /opt/netflow/test_monitor.py
     if ($LASTEXITCODE -ne 0) { throw 'Setup-media safety test failed' }
     $runID = [guid]::NewGuid().ToString('N')
+    [IO.File]::WriteAllText((Join-Path $payload 'media-id.txt'), $runID, [Text.UTF8Encoding]::new($false))
     $guestPassword = [guid]::NewGuid().ToString('N') + 'Aa1!'
     docker run -d --name $container --label "$label=1" --cpus=1 --memory=5g --device=/dev/kvm --mount "type=volume,source=$volume,target=/storage" --mount "type=bind,source=$payload,target=/payload,readonly" -e "NETFLOW_RUN_ID=$runID" -e USERNAME=NetFlowTest -e "PASSWORD=$guestPassword" netflow-windows-vm:local | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not start Windows validation guest' }
+    $guestStarted = $true
     $until = (Get-Date).AddMinutes($TimeoutMinutes)
     while ((Get-Date) -lt $until) {
         $state = docker inspect --format '{{.State.Running}}' $container
@@ -68,6 +71,8 @@ try {
         $result = docker exec $container sh -c "test ! -f /storage/netflow-results/$runID.json || cat /storage/netflow-results/$runID.json"
         if ($result) {
             $record = $result | ConvertFrom-Json
+            docker cp "${container}:/storage/netflow-results/$runID.json" (Join-Path $repo "build/windows-vm-result-$runID.json")
+            if ($LASTEXITCODE -ne 0) { throw 'Could not preserve the validation result' }
             $record.output
             if (-not $record.ok) { throw "Windows validation failed: $($record.error)" }
             # Once a bootable disk has passed validation, the verified ISO is
@@ -81,5 +86,14 @@ try {
     docker logs --tail 100 $container
     throw "Windows validation exceeded $TimeoutMinutes minutes"
 } finally {
+    if ($guestStarted) {
+        try {
+            $owned = docker inspect --format '{{ index .Config.Labels "netflow.windows-vm" }}' $container 2>$null
+            if ($LASTEXITCODE -eq 0 -and $owned -eq '1') {
+                docker stop --timeout 30 $container | Out-Null
+                if ($LASTEXITCODE -ne 0) { Write-Warning 'Could not stop the owned validation guest' }
+            }
+        } catch { Write-Warning "Could not stop the owned validation guest: $_" }
+    }
     Set-Location -LiteralPath $previous
 }
