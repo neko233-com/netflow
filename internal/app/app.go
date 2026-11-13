@@ -405,7 +405,7 @@ func (a *App) SetTUN(on bool) error {
 		}
 		return tun.ErrNeedService
 	}
-	if on {
+	if on && (a.core == nil || !a.core.Status().TUN) {
 		if err := a.checkTUNHost(); err != nil {
 			return err
 		}

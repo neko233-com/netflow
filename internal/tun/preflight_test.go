@@ -8,6 +8,7 @@ func TestConflictingAdapters(t *testing.T) {
 		up, want          bool
 	}{
 		{"Mihomo", "Meta Tunnel", true, true},
+		{"NetFlow", "Meta Tunnel", true, true},
 		{"VPN", "Wintun Userspace Tunnel", true, true},
 		{"Mihomo", "Meta Tunnel", false, false},
 		{"Ethernet", "Intel Ethernet Controller", true, false},
