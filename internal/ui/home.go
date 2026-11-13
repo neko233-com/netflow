@@ -83,7 +83,7 @@ func (m *Model) profileCard(c *mygoui.Context, pal Palette) mygoui.Element {
 		}
 		if p.Home != "" {
 			if textLink(c, pal, "打开主页", p.Home, "profile-home") {
-				c.OpenURL(p.Home)
+				m.openProfileHome(c, p.Home)
 			}
 		}
 		host := "local"

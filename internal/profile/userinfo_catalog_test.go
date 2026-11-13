@@ -12,6 +12,14 @@ func TestApplySubscriptionUserInfoHandlesMissingAndOverflow(t *testing.T) {
 	if item.Used != 7 || item.Total != 9 {
 		t.Fatal("missing header cleared previous data")
 	}
+	ApplySubscriptionUserInfo(&item, http.Header{"Profile-Web-Page-Url": []string{"https://example.test/account"}})
+	if item.Home != "https://example.test/account" {
+		t.Fatal("valid subscription home was not recorded")
+	}
+	ApplySubscriptionUserInfo(&item, http.Header{"Profile-Web-Page-Url": []string{"javascript:alert(1)"}})
+	if item.Home != "https://example.test/account" {
+		t.Fatal("invalid subscription home replaced a valid address")
+	}
 	h := http.Header{"Subscription-Userinfo": []string{"upload=18446744073709551615; download=9; total=18446744073709551615; expire=18446744073709551615"}}
 	ApplySubscriptionUserInfo(&item, h)
 	if item.Used != math.MaxInt64 || item.Total != math.MaxInt64 || !item.Expire.IsZero() {

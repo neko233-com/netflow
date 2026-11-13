@@ -25,6 +25,9 @@ func ApplySubscriptionUserInfo(item *CatalogItem, h http.Header) {
 	if item == nil {
 		return
 	}
+	if home := normalizeHome(h.Get("profile-web-page-url")); home != "" {
+		item.Home = home
+	}
 	info, ok := ParseSubscriptionUserInfo(h)
 	if !ok {
 		return

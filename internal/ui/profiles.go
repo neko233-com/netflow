@@ -265,7 +265,7 @@ func (m *Model) profileItem(c *mygoui.Context, pal Palette, i int) {
 		m.Profiles = Move(m.Profiles, from, i)
 	}
 	card.ContextMenu(func(menu *mygoui.Menu) {
-		m.profileMenu(menu, p)
+		m.profileMenu(c, menu, p)
 	})
 	card.Children(func() {
 		mygoui.Column(c).FillWidth().AlignItems(mygoui.Stretch).Gap(6).Children(func() {
@@ -337,11 +337,11 @@ func (m *Model) activateProfile(uid string) {
 	}
 }
 
-func (m *Model) profileMenu(menu *mygoui.Menu, p *ProfileItem) {
+func (m *Model) profileMenu(c *mygoui.Context, menu *mygoui.Menu, p *ProfileItem) {
 	remote := p.URL != ""
 	if remote && p.Home != "" {
 		if menu.Item("首 页").Chosen() {
-			m.Notice = p.Home
+			m.openProfileHome(c, p.Home)
 		}
 	}
 	if menu.Item("使用").Chosen() {
