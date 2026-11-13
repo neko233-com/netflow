@@ -24,6 +24,9 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/coreipc"
+	"github.com/neko233-com/netflow/internal/kernelopts"
+	"github.com/neko233-com/netflow/internal/tun"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
@@ -68,7 +71,7 @@ func requireDisposableVM(t *testing.T) {
 
 func vmNetworkSnapshot() ([]string, map[uint64][]string, error) {
 	var table *windows.MibIpForwardTable2
-	if err := windows.GetIpForwardTable2(windows.AF_INET, &table); err != nil {
+	if err := windows.GetIpForwardTable2(windows.AF_UNSPEC, &table); err != nil {
 		return nil, nil, err
 	}
 	defer windows.FreeMibTable(unsafe.Pointer(table))
@@ -293,16 +296,122 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	if out, e := call("tun", "off"); e != nil {
 		t.Fatalf("TUN off request: %s %v", out, e)
 	}
+	restored := false
 	deadline = time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		s, err = status()
 		routes, servers, e := vmNetworkSnapshot()
 		if err == nil && e == nil && !s.TUNPending && !s.TUN && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(servers, beforeDNS) {
-			t.Log("original IPv4 routes and adapter DNS restored")
-			return
+			restored = true
+			break
 		}
 		time.Sleep(time.Second)
 	}
-	routes, servers, _ := vmNetworkSnapshot()
-	t.Fatalf("TUN shutdown did not restore networking: status=%+v error=%v\nroutes before=%v after=%v\nDNS before=%v after=%v", s, err, beforeRoutes, routes, beforeDNS, servers)
+	if !restored {
+		routes, servers, _ := vmNetworkSnapshot()
+		t.Fatalf("TUN shutdown did not restore networking: status=%+v error=%v\nroutes before=%v after=%v\nDNS before=%v after=%v", s, err, beforeRoutes, routes, beforeDNS, servers)
+	}
+	t.Log("original IPv4/IPv6 routes and adapter DNS restored")
+	if out, e := call("tun", "on"); e != nil {
+		t.Fatalf("second TUN on: %s %v", out, e)
+	}
+	deadline = time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		s, err = status()
+		if err == nil && !s.TUNPending && (s.TUN || s.TUNError != "") {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil || !s.TUN {
+		t.Fatalf("second TUN failed: %+v %v", s, err)
+	}
+	if err := gui.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = gui.Wait()
+	waitRestored := func(label string) {
+		t.Helper()
+		end := time.Now().Add(60 * time.Second)
+		for time.Now().Before(end) {
+			routes, servers, e := vmNetworkSnapshot()
+			if e == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(servers, beforeDNS) {
+				return
+			}
+			time.Sleep(time.Second)
+		}
+		routes, servers, _ := vmNetworkSnapshot()
+		t.Fatalf("%s did not restore networking: routes before=%v after=%v; DNS before=%v after=%v", label, beforeRoutes, routes, beforeDNS, servers)
+	}
+	waitRestored("GUI crash")
+	t.Log("worker removed TUN and restored routes after GUI termination")
+
+	workerContext, stopLaunch := context.WithTimeout(context.Background(), 30*time.Second)
+	worker, err := coreipc.LaunchWindows(workerContext, filepath.Join(install, "netflow-kernel-worker.exe"))
+	stopLaunch()
+	if err != nil {
+		t.Fatalf("launch worker: %v", err)
+	}
+	defer worker.Close()
+	workerDir := t.TempDir()
+	workerConfig := strings.Replace(config, "MATCH,REJECT", "MATCH,DIRECT", 1)
+	composed, err := tun.Compose([]byte(workerConfig), true, "NetFlowVM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeStack := func(stack string) {
+		t.Helper()
+		data, e := kernelopts.Compose(composed, kernelopts.Options{TUNStack: &stack})
+		if e == nil {
+			e = os.WriteFile(filepath.Join(workerDir, "config.yaml"), data, 0600)
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	writeStack("system")
+	if err := worker.Start(workerDir); err != nil {
+		t.Fatalf("start worker: %v", err)
+	}
+	for i, stack := range []string{"system", "mixed", "gvisor", "mips"} {
+		if i > 0 {
+			writeStack(stack)
+			if err := worker.Reload(); err != nil {
+				t.Fatalf("%s stack reload: %v", stack, err)
+			}
+		}
+		if !worker.Status().TUN {
+			t.Fatalf("%s TUN is not active", stack)
+		}
+		if _, err := net.InterfaceByName("NetFlowVM"); err != nil {
+			t.Fatalf("%s Wintun adapter: %v", stack, err)
+		}
+		answer, _, err := (&dns.Client{Net: "udp", Timeout: 5 * time.Second}).Exchange(query, "8.8.8.8:53")
+		if err != nil || len(answer.Answer) == 0 {
+			t.Fatalf("%s DNS interception: %v", stack, err)
+		}
+		record, ok := answer.Answer[0].(*dns.A)
+		if !ok {
+			t.Fatalf("%s invalid fake IP", stack)
+		}
+		currentIP := record.A.String()
+		hc := &http.Client{Timeout: 6 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(currentIP, "18765"))
+		}}}
+		response, err := hc.Get("http://netflow-test.example:18765/health")
+		if err != nil {
+			t.Fatalf("%s fake-IP forwarding: %v", stack, err)
+		}
+		data, e := io.ReadAll(response.Body)
+		response.Body.Close()
+		if e != nil || string(data) != "OK" {
+			t.Fatalf("%s forwarding response: %q %v", stack, data, e)
+		}
+		t.Logf("%s Windows TUN stack forwarded fake-IP traffic", stack)
+	}
+	if err := worker.Close(); err != nil {
+		t.Fatalf("close worker: %v", err)
+	}
+	waitRestored("worker disconnect")
+	t.Log("worker disconnect restored IPv4/IPv6 routes and DNS")
 }
