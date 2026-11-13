@@ -190,7 +190,13 @@ func TestWorkerRestoresSelectionBeforeTUNReload(t *testing.T) {
 	if err := a.enableWorkerTUN(next); err != nil {
 		t.Fatal(err)
 	}
-	if !next.tun || next.selection != "REJECT" {
-		t.Fatal("worker did not activate with the saved node")
+	if !next.tun || next.selection != "REJECT" || model.Home.RunMode != ui.RunAdmin {
+		t.Fatal("worker did not activate with the saved node and privileged status")
+	}
+	if err := a.SetTUN(false); err != nil {
+		t.Fatal(err)
+	}
+	if a.privilegedTUN || model.Home.TUN || model.Home.RunMode != ui.RunSidecar {
+		t.Fatal("disabling TUN did not restore the normal kernel status")
 	}
 }

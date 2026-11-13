@@ -20,6 +20,7 @@ type Options struct {
 	IPv6         *bool   `json:"ipv6,omitempty"`
 	UnifiedDelay *bool   `json:"unified_delay,omitempty"`
 	LogLevel     *string `json:"log_level,omitempty"`
+	TUNStack     *string `json:"tun_stack,omitempty"`
 	MixedPort    *int    `json:"mixed_port,omitempty"`
 	SOCKSPort    *int    `json:"socks_port,omitempty"`
 	HTTPPort     *int    `json:"http_port,omitempty"`
@@ -40,6 +41,13 @@ func (o Options) Validate() error {
 		case "debug", "info", "warning", "error", "silent":
 		default:
 			return errors.New("无效的日志等级")
+		}
+	}
+	if o.TUNStack != nil {
+		switch *o.TUNStack {
+		case "system", "gvisor", "mixed", "mips":
+		default:
+			return errors.New("无效的 TUN 协议栈")
 		}
 	}
 	used := map[int]bool{}
@@ -143,7 +151,7 @@ func Compose(base []byte, o Options) ([]byte, error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
 	}
-	if o.Mode == nil && o.AllowLAN == nil && o.IPv6 == nil && o.UnifiedDelay == nil && o.LogLevel == nil && o.MixedPort == nil && o.SOCKSPort == nil && o.HTTPPort == nil && o.RedirPort == nil && o.TProxyPort == nil {
+	if o.Mode == nil && o.AllowLAN == nil && o.IPv6 == nil && o.UnifiedDelay == nil && o.LogLevel == nil && o.TUNStack == nil && o.MixedPort == nil && o.SOCKSPort == nil && o.HTTPPort == nil && o.RedirPort == nil && o.TProxyPort == nil {
 		return base, nil
 	}
 	var doc yaml.Node
@@ -181,6 +189,26 @@ func Compose(base []byte, o Options) ([]byte, error) {
 			if err := set(x.key, x.value); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if o.TUNStack != nil {
+		// Resolve aliases/merge keys into a detached effective TUN mapping, so
+		// updating the stack never changes another field sharing an anchor.
+		var effective map[string]any
+		if err := yaml.Unmarshal(base, &effective); err != nil {
+			return nil, err
+		}
+		block := map[string]any{}
+		if value, ok := effective["tun"]; ok && value != nil {
+			var valid bool
+			block, valid = value.(map[string]any)
+			if !valid {
+				return nil, errors.New("TUN 配置必须是 YAML 映射")
+			}
+		}
+		block["stack"] = *o.TUNStack
+		if err := set("tun", block); err != nil {
+			return nil, err
 		}
 	}
 	return yaml.Marshal(&doc)

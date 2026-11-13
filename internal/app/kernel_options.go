@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/metacubex/mihomo/constant/features"
 	"github.com/metacubex/mihomo/hub/executor"
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/tun"
 	"github.com/neko233-com/netflow/internal/ui"
 )
 
@@ -31,6 +33,19 @@ func (a *App) SetKernelOption(name string, value any) error {
 			next.IPv6 = &v
 		case "unified-delay":
 			next.UnifiedDelay = &v
+		}
+	case "tun-stack":
+		v, ok := value.(string)
+		if !ok {
+			return errors.New("TUN 协议栈类型无效")
+		}
+		if (v == "mixed" || v == "gvisor") && !features.WithGVisor {
+			return errors.New("当前构建未包含 gVisor，无法使用此协议栈")
+		}
+		if v == "" {
+			next.TUNStack = nil
+		} else {
+			next.TUNStack = &v
 		}
 	case "log-level":
 		v, ok := value.(string)
@@ -140,4 +155,14 @@ func (a *App) applyKernelOptions(next kernelopts.Options) error {
 	}
 	a.refreshHome()
 	return nil
+}
+
+func (a *App) syncTUNStack() {
+	if a.model == nil || a.kernelOptions == nil {
+		return
+	}
+	a.model.TunStack = "跟随订阅"
+	if stack := a.kernelOptions.Snapshot().TUNStack; stack != nil {
+		a.model.TunStack = tun.StackLabel(*stack)
+	}
 }

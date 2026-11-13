@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/metacubex/mihomo/constant/features"
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appconfig"
 	"github.com/neko233-com/netflow/internal/appdir"
@@ -82,6 +83,26 @@ func TestKernelOptionsApplyPersistAndRollbackOccupiedPort(t *testing.T) {
 	_ = connection.Close()
 	if v := a.kernelOptions.Snapshot().MixedPort; v != nil {
 		t.Fatalf("failed port persisted: %d", *v)
+	}
+	if err := a.SetKernelOption("tun-stack", "system"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.kernelOptions.Snapshot().TUNStack; got == nil || *got != "system" || a.model.TunStack != "System" {
+		t.Fatal("TUN stack override not saved")
+	}
+	effective, err := a.core.EffectiveConfig()
+	if err != nil || !strings.Contains(string(effective), "stack: system") {
+		t.Fatal("TUN stack did not reach the kernel")
+	}
+	err = a.SetKernelOption("tun-stack", "mixed")
+	if (err == nil) != features.WithGVisor {
+		t.Fatalf("mixed stack capability mismatch: %v", err)
+	}
+	if err := a.SetKernelOption("tun-stack", "invalid"); err == nil {
+		t.Fatal("invalid TUN stack accepted")
+	}
+	if err := a.SetKernelOption("tun-stack", ""); err != nil || a.kernelOptions.Snapshot().TUNStack != nil || a.model.TunStack != "跟随订阅" {
+		t.Fatal("TUN stack inheritance not restored")
 	}
 	if err := a.SetMode("direct"); err != nil {
 		t.Fatal(err)

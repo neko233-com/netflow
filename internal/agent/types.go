@@ -17,6 +17,7 @@ type Status struct {
 	TUN           bool          `json:"tun"`
 	TUNPending    bool          `json:"tun_pending"`
 	TUNError      string        `json:"tun_error,omitempty"`
+	TUNStacks     []string      `json:"tun_stacks"`
 	Mode          string        `json:"mode"`
 	ActiveProfile string        `json:"active_profile,omitempty"`
 	Revision      uint64        `json:"revision"`

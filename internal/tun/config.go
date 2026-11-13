@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/metacubex/mihomo/constant/features"
+
 	"go.yaml.in/yaml/v3"
 )
 
@@ -14,6 +16,14 @@ const (
 	DefaultStack     = "mips"
 	DefaultDNSHijack = "any:53"
 )
+
+// SupportedStacks reports the stacks compiled into this binary.
+func SupportedStacks() []string {
+	if features.WithGVisor {
+		return []string{"system", "mixed", "gvisor", "mips"}
+	}
+	return []string{"system", "mips"}
+}
 
 // StackLabel is the tun dialog name for a yaml stack value.
 // mihomo v1.19.33 accepts "mips" and reports it as "Mips".
@@ -34,7 +44,7 @@ func StackLabel(yaml string) string {
 
 // ErrNeedService is returned when TUN cannot be turned on because the
 // process is not allowed to open the device.
-var ErrNeedService = fmt.Errorf("TUN 模式需要服务模式，请先安装服务")
+var ErrNeedService = fmt.Errorf("TUN 暂不可用：缺少特权内核或管理员授权")
 
 // Use applies Verge use_tun plus the template tun defaults.
 // enable true sets tun.enable and, when missing, stack, auto-route, and

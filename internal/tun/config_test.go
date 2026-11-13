@@ -1,8 +1,10 @@
 package tun
 
 import (
+	"github.com/metacubex/mihomo/constant/features"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -57,5 +59,12 @@ func TestApplyFileDoesNotStartKernel(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q\n%s", want, text)
 		}
+	}
+}
+
+func TestSupportedStacksMatchBuild(t *testing.T) {
+	stacks := SupportedStacks()
+	if !slices.Contains(stacks, "system") || !slices.Contains(stacks, "mips") || slices.Contains(stacks, "mixed") != features.WithGVisor || slices.Contains(stacks, "gvisor") != features.WithGVisor {
+		t.Fatalf("stacks=%v gvisor=%v", stacks, features.WithGVisor)
 	}
 }

@@ -5,54 +5,6 @@ import (
 	"testing"
 )
 
-func TestServiceModeDialog(t *testing.T) {
-	m := DemoModel()
-	m.Router.Replace("/settings")
-	installed := 0
-	uninstalled := 0
-	m.Hooks.InstallService = func() error {
-		installed++
-		return nil
-	}
-	m.Hooks.UninstallService = func() error {
-		uninstalled++
-		return nil
-	}
-	tt := renderModel(m, WindowWidth, 1600, false)
-	if !tt.HasText("服务模式") || !tt.HasText("未安装") {
-		t.Fatalf("row texts %q", tt.Texts())
-	}
-	if err := tt.Click("service-row"); err != nil {
-		t.Fatal(err)
-	}
-	if !tt.HasText("安装服务") || !tt.HasText("当前状态：未安装") {
-		t.Fatalf("dialog texts %q", tt.Texts())
-	}
-	if err := tt.Click("service-install"); err != nil {
-		t.Fatal(err)
-	}
-	if installed != 1 || !m.ServiceInstalled || !m.Home.TUNAvailable || m.Notice != "已成功安装服务" {
-		t.Fatalf("install n %d installed %v tun %v notice %q", installed, m.ServiceInstalled, m.Home.TUNAvailable, m.Notice)
-	}
-	if !tt.HasText("已安装") || !tt.HasText("卸载服务") {
-		t.Fatalf("after install %q", tt.Texts())
-	}
-	if err := tt.Click("service-uninstall"); err != nil {
-		t.Fatal(err)
-	}
-	if uninstalled != 1 || m.ServiceInstalled || m.Notice != "已成功卸载服务" {
-		t.Fatalf("uninstall n %d installed %v notice %q", uninstalled, m.ServiceInstalled, m.Notice)
-	}
-
-	m.Hooks.InstallService = func() error { return errors.New("denied") }
-	if err := tt.Click("service-install"); err != nil {
-		t.Fatal(err)
-	}
-	if m.ServiceInstalled || m.Notice != "安装服务失败" {
-		t.Fatalf("failed install installed %v notice %q", m.ServiceInstalled, m.Notice)
-	}
-}
-
 func TestSettingsIconsSitOnTheirRows(t *testing.T) {
 	m := DemoModel()
 	m.Home.TUNAvailable = false
@@ -76,14 +28,44 @@ func TestSettingsIconsSitOnTheirRows(t *testing.T) {
 	}
 }
 
-func TestTunStackDefaultsToMips(t *testing.T) {
+func TestTunStackDefaultsToSubscription(t *testing.T) {
 	m := DemoModel()
 	m.Router.Replace("/settings")
 	tt := renderModel(m, WindowWidth, 1600, false)
 	if err := tt.Click("tun-gear"); err != nil {
 		t.Fatal(err)
 	}
-	if m.TunStack != "Mips" || !tt.HasText("Mips") {
+	if m.TunStack != "跟随订阅" || !tt.HasText("跟随订阅") {
 		t.Fatalf("stack %q texts %q", m.TunStack, tt.Texts())
+	}
+}
+
+func TestTunStackChoiceAppliesAndRollsBack(t *testing.T) {
+	m := DemoModel()
+	m.Router.Replace("/settings")
+	var name, value string
+	m.Hooks.SetKernelOption = func(n string, v any) error { name = n; value = v.(string); return nil }
+	tt := renderModel(m, WindowWidth, 1600, false)
+	if err := tt.Click("tun-gear"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("tun-stack"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("System"); err != nil {
+		t.Fatal(err)
+	}
+	if name != "tun-stack" || value != "system" || m.TunStack != "System" {
+		t.Fatalf("stack %q option %q=%q", m.TunStack, name, value)
+	}
+	m.Hooks.SetKernelOption = func(string, any) error { return errors.New("failed") }
+	if err := tt.Click("tun-stack"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("Mips"); err != nil {
+		t.Fatal(err)
+	}
+	if m.TunStack != "System" || m.Notice != "failed" {
+		t.Fatalf("failed change stack=%q notice=%q", m.TunStack, m.Notice)
 	}
 }

@@ -200,6 +200,7 @@ func (a *App) Prepare() error {
 	if err != nil {
 		return fmt.Errorf("读取内核选项: %w", err)
 	}
+	a.syncTUNStack()
 	a.core.SetTransformer(func(base []byte, profileID string) ([]byte, error) {
 		var tunErr error
 		base, tunErr = a.applyProfileTUN(base)
@@ -626,6 +627,7 @@ func (a *App) refreshHome() {
 	if a.model == nil {
 		return
 	}
+	a.syncTUNStack()
 	st := a.core.Status()
 	h := a.model.Home
 	if st.Running {
@@ -674,16 +676,16 @@ func (a *App) refreshHome() {
 		h.TUN = a.settings.TUN
 	}
 	h.TUNAvailable = a.tunRequestAvailable()
-	if a.serviceReady() {
-		a.model.ServiceInstalled = true
-		if h.RunMode == "" || h.RunMode == ui.RunSidecar {
-			h.RunMode = ui.RunService
-		}
-	} else {
-		a.model.ServiceInstalled = false
-		if h.RunMode == ui.RunService {
-			h.RunMode = ui.RunSidecar
-		}
+	a.model.ServiceInstalled = a.serviceReady()
+	switch {
+	case !st.Running:
+		h.RunMode = ui.RunNotRunning
+	case a.privilegedTUN:
+		h.RunMode = ui.RunAdmin
+	case a.model.ServiceInstalled:
+		h.RunMode = ui.RunService
+	default:
+		h.RunMode = ui.RunSidecar
 	}
 	if st.Running && !a.started.IsZero() {
 		h.Uptime = time.Since(a.started)

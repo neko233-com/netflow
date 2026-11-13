@@ -12,9 +12,9 @@ try {
     if ((docker version --format '{{.Server.Os}}') -ne 'linux') { throw 'A Linux Docker engine is required.' }
     $env:GOOS = 'linux'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'; $env:GOMAXPROCS = '1'
     New-Item -ItemType Directory -Force -Path build | Out-Null
-    & go test -p 1 -tags=integration -c -o build/netflow-core-linux-test ./internal/core
+    & go test -p 1 -tags=integration,with_gvisor,no_tailscale -c -o build/netflow-core-linux-test ./internal/core
     if ($LASTEXITCODE -ne 0) { throw 'Linux integration test build failed.' }
-    & go test -p 1 -tags=integration -c -o build/netflow-coreipc-linux-test ./internal/coreipc
+    & go test -p 1 -tags=integration,with_gvisor,no_tailscale -c -o build/netflow-coreipc-linux-test ./internal/coreipc
     if ($LASTEXITCODE -ne 0) { throw 'Linux worker integration test build failed.' }
     $testBin = (Resolve-Path -LiteralPath 'build/netflow-core-linux-test').Path
     $workerTestBin = (Resolve-Path -LiteralPath 'build/netflow-coreipc-linux-test').Path

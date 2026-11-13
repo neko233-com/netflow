@@ -116,6 +116,8 @@ def main():
                 time.sleep(0.2)
         if not status["running"] or status["tun"] or status["tun_pending"]:
             raise RuntimeError("unexpected initial core or TUN state")
+        if set(status["tun_stacks"]) != {"system", "mixed", "gvisor", "mips"}:
+            raise RuntimeError("release build is missing TUN protocol stacks")
         tun_result = call("tun", "off")
         if not tun_result["accepted"] or tun_result["pending"] or tun_result["tun"]:
             raise RuntimeError("safe TUN-off command failed")

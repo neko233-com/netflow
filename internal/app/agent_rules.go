@@ -20,6 +20,7 @@ import (
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/tun"
 )
 
 type agentProposal struct {
@@ -41,7 +42,7 @@ func (a *App) agentStatus() (agent.Status, error) {
 	}
 	st := a.core.Status()
 	connections, _, _ := a.core.Connections()
-	out := agent.Status{Running: st.Running, TUN: st.TUN, TUNPending: a.tunBusy, TUNError: a.tunLastError, Mode: st.Mode, ActiveProfile: a.core.ProfileID(), Revision: a.rewrites.Snapshot().Revision, Connections: connections, Overrides: a.rewrites.Snapshot()}
+	out := agent.Status{Running: st.Running, TUN: st.TUN, TUNPending: a.tunBusy, TUNError: a.tunLastError, TUNStacks: tun.SupportedStacks(), Mode: st.Mode, ActiveProfile: a.core.ProfileID(), Revision: a.rewrites.Snapshot().Revision, Connections: connections, Overrides: a.rewrites.Snapshot()}
 	for _, p := range catalog.Items {
 		out.Profiles = append(out.Profiles, agent.Profile{ID: p.UID, Name: p.Name, Active: p.UID == out.ActiveProfile})
 	}

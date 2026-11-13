@@ -8,6 +8,7 @@ import re
 import shutil
 import stat
 import struct
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -33,6 +34,13 @@ def check_pe(path, require_amd64=True, subsystem=2):
         raise ValueError(f"unexpected PE architecture: {path}")
     if magic not in (0x10B, 0x20B) or struct.unpack_from("<H", pe, 24 + 68)[0] != subsystem:
         raise ValueError(f"unexpected Windows executable subsystem: {path}")
+
+
+def check_tun_build_tags(path):
+    info = subprocess.check_output(["go", "version", "-m", str(path)], text=True, encoding="utf-8")
+    lines = [line.split("-tags=", 1)[1].strip() for line in info.splitlines() if "-tags=" in line]
+    if len(lines) != 1 or not {"with_gvisor", "no_tailscale"}.issubset(set(lines[0].split(","))):
+        raise ValueError(f"missing TUN build tags: {path}")
 
 
 def check_macho(path):
@@ -87,11 +95,14 @@ def main():
     check_pe(windows / "NetFlow.exe")
     check_pe(windows / "netflow-agent.exe", subsystem=3)
     check_pe(windows / "netflow-kernel-worker.exe")
+    check_tun_build_tags(windows / "NetFlow.exe")
+    check_tun_build_tags(windows / "netflow-kernel-worker.exe")
     check_macho(mac / "Contents/Resources/netflow-agent")
     with (mac / "Contents" / "Info.plist").open("rb") as f:
         plist = plistlib.load(f)
     executable = "Contents/MacOS/" + plist["CFBundleExecutable"]
     minimum = check_macho(mac / executable)
+    check_tun_build_tags(mac / executable)
     if plist.get("CFBundleIdentifier") != "com.neko233.netflow":
         raise ValueError("unexpected macOS bundle identifier")
     plist_min = tuple(int(n) for n in plist["LSMinimumSystemVersion"].split("."))

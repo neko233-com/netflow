@@ -39,7 +39,7 @@ func (m *Model) systemSettings(c *mygoui.Context, pal Palette) {
 		tunOn := m.Home.TUN
 		m.switchLine(c, pal, "虚拟网卡模式", &tunOn, "tun-row", func(on bool) { m.setTUN(on) }, func() {
 			if !m.Home.TUNAvailable {
-				mygoui.Icon(c, iconWarn).Size(18, 18).TextColor(pal.Warning).Tooltip("TUN 模式需要安装服务模式或管理员模式").Label("tun-warn")
+				mygoui.Icon(c, iconWarn).Size(18, 18).TextColor(pal.Warning).Tooltip("当前缺少可用的特权内核或管理员授权").Label("tun-warn")
 			}
 			if gearButton(c, pal, "TUN", "tun-gear") {
 				m.Dialogs.TUN = true
@@ -49,15 +49,7 @@ func (m *Model) systemSettings(c *mygoui.Context, pal Palette) {
 		m.switchLine(c, pal, "静默启动", &m.Prefs.SilentStart, "silent-row", func(bool) { m.savePrefs() }, func() {
 			helpMark(c, pal, "help-silent", "程序启动时以后台模式运行，不显示程序面板")
 		})
-		status := "未安装"
-		if m.ServiceInstalled {
-			status = "已安装"
-		}
-		clickRow(c, pal, "服务模式", "service-row", m.Busy == "service", func() {
-			m.Dialogs.Service = true
-		}, func() {
-			mygoui.Text(c, status).FontSize(14)
-		})
+
 	})
 }
 

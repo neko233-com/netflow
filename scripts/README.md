@@ -24,6 +24,8 @@ check real TUN creation, removal and restoration of IPv4 routes and rules,
 including when a separate kernel worker loses its parent connection. A second
 isolated container checks that REJECT blocks traffic and DIRECT forwards it,
 including DNS hijacking and a Fake-IP request resolved by a local test server.
+The worker is also reloaded through System, Mixed, gVisor and Mips, and each
+stack forwards traffic to the isolated peer.
 The test requires a Linux Docker engine and package-mirror access. It does not
 validate Windows Wintun, macOS utun or IPv6 routing.
 

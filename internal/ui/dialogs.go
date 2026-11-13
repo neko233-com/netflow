@@ -4,6 +4,7 @@ import (
 	"runtime"
 
 	mygoui "github.com/egoist/mygo/ui"
+	"github.com/metacubex/mihomo/constant/features"
 )
 
 func (m *Model) overlay(c *mygoui.Context, pal Palette) {
@@ -658,18 +659,32 @@ func (m *Model) sysproxyBody(c *mygoui.Context, pal Palette) {
 }
 
 func (m *Model) tunBody(c *mygoui.Context, pal Palette) {
-	mygoui.Text(c, "栈").FontSize(13)
+	mygoui.Text(c, "协议栈").FontSize(13).Bold()
 	if m.TunStack == "" {
-		m.TunStack = "Mips"
+		m.TunStack = "跟随订阅"
 	}
-	mygoui.Select(c, &m.TunStack, []string{"System", "gVisor", "Mixed", "Mips"}).Label("tun-stack")
-	mygoui.Text(c, "DNS").FontSize(13)
-	dns := "Auto"
-	mygoui.Select(c, &dns, []string{"Auto", "Disabled", "Native", "Hijack"}).Label("tun-dns")
-	mygoui.Text(c, "设备").FontSize(13)
-	dev := "utun"
-	mygoui.TextInput(c, &dev)
-	_ = pal
+	previous := m.TunStack
+	stacks := []string{"跟随订阅", "System", "Mips"}
+	if features.WithGVisor {
+		stacks = []string{"跟随订阅", "System", "gVisor", "Mixed", "Mips"}
+	}
+	if mygoui.Select(c, &m.TunStack, stacks).Label("tun-stack").Changed() {
+		values := map[string]string{"跟随订阅": "", "System": "system", "gVisor": "gvisor", "Mixed": "mixed", "Mips": "mips"}
+		if m.Hooks.SetKernelOption == nil {
+			m.TunStack = previous
+			m.Notice = "内核设置不可用"
+		} else if err := m.Hooks.SetKernelOption("tun-stack", values[m.TunStack]); err != nil {
+			m.TunStack = previous
+			m.Notice = err.Error()
+		} else {
+			m.Notice = "TUN 协议栈已保存"
+		}
+	}
+	if !features.WithGVisor {
+		mygoui.Text(c, "当前构建未包含 gVisor，Mixed 和 gVisor 不可用。").FontSize(12).TextColor(pal.Warning)
+	}
+	mygoui.Text(c, "跟随订阅时使用订阅指定的协议栈；未指定时使用 Mips。切换协议栈会重新加载内核。").FontSize(12).TextColor(pal.TextMuted)
+	mygoui.Text(c, "DNS 使用当前订阅或 DNS 覆写；虚拟网卡名称由系统管理。").FontSize(12).TextColor(pal.TextMuted)
 }
 
 func (m *Model) serviceDialog(c *mygoui.Context, pal Palette) {

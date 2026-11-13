@@ -21,6 +21,7 @@ import (
 
 	"github.com/metacubex/bbolt"
 	"github.com/miekg/dns"
+	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/tun"
 )
 
@@ -130,7 +131,7 @@ mode: rule
 tun:
   enable: false
   device: other-client
-  stack: system
+  stack: mixed
   auto-route: false
   auto-detect-interface: false
 rules:
@@ -140,6 +141,11 @@ rules:
 		config += fmt.Sprintf("\ndns:\n  nameserver: ['%s']\n", upstreamAddress)
 	}
 	composed, err := tun.Compose([]byte(config), true, "netflow-ipc0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack := "system"
+	composed, err = kernelopts.Compose(composed, kernelopts.Options{TUNStack: &stack})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,6 +228,41 @@ rules:
 		}
 	} else {
 		t.Log("no isolated peer supplied; TUN traffic forwarding not tested")
+	}
+	// Exercise all shipped protocol stacks while TUN is active and verify
+	// each one forwards to the isolated peer after its listener is recreated.
+	for _, stack = range []string{"mixed", "gvisor", "mips", "system"} {
+		updated, err := kernelopts.Compose([]byte(config), kernelopts.Options{TUNStack: &stack})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(filepath.Join(dir, "config.yaml"), updated, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err = client.Reload(); err != nil {
+			t.Fatalf("TUN %s stack reload: %v", stack, err)
+		}
+		if !client.Status().TUN {
+			t.Fatalf("TUN stopped after %s stack change", stack)
+		}
+		if _, err = net.InterfaceByName("netflow-ipc0"); err != nil {
+			t.Fatalf("TUN missing after %s stack change: %v", stack, err)
+		}
+		if peer != "" {
+			if out, err := exec.Command("ip", "route", "replace", peer+"/32", "dev", "netflow-ipc0").CombinedOutput(); err != nil {
+				t.Fatalf("%s test route: %s: %v", stack, out, err)
+			}
+			hc := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
+			resp, err := hc.Get("http://" + net.JoinHostPort(peer, "8080") + "/")
+			if err != nil {
+				t.Fatalf("%s stack forwarding: %v", stack, err)
+			}
+			body, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil || string(body) != "OK" {
+				t.Fatalf("%s stack response: %q %v", stack, body, err)
+			}
+		}
 	}
 	// Leave a delay probe in flight to ensure an abandoned RPC cannot keep
 	// the TUN worker alive after the UI pipe disappears.

@@ -540,19 +540,7 @@ func (m *Model) systemCard(c *mygoui.Context, pal Palette) mygoui.Element {
 		if textButton(c, pal, "开机自启 "+launch, "开机自启", "auto-launch") {
 			m.setAutoLaunch(!m.Prefs.AutoLaunch)
 		}
-		mode := RunModeLabel(m.runMode())
-		if m.runMode() == RunSidecar {
-			b := mygoui.ButtonBase(c.Key("run-mode")).Label("run-mode")
-			b.Children(func() {
-				mygoui.Text(c, "运行模式 ").FontSize(14).TextColor(pal.TextMuted)
-				mygoui.Text(c, mode).FontSize(14).Underline()
-			})
-			if b.Clicked() {
-				m.Notice = "服务模式需要系统服务，当前仍是用户模式"
-			}
-		} else {
-			mygoui.Text(c, "运行模式 "+mode).FontSize(14)
-		}
+		mygoui.Text(c, "运行模式 "+RunModeLabel(m.runMode())).FontSize(14)
 		check := orDash(m.Home.LastCheck)
 		if textButton(c, pal, "最后检查更新 "+check, "检查更新", "last-check") {
 			m.checkUpdate()

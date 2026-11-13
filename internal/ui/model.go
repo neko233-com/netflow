@@ -191,7 +191,7 @@ func (m *Model) normalize() {
 		m.ShowNextUpdate = map[string]bool{}
 	}
 	if m.TunStack == "" {
-		m.TunStack = "Mips"
+		m.TunStack = "跟随订阅"
 	}
 	if m.Unlocks == nil {
 		m.Unlocks = DefaultUnlocks()

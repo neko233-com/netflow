@@ -50,6 +50,7 @@ The original module paths and versions are listed below. Module source is availa
 - `github.com/metacubex/cpu@v0.1.2` — [github.com_metacubex_cpu_v0.1.2](github.com_metacubex_cpu_v0.1.2/)
 - `github.com/metacubex/edwards25519@v1.2.0` — [github.com_metacubex_edwards25519_v1.2.0](github.com_metacubex_edwards25519_v1.2.0/)
 - `github.com/metacubex/fswatch@v0.1.1` — [github.com_metacubex_fswatch_v0.1.1](github.com_metacubex_fswatch_v0.1.1/)
+- `github.com/metacubex/gvisor@v0.0.0-20260922041103-e2cbcd6e7400` — [github.com_metacubex_gvisor_v0.0.0-20260922041103-e2cbcd6e7400](github.com_metacubex_gvisor_v0.0.0-20260922041103-e2cbcd6e7400/)
 - `github.com/metacubex/hkdf@v0.1.0` — [github.com_metacubex_hkdf_v0.1.0](github.com_metacubex_hkdf_v0.1.0/)
 - `github.com/metacubex/hpke@v0.1.0` — [github.com_metacubex_hpke_v0.1.0](github.com_metacubex_hpke_v0.1.0/)
 - `github.com/metacubex/http@v0.1.8` — [github.com_metacubex_http_v0.1.8](github.com_metacubex_http_v0.1.8/)

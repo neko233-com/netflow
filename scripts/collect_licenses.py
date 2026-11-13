@@ -36,8 +36,11 @@ def safe_name(name):
 def main():
     modules = {}
     for goos, goarch in TARGETS:
-        env = dict(os.environ, GOOS=goos, GOARCH=goarch, CGO_ENABLED="0", GOMAXPROCS="1", GOFLAGS="-p=1")
-        data = subprocess.check_output(["go", "list", "-deps", "-json", "./cmd/clash-go", "./cmd/netflow-agent"], cwd=ROOT, env=env, text=True, encoding="utf-8")
+        env = dict(os.environ, GOOS=goos, GOARCH=goarch, CGO_ENABLED="0", GOMAXPROCS="1", GOFLAGS="-p=1 -tags=with_gvisor,no_tailscale")
+        packages = ["./cmd/clash-go", "./cmd/netflow-agent"]
+        if goos == "windows":
+            packages.append("./cmd/netflow-kernel-worker")
+        data = subprocess.check_output(["go", "list", "-deps", "-json", *packages], cwd=ROOT, env=env, text=True, encoding="utf-8")
         for package in objects(data):
             module = package.get("Module")
             if not module or module.get("Main"):

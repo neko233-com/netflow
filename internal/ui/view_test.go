@@ -754,7 +754,6 @@ func TestSettingsRowChevronFormat(t *testing.T) {
 	m.Router.Replace("/settings")
 	tt := renderModel(m, WindowWidth, 1600, false)
 	rows := []string{
-		"service-row",
 		"ports", "external", "webui", "core-row", "geo", "tunnels",
 		"theme-row", "layout-row", "misc-row", "hotkey-row", "backup",
 		"runtime-row", "conf-dir", "core-dir", "log-dir", "check-update",
