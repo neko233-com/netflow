@@ -68,10 +68,10 @@ func getManifest() (manifest, error) {
 	if err = dec.Decode(&m); err != nil {
 		return m, err
 	}
-	if !validHex(m.ID, 32) || len(m.Files) != 2 || len(m.Expected) != 3 {
+	if !validHex(m.ID, 32) || len(m.Files) != 3 || len(m.Expected) != 3 {
 		return m, errors.New("invalid manifest")
 	}
-	for _, name := range []string{"netflow-app.test.exe", "NetFlow.msi"} {
+	for _, name := range []string{"netflow-app.test.exe", "NetFlow.msi", "netflow-vm-agent.exe"} {
 		f, ok := m.Files[name]
 		if !ok || !validHex(f.SHA256, 64) || f.Size <= 0 || f.Size > maxArtifact {
 			return m, errors.New("invalid artifact metadata")
@@ -197,6 +197,48 @@ func event(name string) {
 		_ = resp.Body.Close()
 	}
 }
+
+// The disk persists between validation runs. Replace its logon agent when the
+// host supplies a newer verified build, without rebuilding Windows or its disk.
+func updateAgent(m manifest, dir string) (bool, error) {
+	current, err := os.Executable()
+	if err != nil {
+		return false, err
+	}
+	currentHash, _, err := digestFile(current)
+	if err != nil {
+		return false, err
+	}
+	if currentHash == m.Files["netflow-vm-agent.exe"].SHA256 {
+		return false, nil
+	}
+	next, err := acquire(dir, "netflow-vm-agent.exe", m.Files["netflow-vm-agent.exe"])
+	if err != nil {
+		return false, err
+	}
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return false, err
+	}
+	defer k.Close()
+	previous, _, previousErr := k.GetStringValue("NetFlowVMVerify")
+	if err := k.SetStringValue("NetFlowVMVerify", windows.ComposeCommandLine([]string{next})); err != nil {
+		return false, err
+	}
+	cmd := exec.Command(next)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000 | 0x00004000}
+	if err := cmd.Start(); err != nil {
+		if previousErr == nil {
+			_ = k.SetStringValue("NetFlowVMVerify", previous)
+		} else {
+			_ = k.DeleteValue("NetFlowVMVerify")
+		}
+		return false, err
+	}
+	_ = cmd.Process.Release()
+	event("agent-update")
+	return true, nil
+}
 func disposableGuest() bool {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DESCRIPTION\System\BIOS`, registry.QUERY_VALUE)
 	if err != nil {
@@ -243,6 +285,14 @@ func main() {
 	for {
 		m, err := getManifest()
 		if err == nil {
+			updated, e := updateAgent(m, root)
+			if e != nil {
+				time.Sleep(3 * time.Second)
+				continue
+			}
+			if updated {
+				return
+			}
 			marker := filepath.Join(root, "result-"+m.ID+".json")
 			var r result
 			if data, e := os.ReadFile(marker); e == nil && len(data) < 2*1024*1024 && json.Unmarshal(data, &r) == nil && r.ID == m.ID {

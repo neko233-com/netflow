@@ -8,7 +8,7 @@ for /f %%N in ('wmic diskdrive get model /value ^| findstr /i /b "Model=" ^| fin
 if not "%DISKLINES%"=="1" goto refused
 reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA /t REG_DWORD /d 1 /f >nul || goto refused
 reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorAdmin /t REG_DWORD /d 0 /f >nul || goto refused
-reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v NetFlowVMVerify /t REG_SZ /d "C:\OEM\netflow-vm-agent.exe" /f >nul || goto refused
+reg.exe add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v NetFlowVMVerify /t REG_SZ /d "C:\OEM\netflow-vm-agent.exe" /f >nul || goto refused
 rem FirstLogonCommands may run after RunOnce was already processed. Reboot
 rem directly so UAC is active before the persistent guest agent is started.
 curl.exe --silent --max-time 3 -X POST --data-binary setup-reboot http://10.233.42.1:18765/v1/event >nul 2>&1

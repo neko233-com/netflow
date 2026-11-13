@@ -8,7 +8,7 @@ from pathlib import Path
 PAYLOAD = Path("/payload")
 RESULTS = Path("/storage/netflow-results")
 RUN_ID = os.environ["NETFLOW_RUN_ID"]
-FILES = ("netflow-app.test.exe", "NetFlow.msi")
+FILES = ("netflow-app.test.exe", "NetFlow.msi", "netflow-vm-agent.exe")
 if len(RUN_ID) != 32 or any(c not in "0123456789abcdef" for c in RUN_ID):
     raise ValueError("invalid run ID")
 RESULTS.mkdir(parents=True, exist_ok=True)
@@ -77,7 +77,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not 1 <= length <= 64:
                     raise ValueError("invalid event size")
                 event = self.rfile.read(length).decode("ascii")
-                if event not in {"setup-start", "setup-refused", "setup-reboot", "agent-elevated", "agent-ready"}:
+                if event not in {"setup-start", "setup-refused", "setup-reboot", "agent-elevated", "agent-ready", "agent-update"}:
                     raise ValueError("invalid event")
                 print("Windows guest: " + event, flush=True)
                 return self.send_bytes(200, b"OK", "text/plain")

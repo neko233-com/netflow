@@ -154,4 +154,4 @@ require (
 
 tool github.com/egoist/mygo/cmd/mygo
 
-replace github.com/metacubex/mihomo => github.com/neko233-com/mihomo v1.19.33-netflow.6
+replace github.com/metacubex/mihomo => github.com/neko233-com/mihomo v1.19.33-netflow.7

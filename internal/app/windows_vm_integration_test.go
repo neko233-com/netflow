@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -346,6 +347,13 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	waitRestored("GUI crash")
 	t.Log("worker removed TUN and restored routes after GUI termination")
 
+	unsafeDir := t.TempDir()
+	provider := filepath.Join(unsafeDir, "provider.yaml")
+	if err := os.WriteFile(provider, []byte("proxies:\n  - {name: test, type: ss, server: 127.0.0.1, port: 1, cipher: aes-128-gcm, password: test}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SKIP_SAFE_PATH_CHECK", "true")
+	t.Setenv("SAFE_PATHS", unsafeDir)
 	workerContext, stopLaunch := context.WithTimeout(context.Background(), 30*time.Second)
 	worker, err := coreipc.LaunchWindows(workerContext, filepath.Join(install, "netflow-kernel-worker.exe"))
 	stopLaunch()
@@ -354,6 +362,19 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	}
 	defer worker.Close()
 	workerDir := t.TempDir()
+	unsafeConfig := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ntun: {enable: false}\nproxy-providers:\n  external:\n    type: file\n    path: " + strconv.Quote(filepath.ToSlash(provider)) + "\nrules: ['MATCH,DIRECT']\n"
+	if err := os.WriteFile(filepath.Join(workerDir, "config.yaml"), []byte(unsafeConfig), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err = worker.Start(workerDir)
+	if err == nil {
+		_ = worker.Stop()
+		t.Fatal("elevated worker accepted an external provider through unsafe environment variables")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "path is not subpath") {
+		t.Fatalf("unexpected external provider error: %v", err)
+	}
+	t.Log("elevated worker rejected inherited unsafe path exceptions")
 	workerConfig := strings.Replace(config, "MATCH,REJECT", "MATCH,DIRECT", 1)
 	composed, err := tun.Compose([]byte(workerConfig), true, "NetFlowVM")
 	if err != nil {

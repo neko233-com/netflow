@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	C "github.com/metacubex/mihomo/constant"
 	"github.com/neko233-com/netflow/internal/coreipc"
 	"golang.org/x/sys/windows"
 )
@@ -21,6 +22,9 @@ func main() {
 	if *pipe == "" || *parent == 0 || !windows.GetCurrentProcessToken().IsElevated() {
 		os.Exit(2)
 	}
+	// Environment variables inherited from the unprivileged desktop must not
+	// disable the elevated kernel's configuration path restrictions.
+	C.ConstrainPaths()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	conn, err := coreipc.DialParent(ctx, *pipe, uint32(*parent))
