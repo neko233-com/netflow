@@ -97,6 +97,9 @@ func (a *App) liveLoop(stop <-chan struct{}) {
 						a.model.Home.Memory = int64(mem.Alloc)
 					}
 				}
+				if n%20 == 0 {
+					a.model.TickIP()
+				}
 				if a.win != nil {
 					a.win.Invalidate()
 				}

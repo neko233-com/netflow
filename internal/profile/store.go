@@ -122,7 +122,7 @@ func (s *Store) Save(f File) error {
 	return os.Rename(name, s.path())
 }
 
-func (s *Store) UpdateMetadata(uid, name, description string) error {
+func (s *Store) UpdateMetadata(uid, name, description string, auto *bool, interval int) error {
 	name = strings.TrimSpace(name)
 	description = strings.TrimSpace(description)
 	if name == "" || len(name) > 256 || len(description) > 2048 {
@@ -134,6 +134,13 @@ func (s *Store) UpdateMetadata(uid, name, description string) error {
 	}
 	for i := range f.Items {
 		if f.Items[i].UID == uid {
+			if auto != nil && f.Items[i].Type == "remote" {
+				if interval < 1 || interval > 43200 {
+					return errors.New("更新间隔必须在 1 到 43200 分钟之间")
+				}
+				f.Items[i].Option.AllowAutoUpdate = *auto
+				f.Items[i].Option.UpdateInterval = interval
+			}
 			f.Items[i].Name = name
 			f.Items[i].Description = description
 			return s.Save(f)
@@ -293,14 +300,9 @@ func (s *Store) ImportRemote(raw string, fetch func(string) ([]byte, error)) (Ca
 	if err != nil {
 		return CatalogItem{}, err
 	}
-	uid := uniqueID(f.Items)
 	name := hostOf(raw)
-	dir := filepath.Join(s.dir, "profiles")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return CatalogItem{}, err
-	}
-	rel := filepath.Join("profiles", uid+".yaml")
-	if err := os.WriteFile(filepath.Join(s.dir, rel), body, 0o600); err != nil {
+	uid, rel, err := s.createProfileFile(f.Items, body)
+	if err != nil {
 		return CatalogItem{}, err
 	}
 	item := CatalogItem{
@@ -332,7 +334,6 @@ func (s *Store) ImportLocal(filename string, body []byte) (CatalogItem, error) {
 	if err != nil {
 		return CatalogItem{}, err
 	}
-	uid := uniqueID(f.Items)
 	name := filename
 	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
 		name = name[i+1:]
@@ -340,12 +341,8 @@ func (s *Store) ImportLocal(filename string, body []byte) (CatalogItem, error) {
 	if name == "" {
 		name = "New Profile"
 	}
-	dir := filepath.Join(s.dir, "profiles")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return CatalogItem{}, err
-	}
-	rel := filepath.Join("profiles", uid+".yaml")
-	if err := os.WriteFile(filepath.Join(s.dir, rel), body, 0o600); err != nil {
+	uid, rel, err := s.createProfileFile(f.Items, body)
+	if err != nil {
 		return CatalogItem{}, err
 	}
 	item := CatalogItem{UID: uid, Name: name, Type: "local", File: rel, Updated: time.Now().UTC().Truncate(time.Second)}
@@ -360,21 +357,40 @@ func (s *Store) ImportLocal(filename string, body []byte) (CatalogItem, error) {
 	return item, nil
 }
 
-func uniqueID(items []CatalogItem) string {
-	n := len(items) + 1
-	for {
+func (s *Store) createProfileFile(items []CatalogItem, body []byte) (string, string, error) {
+	dir := filepath.Join(s.dir, "profiles")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", "", err
+	}
+	taken := make(map[string]bool, len(items))
+	for _, item := range items {
+		taken[item.UID] = true
+	}
+	for n := len(items) + 1; ; n++ {
 		id := "p" + itoa(n)
-		taken := false
-		for _, it := range items {
-			if it.UID == id {
-				taken = true
-				break
-			}
+		if taken[id] {
+			continue
 		}
-		if !taken {
-			return id
+		rel := filepath.Join("profiles", id+".yaml")
+		path := filepath.Join(s.dir, rel)
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if errors.Is(err, os.ErrExist) {
+			continue
 		}
-		n++
+		if err != nil {
+			return "", "", err
+		}
+		if _, err = file.Write(body); err == nil {
+			err = file.Sync()
+		}
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = os.Remove(path)
+			return "", "", err
+		}
+		return id, rel, nil
 	}
 }
 

@@ -9,12 +9,10 @@ import (
 func (m *Model) homePage(c *mygoui.Context, pal Palette) {
 	m.page(c, pal, "首页", func() {
 		if textButton(c, pal, "轻量", "轻量模式", "home-lite") {
-			m.Prefs.Lightweight = true
-			m.Notice = "轻量模式"
-			m.savePrefs()
+			m.setLightweight(true)
 		}
 		if textButton(c, pal, "手册", "使用手册", "home-manual") {
-			c.OpenURL("https://clash-verge-rev.github.io/index.html")
+			c.OpenURL("https://github.com/neko233-com/netflow#readme")
 		}
 		if textButton(c, pal, "首页设置", "首页设置", "home-settings") {
 			m.Draft = m.Cards
@@ -95,11 +93,13 @@ func (m *Model) profileCard(c *mygoui.Context, pal Palette) mygoui.Element {
 		mygoui.Text(c, "来自 "+host).FontSize(13).TextColor(pal.TextMuted)
 		if !p.Updated.IsZero() {
 			label := "更新时间 " + p.Updated.Format("2006-01-02 15:04")
-			if p.Updating {
+			if p.Updating || m.ProfileBusy {
 				label = "更新中"
 			}
 			if textLink(c, pal, label, "更新订阅", "profile-update") {
-				p.Updating = !p.Updating
+				if m.CurrentProfile != "" && p.URL != "" {
+					m.updateProfile(m.CurrentProfile)
+				}
 			}
 		}
 		if p.Total > 0 || p.Used > 0 {
@@ -119,7 +119,7 @@ func (m *Model) currentCard(c *mygoui.Context, pal Palette) mygoui.Element {
 		b.Tooltip("延迟测试")
 		b.Children(func() { mygoui.Text(c, "测速").FontSize(13) })
 		if b.Clicked() {
-			m.Home.Node.Delay = DelayTesting
+			m.testProxyDelay(m.Home.Node.Group, m.Home.Node.Name, "")
 		}
 		if textButton(c, pal, SortLabel(m.nodeSort()), SortLabel(m.nodeSort()), "node-sort") {
 			m.cycleNodeSort()
@@ -196,7 +196,7 @@ func (m *Model) proxySelects(c *mygoui.Context, pal Palette) {
 	mygoui.Text(c, "代理组").FontSize(12).TextColor(pal.TextMuted)
 	sel := mygoui.Select(c, &group, groups).FillWidth().Disabled(!GroupSelectEnabled(m.Home.Mode)).Label("group-select")
 	if sel.Changed() && GroupSelectEnabled(m.Home.Mode) {
-		m.Home.Node.Group = group
+		m.selectHomeGroup(group)
 	}
 	nodes := m.nodesForGroup(m.Home.Node.Group)
 	names := make([]string, len(nodes))
@@ -207,11 +207,47 @@ func (m *Model) proxySelects(c *mygoui.Context, pal Palette) {
 	mygoui.Text(c, "节点").FontSize(12).TextColor(pal.TextMuted)
 	ns := mygoui.Select(c, &node, names).FillWidth().Disabled(!NodeSelectEnabled(m.Home.Mode)).Label("node-select")
 	if ns.Changed() && NodeSelectEnabled(m.Home.Mode) {
-		m.Home.Node.Name = node
-		for _, n := range nodes {
-			if n.Name == node {
+		m.selectHomeNode(node)
+	}
+}
+
+func (m *Model) selectHomeGroup(name string) {
+	for i := range m.Groups {
+		g := &m.Groups[i]
+		if g.Name != name {
+			continue
+		}
+		m.Home.Node.Group = name
+		m.Home.Node.GroupNodes = nil
+		m.Home.Node.Name = ""
+		m.Home.Node.Type = ""
+		m.Home.Node.Delay = -1
+		for _, n := range g.Nodes {
+			if n.Name == g.Now {
+				m.Home.Node.Name = n.Name
 				m.Home.Node.Type = n.Type
 				m.Home.Node.Delay = n.Delay
+				break
+			}
+		}
+		return
+	}
+}
+
+func (m *Model) selectHomeNode(name string) {
+	for i := range m.Groups {
+		g := &m.Groups[i]
+		if g.Name != m.Home.Node.Group {
+			continue
+		}
+		for _, n := range g.Nodes {
+			if n.Name == name {
+				if !SelectableGroup(g.Type) {
+					m.Notice = "此代理组不支持手动选择"
+					return
+				}
+				m.selectNode(g, n)
+				return
 			}
 		}
 	}
@@ -426,10 +462,20 @@ func (m *Model) testCard(c *mygoui.Context, pal Palette) mygoui.Element {
 }
 
 func (m *Model) ipCard(c *mygoui.Context, pal Palette) mygoui.Element {
-	return card(c, pal, "IP 信息", "IP", ToneInfo, nil, func() {
+	return card(c, pal, "IP 信息", "IP", ToneInfo, func() {
+		label := "查询"
+		if m.IPBusy {
+			label = "查询中"
+		}
+		if textButton(c, pal, label, "通过代理查询出口 IP", "ip-refresh") && !m.IPBusy {
+			m.refreshIP()
+		}
+	}, func() {
 		if m.IP.Failed != "" {
 			mygoui.Text(c, "获取 IP 信息失败："+m.IP.Failed).TextColor(pal.Error)
-			return
+		}
+		if !m.IP.Loaded {
+			mygoui.Text(c, "查询会通过代理请求 IP.SB，服务可见代理出口 IP。").FontSize(12).TextColor(pal.TextMuted)
 		}
 		country := m.IP.Country
 		if country == "" {
@@ -474,6 +520,7 @@ func (m *Model) ipCard(c *mygoui.Context, pal Palette) mygoui.Element {
 				m.IPAuto = auto
 				if auto {
 					m.IPLeft = 30
+					m.refreshIP()
 				}
 			}
 		})
@@ -544,7 +591,7 @@ func (m *Model) systemCard(c *mygoui.Context, pal Palette) mygoui.Element {
 		}
 		check := orDash(m.Home.LastCheck)
 		if textButton(c, pal, "最后检查更新 "+check, "检查更新", "last-check") {
-			m.Notice = "更新检查尚未实现"
+			m.checkUpdate()
 		}
 		ver := m.Home.VergeVersion
 		if ver == "" {

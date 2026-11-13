@@ -9,13 +9,10 @@ import (
 func (m *Model) settingsPage(c *mygoui.Context, pal Palette) {
 	m.page(c, pal, "设置", func() {
 		if textButton(c, pal, "手册", "使用手册", "set-manual") {
-			c.OpenURL("https://clash-verge-rev.github.io/index.html")
-		}
-		if textButton(c, pal, "Telegram", "Telegram 频道", "set-tg") {
-			c.OpenURL("https://t.me/clash_verge_re")
+			c.OpenURL("https://github.com/neko233-com/netflow#readme")
 		}
 		if textButton(c, pal, "GitHub", "GitHub 项目地址", "set-gh") {
-			c.OpenURL("https://github.com/clash-verge-rev/clash-verge-rev")
+			c.OpenURL("https://github.com/neko233-com/netflow")
 		}
 	}, func() {
 		mygoui.Text(c, "预览版：部分设置仅保存界面偏好，尚未作用于系统或内核。请参阅项目说明。").FontSize(13).TextColor(pal.Warning).Padding(12, 16)
@@ -191,7 +188,7 @@ func (m *Model) vergeBasic(c *mygoui.Context, pal Palette) {
 				m.savePrefs()
 			}
 			if textButton(c, pal, "复制", "复制环境变量", "copy-env-btn") {
-				m.copy("export https_proxy=http://" + m.proxyAddr())
+				m.copy(ProxyEnvironment(m.Prefs.CopyEnv, m.proxyAddr()))
 			}
 		})
 		m.choiceRow(c, "启动页面", &m.Prefs.StartPage, StartPages(), "start-page")
@@ -233,7 +230,7 @@ func (m *Model) vergeAdvanced(c *mygoui.Context, pal Palette) {
 		clickRow(c, pal, "内核目录", "core-dir", false, func() { m.openDir("core") }, nil)
 		clickRow(c, pal, "日志目录", "log-dir", false, func() { m.openDir("logs") }, nil)
 		clickRow(c, pal, "检查更新", "check-update", m.Busy == "check-update", func() {
-			m.Notice = "更新检查尚未实现"
+			m.checkUpdate()
 		}, nil)
 		clickRow(c, pal, "开发者工具", "devtools", false, func() { m.Notice = "开发者工具" }, nil)
 		clickRow(c, pal, "轻量模式设置", "lite-row", false, func() { m.Dialogs.Lite = true }, func() {
@@ -255,7 +252,6 @@ func (m *Model) vergeAdvanced(c *mygoui.Context, pal Palette) {
 			mygoui.Text(c, ver).FontSize(14)
 			if textButton(c, pal, "复制", "复制 NetFlow 版本号", "copy-version") {
 				m.copy(ver)
-				m.Notice = "NetFlow 版本已复制到剪贴板"
 			}
 		})
 	})

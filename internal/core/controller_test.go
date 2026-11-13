@@ -1,12 +1,12 @@
-//go:build !race
-
 package core
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestExternalControllerListens(t *testing.T) {
@@ -23,6 +23,27 @@ func TestExternalControllerListens(t *testing.T) {
 	t.Cleanup(func() { _ = c.Stop() })
 	if err := waitListen(addr); err != nil {
 		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: time.Second}
+	for _, tc := range []struct {
+		secret string
+		status int
+	}{{"", http.StatusUnauthorized}, {"test-secret", http.StatusOK}} {
+		req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/version", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.secret != "" {
+			req.Header.Set("Authorization", "Bearer "+tc.secret)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != tc.status {
+			t.Fatalf("controller status = %d, want %d", resp.StatusCode, tc.status)
+		}
 	}
 }
 

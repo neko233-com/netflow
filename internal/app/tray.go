@@ -314,14 +314,19 @@ func (a *App) trayActions() TrayActions {
 			}
 		},
 		SetLite: func(on bool) {
-			if a.model != nil {
-				a.model.Prefs.Lightweight = on
-				_ = a.savePrefs(a.model.Prefs)
+			if err := a.setLightweight(on); err != nil && a.model != nil {
+				a.model.Notice = err.Error()
 			}
 		},
 		OpenDir: a.openDir,
 		CopyEnv: func() {
-			writeClipboard("export https_proxy=http://" + a.proxyEndpoint())
+			format := "bash"
+			if a.model != nil {
+				format = a.model.Prefs.CopyEnv
+			}
+			if err := writeClipboard(ui.ProxyEnvironment(format, a.proxyEndpoint())); err != nil && a.model != nil {
+				a.model.Notice = "复制失败: " + err.Error()
+			}
 		},
 		RestartCore: func() { _ = a.restartCore() },
 		Quit:        func() { mygo.App.Quit() },

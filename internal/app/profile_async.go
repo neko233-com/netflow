@@ -56,7 +56,7 @@ func (a *App) createProfileAsync(form ui.ProfileForm, done func(error)) {
 		mygo.RunOnMain(func() {
 			if err == nil {
 				err = a.importURLData(raw, body)
-				if err == nil && (strings.TrimSpace(form.Name) != "" || strings.TrimSpace(form.Desc) != "") {
+				if err == nil {
 					catalog, readErr := a.profiles.Load()
 					if readErr != nil {
 						err = readErr
@@ -68,7 +68,10 @@ func (a *App) createProfileAsync(form ui.ProfileForm, done func(error)) {
 						if name == "" {
 							name = item.Name
 						}
-						if saveErr := a.saveProfileMetadata(item.UID, name, form.Desc); saveErr != nil {
+						form.UID = item.UID
+						form.Name = name
+						form.Type = "remote"
+						if saveErr := a.saveProfileMetadata(form); saveErr != nil {
 							err = fmt.Errorf("订阅已导入，但名称或描述保存失败: %w", saveErr)
 						}
 					}

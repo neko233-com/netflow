@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/metacubex/mihomo/config"
@@ -18,6 +17,7 @@ import (
 	"github.com/metacubex/mihomo/listener"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/tunnel"
+	"go.yaml.in/yaml/v3"
 )
 
 const configFileName = "config.yaml"
@@ -42,8 +42,9 @@ type Status struct {
 
 // ProxyNode is one proxy inside a provider.
 type ProxyNode struct {
-	Name string
-	Type string
+	Name                        string
+	Type                        string
+	UDP, TFO, XUDP, MPTCP, SMUX bool
 }
 
 // Core controls the process-wide mihomo singleton.
@@ -201,17 +202,18 @@ func (c *Core) apply() error {
 			return fmt.Errorf("compose agent rules: %w", err)
 		}
 	}
-	// Parse once for the controller address, then hub.Parse a copy that
-	// does not start it. mihomo v1.19.33's hub.ApplyConfig launches the
-	// external controller before it sets the log level, and the race
-	// detector flags that. The controller is started after hub.Parse
-	// returns. See startExternalController.
+	// Apply a copy without a controller, then only enable the configured
+	// HTTP controller if it is authenticated and bound to loopback.
 	cfg, err := executor.ParseWithBytes(data)
 	if err != nil {
 		return fmt.Errorf("parse config: %w", err)
 	}
 	route.SetEmbedMode(true)
-	if err := hub.Parse(suppressExternalController(data)); err != nil {
+	suppressed, err := suppressExternalController(data)
+	if err != nil {
+		return fmt.Errorf("disable external controller: %w", err)
+	}
+	if err := hub.Parse(suppressed); err != nil {
 		return fmt.Errorf("apply config: %w", err)
 	}
 	actual := executor.GetGeneral()
@@ -230,18 +232,33 @@ func (c *Core) apply() error {
 	return nil
 }
 
-// suppressExternalController drops top-level external-controller lines so
-// hub.Parse does not start the HTTP API. The file on disk is unchanged.
-func suppressExternalController(data []byte) []byte {
-	lines := strings.Split(string(data), "\n")
-	kept := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "external-controller") {
-			continue
-		}
-		kept = append(kept, line)
+// suppressExternalController disables controller endpoints in a copy of the
+// configuration, including endpoints inherited through YAML merge keys.
+func suppressExternalController(data []byte) ([]byte, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, err
 	}
-	return []byte(strings.Join(kept, "\n"))
+	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, errors.New("config must be a YAML mapping")
+	}
+	root := doc.Content[0]
+	// Explicit empty values override YAML merge keys as well as direct keys.
+	for _, key := range []string{"external-controller", "external-controller-tls", "external-controller-unix", "external-controller-pipe", "external-ui"} {
+		value := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: ""}
+		found := false
+		for i := 0; i+1 < len(root.Content); i += 2 {
+			if root.Content[i].Value == key {
+				root.Content[i+1] = value
+				found = true
+				break
+			}
+		}
+		if !found {
+			root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, value)
+		}
+	}
+	return yaml.Marshal(&doc)
 }
 
 func writeDefaultConfig(path string) error {

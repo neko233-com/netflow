@@ -100,12 +100,31 @@ func (m *Model) probeOne(i int) {
 	}
 	m.Sites[i].Delay = -2
 	m.Sites[i].Status = "testing"
+	id, raw := m.Sites[i].UID, m.Sites[i].URL
+	if m.Hooks.ProbeSiteAsync != nil {
+		m.Hooks.ProbeSiteAsync(raw, func(ms int, err error) { m.finishProbe(id, raw, ms, err) })
+		return
+	}
 	ms, err := 0, error(nil)
 	if m.Hooks.ProbeSite != nil {
 		ms, err = m.Hooks.ProbeSite(m.Sites[i].URL)
 	} else if m.Hooks.TestSite != nil {
 		err = m.Hooks.TestSite(m.Sites[i].URL)
 		ms = 1
+	}
+	m.finishProbe(id, raw, ms, err)
+}
+
+func (m *Model) finishProbe(id, raw string, ms int, err error) {
+	i := -1
+	for j := range m.Sites {
+		if m.Sites[j].UID == id && m.Sites[j].URL == raw {
+			i = j
+			break
+		}
+	}
+	if i < 0 || m.Sites[i].Status != "testing" {
+		return
 	}
 	if err != nil {
 		m.Sites[i].Delay = -1
@@ -145,12 +164,24 @@ func (m *Model) saveTestForm() {
 		return
 	}
 	if m.TestForm.UID == "" {
+		ids := map[string]bool{}
+		for _, item := range m.Sites {
+			ids[item.UID] = true
+		}
+		n := len(m.Sites) + 1
+		for ids["t"+itoa(n)] {
+			n++
+		}
 		m.Sites = append(m.Sites, SiteTest{
-			UID: "t" + itoa(len(m.Sites)+1), Name: name, URL: raw, Icon: m.TestForm.Icon, Delay: -1,
+			UID: "t" + itoa(n), Name: name, URL: raw, Icon: m.TestForm.Icon, Delay: -1,
 		})
 	} else {
 		for i := range m.Sites {
 			if m.Sites[i].UID == m.TestForm.UID {
+				if m.Sites[i].URL != raw {
+					m.Sites[i].Delay = -1
+					m.Sites[i].Status = ""
+				}
 				m.Sites[i].Name = name
 				m.Sites[i].URL = raw
 				m.Sites[i].Icon = m.TestForm.Icon

@@ -191,11 +191,30 @@ func (m *Model) unlockOne(i int) {
 	}
 	m.Unlocks[i].Delay = -2
 	m.Unlocks[i].Status = "Pending"
+	name := m.Unlocks[i].Name
+	if m.Hooks.CheckUnlockAsync != nil {
+		m.Hooks.CheckUnlockAsync(name, func(status, region string, ms int, err error) { m.finishUnlock(name, status, region, ms, err) })
+		return
+	}
 	var status, region string
 	var ms int
 	var err error
 	if m.Hooks.CheckUnlock != nil {
 		status, region, ms, err = m.Hooks.CheckUnlock(m.Unlocks[i].Name)
+	}
+	m.finishUnlock(name, status, region, ms, err)
+}
+
+func (m *Model) finishUnlock(name, status, region string, ms int, err error) {
+	i := -1
+	for j := range m.Unlocks {
+		if m.Unlocks[j].Name == name {
+			i = j
+			break
+		}
+	}
+	if i < 0 || m.Unlocks[i].Delay != -2 {
+		return
 	}
 	if err != nil {
 		m.Unlocks[i].Delay = -1

@@ -1,6 +1,6 @@
 # NetFlow
 
-NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 UI 和 [mihomo](https://github.com/MetaCubeX/mihomo) 的桌面代理客户端，目标是逐步实现 Clash Verge 的常用功能。界面不是网页，也不需要 WebView。
+NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 UI 和 [mihomo](https://github.com/MetaCubeX/mihomo) 的桌面代理客户端，目标是逐步实现 Clash Verge 的常用功能。界面不是网页，也不需要 WebView。内核目前使用 [基于 mihomo v1.19.33 的公开补丁版本](https://github.com/neko233-com/mihomo/tree/v1.19.33-netflow.3)，修复日志等级并发访问和控制器生命周期竞争。
 
 **目前是开发预览版，尚未达到 Clash Verge 功能对等，也不建议替代现有稳定客户端。** 本项目从 [Clash Go](https://github.com/charlzyx/clash-go) 的 `0a0fd79` 版本开始，保留上游 MIT 许可和署名，正进行 Windows 适配。
 
@@ -10,12 +10,14 @@ NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 U
 
 ## 当前状态
 
-- 已接入 mihomo 内核、订阅 URL 导入、配置激活、代理组切换、模式切换、规则和连接显示、日志与托盘界面。部分功能仍需更完整的真实环境回归。
+- 已接入 mihomo 内核、订阅 URL 导入、配置激活、代理组切换、节点测速、代理与规则集合更新、模式切换、规则和连接显示、日志与托盘界面。部分功能仍需更完整的真实环境回归。
 - Windows 系统代理使用当前用户的 Internet Settings，启用前备份原值；关闭或正常退出时恢复。若其他程序修改了代理，NetFlow 会拒绝覆盖并保留备份。崩溃或外部修改后可能需要手动检查；Windows 代理自动检测等复杂配置尚未完整验证。
-- Windows 的 TUN 和特权服务尚未实现。特权服务在所有平台暂时禁用，避免影响上游 Clash Go 的服务。Linux 系统代理尚未实现，macOS 代理实现沿用上游但本项目尚未验证。不要在这些平台把预览状态当成正式支持。
-- 支持本地文件选择或拖放导入、远程订阅后台下载、批量更新与删除、重新激活订阅。删除时会保留当前订阅。Windows 开机自启通过当前用户注册表实现，静默启动依赖托盘；订阅自动更新和部分设置尚未接入。
-- 代理模式、局域网、IPv6、统一延迟、日志等级和监听端口可在界面中修改，作为全局覆写持久化，不修改订阅原文件；设置失败会尝试恢复。修改混合端口前需先关闭系统代理。其他设置页面中的部分控件仍只保存界面偏好，请以实际功能和错误提示为准。
+- Windows 的 TUN 和特权服务尚未实现；权限不可用时会在内存中关闭订阅自带的 TUN 配置。特权服务在所有平台暂时禁用，避免影响上游 Clash Go 的服务。Linux 系统代理尚未实现，macOS 代理实现沿用上游但本项目尚未验证。不要在这些平台把预览状态当成正式支持。
+- 支持本地文件选择或拖放导入、远程订阅后台下载、按订阅设置自动更新、批量更新与删除、重新激活订阅。删除时会保留当前订阅。Windows 开机自启通过当前用户注册表实现，静默启动依赖托盘；部分设置尚未接入。
+- 代理模式、局域网、IPv6、统一延迟、日志等级和监听端口可在界面中修改，作为全局覆写持久化，不修改订阅原文件；设置失败会尝试恢复。修改混合端口前需先关闭系统代理。链式代理尚未接入内核；其他设置页面中的部分控件仍只保存界面偏好，请以实际功能和错误提示为准。
 - 网络端口由订阅或配置决定。默认使用混合端口 7897、SOCKS 7898、HTTP 7899；端口被其他程序占用时需在配置中调整。默认不开放 HTTP 控制接口；配置显式指定控制接口时，仅允许带密钥的回环 IP 地址。
+- 同一配置目录只运行一个 NetFlow 实例；重复启动会尝试显示已有窗口。需要互相隔离的实例时，可为各实例指定不同的 `NETFLOW_CONFIG_DIR` 和监听端口。
+- 首页的出口 IP 查询仅在用户点击或开启自动刷新后执行，通过本地代理访问 [IP.SB 的 GeoIP API](https://ip.sb/api/)；该服务会看到代理出口 IP。代理不可用时不会回退到直连查询。
 
 ## Agent 规则重写
 
@@ -28,7 +30,7 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 & $agent apply '<上一步返回的 proposal_id>'
 ```
 
-也可以将 `netflow-agent.exe mcp` 配置为 MCP 客户端的 stdio 命令，使用 `netflow_status`、`netflow_preview_rewrite` 和 `netflow_apply_rewrite`。若启动多个实例，在命令名前传入 `--pid <进程号>`；隔离环境可传入 `--config-dir <绝对路径>`。macOS 对应命令位于 `NetFlow.app/Contents/Resources/netflow-agent`。命令行输出 JSON，错误输出到 stderr；连接超时后应先执行 `status` 核实结果，再决定是否重试。
+也可以将 `netflow-agent.exe mcp` 配置为 MCP 客户端的 stdio 命令，使用 `netflow_status`、`netflow_preview_rewrite` 和 `netflow_apply_rewrite`。隔离环境可传入 `--config-dir <绝对路径>`，必要时可在命令名前传入 `--pid <进程号>`。macOS 对应命令位于 `NetFlow.app/Contents/Resources/netflow-agent`。命令行输出 JSON，错误输出到 stderr；连接超时后应先执行 `status` 核实结果，再决定是否重试。
 
 规则操作的 `scope` 为 `global`、`profile` 或 `connection`，`operation` 为 `set` 或 `clear`。全局/订阅规则也可从订阅页面打开编辑器，在界面中预览并应用。全局/订阅层可设置 `layer.prepend`、`layer.append` 和 `layer.remove`（按原规则字符串精确删除）；订阅层还须提供 `profile_id`。连接层 `set` 需要活动 `connection_id`、已有策略名 `policy` 和 1–86400 秒的 `ttl_seconds`，可选择 `close_existing: true`。顺序是连接规则、订阅前置、全局前置、原规则（去除指定项）、订阅追加、全局追加、原 MATCH 及之后规则。规则持久化在用户目录中，订阅原文件不会因此被改写。
 

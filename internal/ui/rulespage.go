@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strconv"
+	"strings"
 
 	mygoui "github.com/egoist/mygo/ui"
 
@@ -17,6 +18,7 @@ type RuleView struct {
 	Open      bool
 	Loaded    bool
 	ScrollTop float32
+	Updating  bool
 }
 
 func (m *Model) rulesPage(c *mygoui.Context, pal Palette) {
@@ -151,6 +153,10 @@ func (m *Model) ruleProviderRow(c *mygoui.Context, pal Palette, p rules.Provider
 }
 
 func (m *Model) updateOneRule(name string) {
+	if m.Hooks.UpdateRuleProviderAsync != nil {
+		m.updateRuleProviders([]string{name})
+		return
+	}
 	var err error
 	if m.Hooks.UpdateRuleProvider != nil {
 		err = m.Hooks.UpdateRuleProvider(name)
@@ -168,6 +174,10 @@ func (m *Model) updateAllRules() {
 	for i, p := range m.Rules.Providers {
 		names[i] = p.Name
 	}
+	if m.Hooks.UpdateRuleProviderAsync != nil {
+		m.updateRuleProviders(names)
+		return
+	}
 	err := rules.UpdateAll(names, func(name string) error {
 		if m.Hooks.UpdateRuleProvider == nil {
 			return nil
@@ -180,6 +190,41 @@ func (m *Model) updateAllRules() {
 	}
 	m.Notice = "所有规则集合均已更新"
 	m.reloadRules()
+}
+
+func (m *Model) updateRuleProviders(names []string) {
+	if m.Rules.Updating {
+		return
+	}
+	if len(names) == 0 {
+		m.Notice = "没有可更新的规则集合"
+		return
+	}
+	m.Rules.Updating = true
+	var failures []string
+	completed := 0
+	var next func(int)
+	next = func(i int) {
+		if i == len(names) {
+			m.Rules.Updating = false
+			m.reloadRules()
+			m.Notice = "已更新 " + itoa(completed) + " 个规则集合"
+			if len(failures) > 0 {
+				m.Notice += "；失败：" + strings.Join(failures, "；")
+			}
+			return
+		}
+		m.Notice = "正在更新规则集合 " + itoa(i+1) + " / " + itoa(len(names))
+		m.Hooks.UpdateRuleProviderAsync(names[i], func(err error) {
+			if err != nil {
+				failures = append(failures, names[i]+": "+err.Error())
+			} else {
+				completed++
+			}
+			next(i + 1)
+		})
+	}
+	next(0)
 }
 
 func (m *Model) reloadRules() {

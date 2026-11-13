@@ -44,7 +44,8 @@ def main():
                 continue
             source = module.get("Replace", module)
             key = (module["Path"], module.get("Version", ""))
-            item = modules.setdefault(key, {"root": source.get("Dir", ""), "packages": set()})
+            replacement = (source.get("Path", ""), source.get("Version", "")) if module.get("Replace") else None
+            item = modules.setdefault(key, {"root": source.get("Dir", ""), "packages": set(), "replacement": replacement})
             if package.get("Dir"):
                 item["packages"].add(package["Dir"])
 
@@ -74,7 +75,9 @@ def main():
             dest = target / file.relative_to(source)
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(file, dest)
-        lines.append(f"- `{name}@{version}` — [{folder}]({folder}/)")
+        replacement = info["replacement"]
+        suffix = f" (replaced by `{replacement[0]}@{replacement[1]}`)" if replacement else ""
+        lines.append(f"- `{name}@{version}`{suffix} — [{folder}]({folder}/)")
 
     goroot = Path(subprocess.check_output(["go", "env", "GOROOT"], cwd=ROOT, text=True).strip())
     (DEST / "go").mkdir(exist_ok=True)

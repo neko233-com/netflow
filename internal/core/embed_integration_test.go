@@ -31,18 +31,12 @@ import (
 // Window-free Profiles and Proxies clicks live in internal/ui and
 // internal/app. This file only boots the embedded core.
 //
-// Under -race the tests skip. Two M1 issues stack: startExternalController
-// does not listen, and hub.Parse calls log.SetLevel while mihomo finalizers
-// call log.Debugln, which the race detector reports. Run
-// `go test -tags=integration` without -race for the HTTP assertions.
+// The embedded controller is authenticated and bound to loopback in these tests.
 
 var mihomoMu sync.Mutex
 
 func lockMihomo(t *testing.T) {
 	t.Helper()
-	if !externalControllerEnabled {
-		t.Skip("skipping mihomo embed smoke under -race: the external controller does not listen, and hub.Parse races in mihomo's logger (known M1 issue)")
-	}
 	mihomoMu.Lock()
 	t.Cleanup(func() {
 		releaseListeners()
@@ -98,11 +92,15 @@ func bootDirect(t *testing.T, storeSelected bool) (addr string, raw []byte) {
 		t.Fatal(err)
 	}
 	route.SetEmbedMode(true)
-	if err := hub.Parse(suppressExternalController(raw)); err != nil {
+	suppressed, err := suppressExternalController(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.Parse(suppressed); err != nil {
 		t.Fatalf("hub.Parse: %v", err)
 	}
 	addr = fmt.Sprintf("127.0.0.1:%d", port)
-	startExternalController(addr, "", false)
+	startExternalController(addr, "test-secret", false)
 	if err := waitListen(addr); err != nil {
 		t.Fatal(err)
 	}
@@ -111,10 +109,14 @@ func bootDirect(t *testing.T, storeSelected bool) (addr string, raw []byte) {
 
 func reparseDirect(t *testing.T, raw []byte, addr string) {
 	t.Helper()
-	if err := hub.Parse(suppressExternalController(raw)); err != nil {
+	suppressed, err := suppressExternalController(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.Parse(suppressed); err != nil {
 		t.Fatalf("hub.Parse: %v", err)
 	}
-	startExternalController(addr, "", false)
+	startExternalController(addr, "test-secret", false)
 	if err := waitListen(addr); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +136,7 @@ func TestHubParseDirectVersion(t *testing.T) {
 		t.Fatalf("initial selection %q, want DIRECT", now)
 	}
 
-	resp, err := http.Get("http://" + addr + "/version")
+	resp, err := controllerGet("http://" + addr + "/version")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,6 +216,7 @@ func putSelect(t *testing.T, addr, group, node string) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-secret")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +243,7 @@ func proxyNow(t *testing.T, name string) string {
 
 func proxyNowHTTP(t *testing.T, addr, name string) string {
 	t.Helper()
-	resp, err := http.Get("http://" + addr + "/proxies/" + url.PathEscape(name))
+	resp, err := controllerGet("http://" + addr + "/proxies/" + url.PathEscape(name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +267,7 @@ func proxyDelayHTTP(t *testing.T, addr, name, target string) int {
 	q.Set("url", target)
 	q.Set("timeout", "3000")
 	endpoint := "http://" + addr + "/proxies/" + url.PathEscape(name) + "/delay?" + q.Encode()
-	resp, err := http.Get(endpoint)
+	resp, err := controllerGet(endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,4 +283,13 @@ func proxyDelayHTTP(t *testing.T, addr, name, target string) int {
 		t.Fatalf("delay json: %v body %s", err, body)
 	}
 	return payload.Delay
+}
+
+func controllerGet(endpoint string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer test-secret")
+	return http.DefaultClient.Do(req)
 }

@@ -87,6 +87,7 @@ type ProxyGroup struct {
 type ProxyProvider struct {
 	Name     string
 	Type     string
+	Count    int
 	Used     int64
 	Total    int64
 	Expire   string

@@ -481,7 +481,7 @@ func TestSettingsSections(t *testing.T) {
 	m := DemoModel()
 	m.Router.Replace("/settings")
 	tt := renderModel(m, WindowWidth, WindowHeight, false)
-	for _, title := range []string{"系统设置", "Clash 设置", "Verge 基础设置", "Verge 高级设置", "简体中文", "浅色", "深色", "系统", "v0.2.1-alpha.1"} {
+	for _, title := range []string{"系统设置", "Clash 设置", "Verge 基础设置", "Verge 高级设置", "简体中文", "浅色", "深色", "系统", "v0.2.2-alpha.1"} {
 		if !tt.HasText(title) {
 			t.Errorf("settings missing %q", title)
 		}
@@ -560,7 +560,7 @@ func TestManualOpensDocs(t *testing.T) {
 	if err := tt.Click("home-manual"); err != nil {
 		t.Fatal(err)
 	}
-	if len(tt.OpenedURLs()) != 1 || tt.OpenedURLs()[0] != "https://clash-verge-rev.github.io/index.html" {
+	if len(tt.OpenedURLs()) != 1 || tt.OpenedURLs()[0] != "https://github.com/neko233-com/netflow#readme" {
 		t.Fatalf("urls %v", tt.OpenedURLs())
 	}
 }
@@ -668,12 +668,12 @@ func TestProxySelectWritesSelector(t *testing.T) {
 	if m.Home.Node.Name != "香港 02" || m.Home.Node.Group != "Proxy" {
 		t.Fatalf("home node %+v", m.Home.Node)
 	}
-	// URLTest updates the row and does not write a selector.
+	// URLTest groups also support the kernel's explicit selection operation.
 	if err := tt.Click("node-Auto-台湾 01"); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 {
-		t.Fatalf("urltest wrote the selector, calls %d", calls)
+	if calls != 2 || gotGroup != "Auto" || gotNode != "台湾 01" {
+		t.Fatalf("urltest selection missing, calls %d %s %s", calls, gotGroup, gotNode)
 	}
 	if m.Groups[1].Now != "台湾 01" {
 		t.Fatalf("urltest now %q", m.Groups[1].Now)

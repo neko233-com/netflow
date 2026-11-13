@@ -3,7 +3,9 @@ package app
 import (
 	"os/exec"
 	"runtime"
-	"strings"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/transfer"
 )
 
 func openPath(path string) error {
@@ -20,11 +22,6 @@ func openPath(path string) error {
 	return exec.Command(name, args...).Start()
 }
 
-func writeClipboard(text string) {
-	if runtime.GOOS != "darwin" {
-		return
-	}
-	cmd := exec.Command("pbcopy")
-	cmd.Stdin = strings.NewReader(text)
-	_ = cmd.Run()
+func writeClipboard(text string) error {
+	return mygo.Clipboard.Write(transfer.TextData(text))
 }

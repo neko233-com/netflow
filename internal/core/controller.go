@@ -1,5 +1,3 @@
-//go:build !race
-
 package core
 
 import (
@@ -9,14 +7,7 @@ import (
 	"github.com/metacubex/mihomo/hub/route"
 )
 
-// externalControllerEnabled is false in the race-detector build, where
-// startExternalController is a no-op. See controller_race.go.
-const externalControllerEnabled = true
-
-// startExternalController listens on the profile's external-controller
-// after hub.Parse has set the log level. mihomo starts that server on a
-// goroutine with no happens-before edge to Shutdown, so the race detector
-// build leaves it down; see controller_race.go.
+// startExternalController listens only on a secret-protected loopback address.
 func startExternalController(addr, secret string, debug bool) {
 	if !safeController(addr, secret) {
 		return

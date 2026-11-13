@@ -11,17 +11,25 @@ func (m *Model) overlay(c *mygoui.Context, pal Palette) {
 		m.portsDraft = m.Prefs
 		m.portsDraftActive = true
 	}
+	if m.Dialogs.Hotkey && !m.hotkeyDraftActive {
+		m.hotkeyDraft = m.Prefs
+		m.hotkeyDraftActive = true
+	}
 	m.homeSettingsDialog(c, pal)
 	m.chainDialog(c, pal)
 	m.deleteDialog(c, pal)
 	m.batchDeleteDialog(c, pal)
 	m.ruleEditorDialog(c, pal)
+	m.updateDialog(c, pal)
 	m.profileForm(c, pal)
 	m.providerDialog(c, pal)
 	m.simpleDialog(c, pal, &m.Dialogs.Theme, "主题设置", m.themeBody)
 	m.simpleDialog(c, pal, &m.Dialogs.Layout, "界面设置", m.layoutBody)
 	m.simpleDialog(c, pal, &m.Dialogs.Misc, "杂项设置", m.miscBody)
 	m.simpleDialog(c, pal, &m.Dialogs.Hotkey, "热键设置", m.hotkeyBody)
+	if !m.Dialogs.Hotkey {
+		m.hotkeyDraftActive = false
+	}
 	m.simpleDialog(c, pal, &m.Dialogs.Backup, "备份设置", m.backupBody)
 	m.simpleDialog(c, pal, &m.Dialogs.Ports, "端口设置", m.portsBody)
 	if !m.Dialogs.Ports {
@@ -200,6 +208,19 @@ func (m *Model) profileForm(c *mygoui.Context, pal Palette) {
 			if m.Form.Type == "remote" && !m.Form.Editing {
 				m.field(c, "订阅链接", &m.Form.URL)
 			}
+			if m.Form.Type == "remote" && m.Hooks.SaveProfileMetadata != nil {
+				m.boolLine(c, "自动更新订阅", &m.Form.Auto)
+				mygoui.Row(c).FillWidth().AlignItems(mygoui.Center).Gap(8).Children(func() {
+					mygoui.Text(c, "更新间隔（分钟）").FontSize(13).Grow(1)
+					interval := itoa(m.Form.Interval)
+					if mygoui.TextInput(c, &interval).Width(100).Label("auto-update-interval").Changed() {
+						m.Form.Interval = atoi(interval)
+					}
+				})
+				if FrequentUpdate(m.Form.Interval) {
+					mygoui.Text(c, "频繁更新会增加网络请求并可能重载内核。").FontSize(12).TextColor(pal.Warning)
+				}
+			}
 			if m.Form.Type == "remote" && m.Hooks.SaveProfileMetadata == nil {
 				m.field(c, "用户代理", &m.Form.UA)
 				mygoui.Text(c, "更新间隔").FontSize(13)
@@ -234,7 +255,7 @@ func (m *Model) profileForm(c *mygoui.Context, pal Palette) {
 
 func (m *Model) saveForm() {
 	if m.Hooks.SaveProfileMetadata != nil && m.Form.Editing {
-		if err := m.Hooks.SaveProfileMetadata(m.Form.UID, m.Form.Name, m.Form.Desc); err != nil {
+		if err := m.Hooks.SaveProfileMetadata(m.Form); err != nil {
 			m.Form.Error = err.Error()
 			return
 		}
@@ -245,6 +266,10 @@ func (m *Model) saveForm() {
 	if m.Hooks.CreateProfileAsync != nil && !m.Form.Editing {
 		if !ValidSubscriptionURL(m.Form.URL) {
 			m.Form.Error = "请输入有效的订阅链接"
+			return
+		}
+		if m.Form.Interval < 1 || m.Form.Interval > 43200 {
+			m.Form.Error = "更新间隔必须在 1 到 43200 分钟之间"
 			return
 		}
 		form := m.Form
@@ -328,22 +353,18 @@ func (m *Model) providerDialog(c *mygoui.Context, pal Palette) {
 				mygoui.Row(c).AlignItems(mygoui.Center).Gap(8).Children(func() {
 					mygoui.Text(c, p.Name).FontSize(14).Grow(1)
 					chip(c, pal, p.Type, ToneMuted, false)
-					exp := p.Expire
-					if exp == "" {
-						exp = "-"
-					}
-					mygoui.Text(c, exp).FontSize(12).TextColor(pal.TextMuted)
+					mygoui.Text(c, itoa(p.Count)+" 个节点").FontSize(12).TextColor(pal.TextMuted)
 					if textButton(c, pal, "更新", "更新", "prov-"+p.Name) {
-						m.Notice = p.Name + " 更新成功"
+						m.updateProxyProviders([]string{p.Name})
 					}
 				})
 			}
 			if filledButton(c, pal, "更新全部", "prov-all", true) {
-				if len(m.Providers) == 0 {
-					m.Notice = "没有可更新的 provider"
-				} else {
-					m.Notice = "所有 provider 均已更新"
+				var names []string
+				for _, p := range m.Providers {
+					names = append(names, p.Name)
 				}
+				m.updateProxyProviders(names)
 			}
 		})
 	})
@@ -364,6 +385,9 @@ func (m *Model) simpleDialog(c *mygoui.Context, pal Palette, open *bool, title s
 			}
 		})
 	})
+	if !*open && (title == "主题设置" || title == "界面设置" || title == "杂项设置") {
+		m.savePrefs()
+	}
 }
 
 func (m *Model) themeBody(c *mygoui.Context, pal Palette) {
@@ -397,18 +421,25 @@ func (m *Model) themeBody(c *mygoui.Context, pal Palette) {
 }
 
 func safeHex(s string) string {
-	if len(s) != 7 && len(s) != 9 || len(s) == 0 || s[0] != '#' {
+	if !validHex(s) {
 		return "#007AFF"
+	}
+	return s
+}
+
+func validHex(s string) bool {
+	if len(s) != 7 && len(s) != 9 || len(s) == 0 || s[0] != '#' {
+		return false
 	}
 	for i := 1; i < len(s); i++ {
 		c := s[i]
 		switch {
 		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
 		default:
-			return "#007AFF"
+			return false
 		}
 	}
-	return s
+	return true
 }
 
 func (m *Model) layoutBody(c *mygoui.Context, pal Palette) {
@@ -457,18 +488,19 @@ func (m *Model) miscBody(c *mygoui.Context, pal Palette) {
 }
 
 func (m *Model) hotkeyBody(c *mygoui.Context, pal Palette) {
+	p := &m.hotkeyDraft
 	rows := []struct {
 		label string
 		value *string
 	}{
-		{"打开面板", &m.Prefs.HotkeyDash},
-		{"规则模式", &m.Prefs.HotkeyRule},
-		{"全局模式", &m.Prefs.HotkeyGlobal},
-		{"直连模式", &m.Prefs.HotkeyDirect},
-		{"切换系统代理", &m.Prefs.HotkeyProxy},
-		{"切换 TUN 模式", &m.Prefs.HotkeyTUN},
-		{"轻量模式", &m.Prefs.HotkeyLite},
-		{"重新激活订阅", &m.Prefs.HotkeyProfiles},
+		{"打开面板", &p.HotkeyDash},
+		{"规则模式", &p.HotkeyRule},
+		{"全局模式", &p.HotkeyGlobal},
+		{"直连模式", &p.HotkeyDirect},
+		{"切换系统代理", &p.HotkeyProxy},
+		{"切换 TUN 模式", &p.HotkeyTUN},
+		{"轻量模式", &p.HotkeyLite},
+		{"重新激活订阅", &p.HotkeyProfiles},
 	}
 	for _, row := range rows {
 		mygoui.Row(c).AlignItems(mygoui.Center).Gap(8).Children(func() {
@@ -476,7 +508,28 @@ func (m *Model) hotkeyBody(c *mygoui.Context, pal Palette) {
 			mygoui.TextInput(c, row.value).Width(180).Placeholder("未设置")
 		})
 	}
-	_ = pal
+	mygoui.Text(c, "例如 Ctrl+Shift+K；留空表示不注册。").FontSize(12).TextColor(pal.TextMuted)
+	if filledButton(c, pal, "保存快捷键", "hotkeys-save", true) {
+		if m.Hooks.ApplyHotkeys != nil {
+			if err := m.Hooks.ApplyHotkeys(*p); err != nil {
+				m.Notice = err.Error()
+				return
+			}
+		}
+		m.Prefs.HotkeyDash = p.HotkeyDash
+		m.Prefs.HotkeyRule = p.HotkeyRule
+		m.Prefs.HotkeyGlobal = p.HotkeyGlobal
+		m.Prefs.HotkeyDirect = p.HotkeyDirect
+		m.Prefs.HotkeyProxy = p.HotkeyProxy
+		m.Prefs.HotkeyTUN = p.HotkeyTUN
+		m.Prefs.HotkeyLite = p.HotkeyLite
+		m.Prefs.HotkeyProfiles = p.HotkeyProfiles
+		if m.Hooks.ApplyHotkeys == nil {
+			m.savePrefs()
+		}
+		m.Dialogs.Hotkey = false
+		m.Notice = "快捷键已保存"
+	}
 }
 
 func (m *Model) backupBody(c *mygoui.Context, pal Palette) {
@@ -687,11 +740,9 @@ func (m *Model) runtimeBody(c *mygoui.Context, pal Palette) {
 
 func (m *Model) liteBody(c *mygoui.Context, pal Palette) {
 	if filledButton(c, pal, "立即进入", "lite-now", true) {
-		m.Prefs.Lightweight = true
-		m.Notice = "轻量模式"
+		m.setLightweight(true)
 	}
-	m.boolLine(c, "自动进入轻量模式", &m.Prefs.Lightweight)
-	mygoui.Text(c, "关闭窗口后，轻量模式将在一段时间后自动激活").FontSize(12).TextColor(pal.TextMuted)
+	mygoui.Text(c, "隐藏主窗口并保持代理运行；可通过托盘重新打开。\n需要启动时隐藏窗口，可在系统设置中开启静默启动。 ").FontSize(12).TextColor(pal.TextMuted)
 }
 
 func (m *Model) dnsConfirm(c *mygoui.Context, pal Palette) {

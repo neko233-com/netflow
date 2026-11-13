@@ -20,5 +20,6 @@ coverage.out
 /agent-rules.json
 /agent/
 /kernel-options.json
+/.netflow.lock
 /resources/windows-amd64/
 /resources/darwin-arm64/

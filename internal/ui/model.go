@@ -7,52 +7,65 @@ import (
 	mygoui "github.com/egoist/mygo/ui"
 
 	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/ipinfo"
 	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/rules"
+	"github.com/neko233-com/netflow/internal/update"
 )
 
 // Hooks are the app services a page calls. Nil hooks update the model only,
 // which is what the headless tests do.
 type Hooks struct {
-	SetSystemProxy      func(on bool) error
-	SetAutoLaunch       func(on bool) error
-	SetTUN              func(on bool) error
-	SetMode             func(mode string) error
-	SelectProxy         func(group, node string) error
-	UseProfile          func(uid string) error
-	CloseConnection     func(id string) error
-	CloseAllConnections func() error
-	ClearClosed         func()
-	RefreshRules        func() ([]rules.Item, []rules.Provider)
-	UpdateRuleProvider  func(name string) error
-	SetLogPaused        func(paused bool)
-	ClearLogs           func()
-	ImportURL           func(url string) error
-	ImportURLAsync      func(url string, done func(error))
-	ImportLocal         func(path string) error
-	DeleteProfile       func(uid string) error
-	UpdateProfile       func(uid string) error
-	UpdateProfileAsync  func(uid string, done func(error))
-	BrowseProfiles      func() ([]string, error)
-	SaveProfileMetadata func(uid, name, description string) error
-	CreateProfileAsync  func(form ProfileForm, done func(error))
-	LoadRewrite         func(scope, profileID string) (rewrite.Layer, error)
-	PreviewRewrite      func(change agent.Change) (agent.Preview, error)
-	ApplyRewrite        func(id string) (agent.ApplyResult, error)
-	SetKernelOption     func(name string, value any) error
-	SetKernelPorts      func(PortSet) error
-	SavePrefs           func(Prefs) error
-	OpenDir             func(kind string)
-	RestartCore         func() error
-	BrowseScript        func() (string, error)
-	Copy                func(text string)
-	Quit                func()
-	TestSite            func(url string) error
-	ProbeSite           func(url string) (int, error)
-	SaveSites           func([]SiteTest) error
-	InstallService      func() error
-	UninstallService    func() error
-	CheckUnlock         func(name string) (status, region string, ms int, err error)
+	SetSystemProxy           func(on bool) error
+	SetAutoLaunch            func(on bool) error
+	SetLightweight           func(on bool) error
+	ChainAvailable           func() bool
+	SystemDark               func() bool
+	ApplyHotkeys             func(Prefs) error
+	SetTUN                   func(on bool) error
+	SetMode                  func(mode string) error
+	SelectProxy              func(group, node string) error
+	UseProfile               func(uid string) error
+	CloseConnection          func(id string) error
+	CloseAllConnections      func() error
+	ClearClosed              func()
+	RefreshRules             func() ([]rules.Item, []rules.Provider)
+	UpdateRuleProvider       func(name string) error
+	UpdateRuleProviderAsync  func(name string, done func(error))
+	UpdateProxyProviderAsync func(name string, done func(error))
+	SetLogPaused             func(paused bool)
+	ClearLogs                func()
+	ImportURL                func(url string) error
+	ImportURLAsync           func(url string, done func(error))
+	ImportLocal              func(path string) error
+	DeleteProfile            func(uid string) error
+	UpdateProfile            func(uid string) error
+	UpdateProfileAsync       func(uid string, done func(error))
+	BrowseProfiles           func() ([]string, error)
+	SaveProfileMetadata      func(form ProfileForm) error
+	CreateProfileAsync       func(form ProfileForm, done func(error))
+	LoadRewrite              func(scope, profileID string) (rewrite.Layer, error)
+	PreviewRewrite           func(change agent.Change) (agent.Preview, error)
+	ApplyRewrite             func(id string) (agent.ApplyResult, error)
+	SetKernelOption          func(name string, value any) error
+	SetKernelPorts           func(PortSet) error
+	SavePrefs                func(Prefs) error
+	OpenDir                  func(kind string)
+	RestartCore              func() error
+	BrowseScript             func() (string, error)
+	Copy                     func(text string) error
+	Quit                     func()
+	TestSite                 func(url string) error
+	ProbeSite                func(url string) (int, error)
+	ProbeSiteAsync           func(url string, done func(int, error))
+	SaveSites                func([]SiteTest) error
+	InstallService           func() error
+	UninstallService         func() error
+	CheckUnlock              func(name string) (status, region string, ms int, err error)
+	CheckUnlockAsync         func(name string, done func(string, string, int, error))
+	TestProxyAsync           func(group, name, url string, done func(int, error))
+	CheckUpdateAsync         func(done func(update.Result, error))
+	QueryIPAsync             func(done func(ipinfo.Result, error))
 }
 
 // Model is the main window: a sidebar and the page it shows.
@@ -69,40 +82,46 @@ type Model struct {
 	IP          IPView
 	IPShown     bool
 	IPAuto      bool
+	IPBusy      bool
 	IPLeft      int
 
-	Groups           []ProxyGroup
-	Providers        []ProxyProvider
-	Chain            ChainState
-	ProxiesLoading   bool
-	Profiles         []ProfileItem
-	CurrentProfile   string
-	ProfileURL       string
-	ProfileBusy      bool
-	Batch            bool
-	BatchDeleteAsk   bool
-	RuleEditor       RuleEditor
-	portsDraft       Prefs
-	portsDraftActive bool
-	ShowNextUpdate   map[string]bool
-	Form             ProfileForm
-	DeleteUID        string
-	Prefs            Prefs
-	Notice           string
-	Busy             string
-	DNSAsk           bool
-	ProfileHasDNS    bool
-	ForceTray        bool
-	Dialogs          dialogSet
-	Hooks            Hooks
-	Conns            ConnView
-	Rules            RuleView
-	Logs             LogView
-	TestForm         TestForm
-	TunStack         string
-	ServiceInstalled bool
-	ServiceRunning   bool
-	Unlocks          []UnlockItem
+	Groups            []ProxyGroup
+	Providers         []ProxyProvider
+	ProviderBusy      bool
+	Chain             ChainState
+	ProxiesLoading    bool
+	Profiles          []ProfileItem
+	CurrentProfile    string
+	ProfileURL        string
+	ProfileBusy       bool
+	Batch             bool
+	BatchDeleteAsk    bool
+	RuleEditor        RuleEditor
+	UpdateDialog      bool
+	UpdateResult      update.Result
+	portsDraft        Prefs
+	portsDraftActive  bool
+	hotkeyDraft       Prefs
+	hotkeyDraftActive bool
+	ShowNextUpdate    map[string]bool
+	Form              ProfileForm
+	DeleteUID         string
+	Prefs             Prefs
+	Notice            string
+	Busy              string
+	DNSAsk            bool
+	ProfileHasDNS     bool
+	ForceTray         bool
+	Dialogs           dialogSet
+	Hooks             Hooks
+	Conns             ConnView
+	Rules             RuleView
+	Logs              LogView
+	TestForm          TestForm
+	TunStack          string
+	ServiceInstalled  bool
+	ServiceRunning    bool
+	Unlocks           []UnlockItem
 }
 
 type dialogSet struct {
@@ -179,14 +198,21 @@ func (m *Model) View(c *mygoui.Context) {
 	}
 	m.flushFilters(c.Now())
 	dark := c.Theme().Dark
+	if m.Prefs.ThemeMode == "system" && m.Hooks.SystemDark != nil {
+		dark = m.Hooks.SystemDark()
+	}
 	switch m.Prefs.ThemeMode {
 	case "light":
 		dark = false
 	case "dark":
 		dark = true
 	}
-	pal := PaletteFor(dark)
-	c.SetTheme(pal.Theme())
+	pal := PaletteWithPrefs(dark, m.Prefs)
+	theme := pal.Theme()
+	if m.Prefs.FontFamily != "" {
+		theme.Font = m.Prefs.FontFamily
+	}
+	c.SetTheme(theme)
 	c.Root().Background(pal.Paper)
 	mygoui.Row(c).Fill().AlignItems(mygoui.Stretch).Children(func() {
 		m.sidebar(c, pal)
@@ -425,9 +451,29 @@ func (m *Model) setAutoLaunch(on bool) {
 	m.savePrefs()
 }
 
+func (m *Model) setLightweight(on bool) {
+	if m.Hooks.SetLightweight != nil {
+		if err := m.Hooks.SetLightweight(on); err != nil {
+			m.Notice = err.Error()
+			return
+		}
+	} else {
+		m.Prefs.Lightweight = on
+		m.savePrefs()
+	}
+	if on {
+		m.Notice = "已进入轻量模式"
+	} else {
+		m.Notice = "已退出轻量模式"
+	}
+}
+
 func (m *Model) copy(text string) {
 	if m.Hooks.Copy != nil {
-		m.Hooks.Copy(text)
+		if err := m.Hooks.Copy(text); err != nil {
+			m.Notice = "复制失败: " + err.Error()
+			return
+		}
 	}
 	m.Notice = "复制成功"
 }

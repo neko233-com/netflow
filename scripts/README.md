@@ -10,6 +10,9 @@ The destination must not already contain files with the same release names.
 `python scripts/smoke_windows.py` extracts the portable executable into a
 unique directory inside `build`, starts it with an isolated configuration,
 and checks an HTTP request through the local mixed proxy to a local server.
+`python scripts/smoke_silent_windows.py -Quiet -Installed` verifies that the
+installed Windows application starts its core with a hidden native window,
+using a temporary configuration rather than the user's network settings.
 
 `smoke_installer.ps1` applies only to the older NSIS build, not the MSI.
 For MSI validation, inspect and install the newly built package for the current

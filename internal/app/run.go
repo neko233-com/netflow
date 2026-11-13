@@ -1,17 +1,49 @@
 package app
 
 import (
+	"context"
 	_ "embed"
+	"errors"
+	"fmt"
 	"log"
 	"runtime"
+	"time"
 
 	"github.com/egoist/mygo"
 	mygoui "github.com/egoist/mygo/ui"
+	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/appdir"
 	"github.com/neko233-com/netflow/internal/ui"
 )
 
 // Run prepares the kernel and runs the native event loop until quit.
 func (a *App) Run() error {
+	dir, err := a.dirs.ConfigDir()
+	if err != nil {
+		return err
+	}
+	lock, err := appdir.Acquire(dir)
+	if errors.Is(err, appdir.ErrAlreadyRunning) {
+		// A second launch focuses the existing process rather than allowing
+		// two cores to mutate the same subscription and proxy settings.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		client := agent.Client{Dir: dir, Timeout: time.Second}
+		for {
+			if err = client.Call(ctx, "show", nil, nil); err == nil {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return appdir.ErrAlreadyRunning
+			case <-time.After(150 * time.Millisecond):
+			}
+		}
+	}
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	if err := a.Prepare(); err != nil {
 		return err
 	}
@@ -20,6 +52,15 @@ func (a *App) Run() error {
 	var quitting bool
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { quitting = true })
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		a.releaseHotkeys()
+		if a.profileAutoStop != nil {
+			close(a.profileAutoStop)
+			a.profileAutoStop = nil
+		}
+		if a.probeStop != nil {
+			close(a.probeStop)
+			a.probeStop = nil
+		}
 		a.stopAgent()
 		a.stopLive()
 		if a.settings.SystemProxy {
@@ -56,13 +97,31 @@ func (a *App) ready(quitting *bool) {
 		MinWidth:       ui.WindowMinWidth,
 		MinHeight:      ui.WindowMinHeight,
 		UseContentSize: true,
-		Hidden:         a.model.Prefs.SilentStart,
+		Hidden:         a.model.Prefs.SilentStart || a.model.Prefs.Lightweight,
 		Content:        mygoui.View(a.model.View),
 	})
 	a.model.Hooks.ImportURLAsync = a.importURLAsync
 	a.model.Hooks.UpdateProfileAsync = a.updateProfileAsync
 	a.model.Hooks.BrowseProfiles = a.browseProfiles
 	a.model.Hooks.CreateProfileAsync = a.createProfileAsync
+	a.probeSlots = make(chan struct{}, 4)
+	a.probeStop = make(chan struct{})
+	a.model.Hooks.ProbeSiteAsync = a.probeSiteAsync
+	a.model.Hooks.CheckUnlockAsync = a.checkUnlockAsync
+	a.model.Hooks.TestProxyAsync = a.testProxyAsync
+	a.model.Hooks.UpdateRuleProviderAsync = a.updateRuleProviderAsync
+	a.model.Hooks.UpdateProxyProviderAsync = a.updateProxyProviderAsync
+	a.model.Hooks.CheckUpdateAsync = a.checkUpdateAsync
+	a.model.Hooks.QueryIPAsync = a.queryIPAsync
+	a.model.Hooks.SystemDark = mygo.Theme.IsDark
+	a.shortcuts = mygo.GlobalShortcut
+	a.model.Hooks.ApplyHotkeys = a.applyHotkeys
+	mygo.Theme.OnUpdated(func() {
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+	})
+	a.startProfileAuto()
 	a.startLive()
 	if err := a.startAgent(); err != nil {
 		a.model.Notice = "Agent 接口启动失败: " + err.Error()
@@ -96,13 +155,16 @@ func (a *App) ready(quitting *bool) {
 	if err != nil {
 		log.Printf("tray: %v", err)
 		// A hidden window must remain reachable if the notification area fails.
-		if a.model.Prefs.SilentStart {
+		if a.model.Prefs.SilentStart || a.model.Prefs.Lightweight {
 			a.win.Show()
 		}
 		return
 	}
 	a.tray = tray
 	tray.OnClick(func() { a.trayClick() })
+	if err := a.configureHotkeys(a.model.Prefs, false); err != nil {
+		a.model.Notice = "全局快捷键注册失败: " + err.Error()
+	}
 }
 
 func (a *App) trayClick() {
@@ -126,8 +188,37 @@ func (a *App) showMain() {
 	if a.win == nil {
 		return
 	}
+	if a.model != nil && a.model.Prefs.Lightweight {
+		if err := a.setLightweight(false); err != nil {
+			a.model.Notice = err.Error()
+		}
+	}
 	a.win.Show()
 	a.win.Focus()
+}
+
+func (a *App) setLightweight(on bool) error {
+	if a.model == nil || a.win == nil {
+		return fmt.Errorf("窗口尚未就绪")
+	}
+	if on && a.tray == nil {
+		return fmt.Errorf("托盘不可用，无法进入轻量模式")
+	}
+	next := a.model.Prefs
+	next.Lightweight = on
+	if err := a.savePrefs(next); err != nil {
+		return err
+	}
+	a.model.Prefs = next
+	if on {
+		a.win.Hide()
+	} else {
+		a.win.Show()
+	}
+	if a.tray != nil {
+		a.tray.SetMenu(BuildTrayMenu(a.traySnapshot(), a.trayActions()))
+	}
+	return nil
 }
 
 //go:embed assets/tray.png

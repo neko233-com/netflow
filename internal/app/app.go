@@ -26,6 +26,7 @@ import (
 	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/service"
 	"github.com/neko233-com/netflow/internal/sitetest"
+	"github.com/neko233-com/netflow/internal/sysinfo"
 	"github.com/neko233-com/netflow/internal/sysproxy"
 	"github.com/neko233-com/netflow/internal/tun"
 	"github.com/neko233-com/netflow/internal/ui"
@@ -73,10 +74,16 @@ type App struct {
 	win  *mygo.Window
 	tray *mygo.Tray
 
-	connTrack conn.Tracker
-	logs      *clashlog.Buffer
-	stopLogs  func()
-	liveStop  chan struct{}
+	connTrack        conn.Tracker
+	logs             *clashlog.Buffer
+	stopLogs         func()
+	liveStop         chan struct{}
+	probeSlots       chan struct{}
+	probeStop        chan struct{}
+	profileAutoStop  chan struct{}
+	profileAutoRetry map[string]time.Time
+	shortcuts        shortcutRegistrar
+	hotkeys          map[string]hotkeyBinding
 }
 
 // New checks options and fills the M1 defaults. It does not start the
@@ -139,8 +146,16 @@ func (a *App) Prepare() error {
 		}
 	}
 	a.settings = settings
+	if settings.TUN && !a.tunAllowed() {
+		settings.TUN = false
+		if err := a.store.Save(settings); err != nil {
+			return fmt.Errorf("关闭不可用的 TUN 设置: %w", err)
+		}
+		a.settings = settings
+	}
 	a.profiles = profile.NewStore(dir)
-	a.model = ui.NewModel(ui.HomeState{ConfigDir: dir, Version: core.Version()})
+	osName, osVersion := sysinfo.Current()
+	a.model = ui.NewModel(ui.HomeState{ConfigDir: dir, Version: core.Version(), OS: osName, OSVersion: osVersion})
 	a.applySettings()
 	for _, page := range ui.Pages() {
 		if page.Path == a.model.Prefs.StartPage {
@@ -163,6 +178,13 @@ func (a *App) Prepare() error {
 		return fmt.Errorf("读取内核选项: %w", err)
 	}
 	a.core.SetTransformer(func(base []byte, profileID string) ([]byte, error) {
+		if !a.tunAllowed() {
+			var err error
+			base, err = tun.EnsureDisabled(base)
+			if err != nil {
+				return nil, err
+			}
+		}
 		state := a.rewrites.Snapshot()
 		now := time.Now()
 		if rewrite.HasActive(state, profileID, now) {
@@ -584,18 +606,83 @@ func (a *App) loadGroups() {
 	if parsed.Rules > 0 {
 		a.model.Home.Rules = parsed.Rules
 	}
+	if a.core != nil && a.core.Status().Running && a.core.Status().Mode == "global" {
+		found := false
+		for _, g := range parsed.Groups {
+			if g.Name == "GLOBAL" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			parsed.Groups = append([]profile.Group{{Name: "GLOBAL", Type: "select"}}, parsed.Groups...)
+		}
+	}
+	previous := make(map[string]ui.ProxyGroup, len(a.model.Groups))
+	for _, g := range a.model.Groups {
+		previous[g.Name] = g
+	}
 	groups := make([]ui.ProxyGroup, 0, len(parsed.Groups))
 	for _, g := range parsed.Groups {
 		gg := ui.ProxyGroup{Name: g.Name, Type: g.Type, Now: g.Now, Open: true, ShowDetail: true}
-		for _, n := range g.Proxies {
-			gg.Nodes = append(gg.Nodes, ui.ProxyNode{Name: n.Name, Type: n.Type, Delay: -1})
+		if old, ok := previous[g.Name]; ok {
+			gg.Open = old.Open
+			gg.Sort = old.Sort
+			gg.ShowDetail = old.ShowDetail
+			gg.FilterOpen = old.FilterOpen
+			gg.FilterText = old.FilterText
+			gg.FilterApplied = old.FilterApplied
+			gg.FilterChanged = old.FilterChanged
+			gg.URLOpen = old.URLOpen
+			gg.TestURL = old.TestURL
+		}
+		var actual core.ProxyGroup
+		var groupErr error
+		if a.core != nil && a.core.Status().Running {
+			actual, groupErr = a.core.Group(g.Name)
+		} else {
+			groupErr = errors.New("core stopped")
+		}
+		if groupErr == nil {
+			gg.Type = actual.Type
+			gg.Now = actual.Now
+			gg.Icon = actual.Icon
+			gg.Hidden = actual.Hidden
+			for _, n := range actual.Nodes {
+				gg.Nodes = append(gg.Nodes, ui.ProxyNode{Name: n.Name, Type: n.Type, Delay: -1, UDP: n.UDP, TFO: n.TFO, XUDP: n.XUDP, MPTCP: n.MPTCP, SMUX: n.SMUX, Preset: n.Name == "DIRECT" || n.Name == "REJECT"})
+			}
+		} else {
+			for _, n := range g.Proxies {
+				gg.Nodes = append(gg.Nodes, ui.ProxyNode{Name: n.Name, Type: n.Type, Delay: -1})
+			}
+		}
+		if old, ok := previous[g.Name]; ok {
+			delays := make(map[string]int, len(old.Nodes))
+			for _, n := range old.Nodes {
+				if n.Delay != ui.DelayTesting {
+					delays[n.Name] = n.Delay
+				}
+			}
+			for i := range gg.Nodes {
+				if value, ok := delays[gg.Nodes[i].Name]; ok {
+					gg.Nodes[i].Delay = value
+				}
+			}
 		}
 		groups = append(groups, gg)
 	}
 	a.model.Groups = groups
+	a.model.Providers = nil
+	if a.core != nil && a.core.Status().Running {
+		for _, p := range a.core.ProxyProviders() {
+			a.model.Providers = append(a.model.Providers, ui.ProxyProvider{Name: p.Name, Type: p.Vehicle, Count: p.Count})
+		}
+	}
 	names := make([]string, 0, len(groups))
 	for _, g := range groups {
-		names = append(names, g.Name)
+		if !g.Hidden {
+			names = append(names, g.Name)
+		}
 	}
 	a.model.Home.Node = ui.CurrentNode{Groups: names}
 	a.applySavedSelection()
@@ -626,10 +713,14 @@ func (a *App) applySavedSelection() {
 	for i := range a.model.Groups {
 		g := &a.model.Groups[i]
 		want, ok := saved[g.Name]
-		if ok && groupHasNode(g, want) && selectorGroup(g.Type) {
+		if ok && groupHasNode(g, want) && ui.SelectableGroup(g.Type) {
 			if running {
 				if err := a.core.Select(g.Name, want); err != nil {
 					g.Now = a.fallbackNow(g)
+					continue
+				}
+				if now, err := a.core.Selected(g.Name); err == nil && groupHasNode(g, now) {
+					g.Now = now
 					continue
 				}
 			}
@@ -639,7 +730,7 @@ func (a *App) applySavedSelection() {
 		if g.Now == "" || !groupHasNode(g, g.Now) {
 			g.Now = firstNode(g)
 		}
-		if running && selectorGroup(g.Type) {
+		if running && ui.SelectableGroup(g.Type) {
 			now, err := a.core.Selected(g.Name)
 			if err == nil && groupHasNode(g, now) {
 				g.Now = now
@@ -661,7 +752,7 @@ func (a *App) fallbackNow(g *ui.ProxyGroup) string {
 	if g == nil {
 		return ""
 	}
-	if a.core != nil && a.core.Status().Running && selectorGroup(g.Type) {
+	if a.core != nil && a.core.Status().Running && ui.SelectableGroup(g.Type) {
 		if now, err := a.core.Selected(g.Name); err == nil && groupHasNode(g, now) {
 			return now
 		}
@@ -680,7 +771,7 @@ func (a *App) syncHomeNode() {
 	h.Name, h.Type, h.Group = "", "", ""
 	h.Delay = 0
 	for _, g := range a.model.Groups {
-		if !selectorGroup(g.Type) || g.Now == "" {
+		if g.Hidden || !selectorGroup(g.Type) || g.Now == "" {
 			continue
 		}
 		h.Name = g.Now
@@ -695,7 +786,28 @@ func (a *App) syncHomeNode() {
 		break
 	}
 	if h.Group == "" && len(a.model.Groups) > 0 {
-		h.Group = a.model.Groups[0].Name
+		for _, g := range a.model.Groups {
+			if !g.Hidden && ui.SelectableGroup(g.Type) && g.Now != "" {
+				h.Group = g.Name
+				h.Name = g.Now
+				for _, n := range g.Nodes {
+					if n.Name == g.Now {
+						h.Type = n.Type
+						h.Delay = n.Delay
+						break
+					}
+				}
+				break
+			}
+		}
+		if h.Group == "" {
+			for _, g := range a.model.Groups {
+				if !g.Hidden {
+					h.Group = g.Name
+					break
+				}
+			}
+		}
 	}
 	a.model.Home.Node = h
 }
@@ -815,6 +927,8 @@ func (a *App) bindHooks() {
 	a.model.Hooks = ui.Hooks{
 		SetSystemProxy:      a.SetSystemProxy,
 		SetAutoLaunch:       a.SetAutoLaunch,
+		SetLightweight:      a.setLightweight,
+		ChainAvailable:      func() bool { return false },
 		SetTUN:              a.SetTUN,
 		SetMode:             a.SetMode,
 		SelectProxy:         a.SelectProxy,
@@ -857,11 +971,15 @@ func (a *App) bindHooks() {
 	}
 }
 
-func (a *App) saveProfileMetadata(uid, name, description string) error {
+func (a *App) saveProfileMetadata(form ui.ProfileForm) error {
 	if a.profiles == nil {
 		return errors.New("订阅存储不可用")
 	}
-	if err := a.profiles.UpdateMetadata(uid, name, description); err != nil {
+	var auto *bool
+	if form.Type == "remote" {
+		auto = &form.Auto
+	}
+	if err := a.profiles.UpdateMetadata(form.UID, form.Name, form.Desc, auto, form.Interval); err != nil {
 		return err
 	}
 	a.loadProfiles()
@@ -887,14 +1005,21 @@ func (a *App) SelectProxy(group, node string) error {
 	if a == nil {
 		return nil
 	}
+	actual := node
 	if a.core != nil && a.core.Status().Running {
 		if err := a.core.Select(group, node); err != nil {
 			return err
 		}
+		if now, err := a.core.Selected(group); err == nil && now != "" {
+			actual = now
+		}
 	}
-	a.applyProxySelection(group, node)
+	a.applyProxySelection(group, actual)
 	if err := a.persistSelection(group, node); err != nil && a.model != nil {
 		a.model.Notice = err.Error()
+	}
+	if actual != node && a.model != nil {
+		a.model.Notice = "已设置节点 " + node + "，当前实际使用 " + actual
 	}
 	return nil
 }
@@ -943,7 +1068,12 @@ func (a *App) SetMode(mode string) error {
 	if a.kernelOptions != nil {
 		next := a.kernelOptions.Snapshot()
 		next.Mode = &mode
-		return a.applyKernelOptions(next)
+		if err := a.applyKernelOptions(next); err != nil {
+			return err
+		}
+		a.loadGroups()
+		a.refreshHome()
+		return nil
 	}
 	if a.dir == "" {
 		return nil

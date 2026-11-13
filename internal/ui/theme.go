@@ -82,6 +82,22 @@ func PaletteFor(dark bool) Palette {
 // Theme builds a mygo theme from the palette. Spacing is 4 so 8px is two
 // units, matching MUI's 8px step. Cards use an 8px radius. Scrollbars are
 // 8px. Shadows stay off; sticky group headers set their own.
+func PaletteWithPrefs(dark bool, prefs Prefs) Palette {
+	p := PaletteFor(dark)
+	for _, entry := range []struct {
+		raw string
+		dst *mygoui.Color
+	}{
+		{prefs.ThemePrimary, &p.Primary}, {prefs.ThemeSecondary, &p.Secondary}, {prefs.ThemeText, &p.Text}, {prefs.ThemeMuted, &p.TextMuted},
+		{prefs.ThemeInfo, &p.Info}, {prefs.ThemeWarning, &p.Warning}, {prefs.ThemeError, &p.Error}, {prefs.ThemeSuccess, &p.Success},
+	} {
+		if validHex(entry.raw) {
+			*entry.dst = mygoui.Hex(entry.raw)
+		}
+	}
+	return p
+}
+
 func (p Palette) Theme() *mygoui.Theme {
 	t := mygoui.LightTheme()
 	if p.Dark {

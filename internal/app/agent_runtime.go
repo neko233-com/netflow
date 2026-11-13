@@ -45,6 +45,9 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			return
 		}
 		switch method {
+		case "show":
+			a.showMain()
+			value = map[string]bool{"shown": true}
 		case "status":
 			value, callErr = a.agentStatus()
 		case "preview":

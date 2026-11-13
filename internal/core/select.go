@@ -33,7 +33,12 @@ func (c *Core) Selected(group string) (string, error) {
 	return sel.Now(), nil
 }
 
-func (c *Core) selector(group string) (*outboundgroup.Selector, error) {
+type selectableGroup interface {
+	outboundgroup.SelectAble
+	Now() string
+}
+
+func (c *Core) selector(group string) (selectableGroup, error) {
 	if c == nil {
 		return nil, errors.New("core is nil")
 	}
@@ -46,7 +51,7 @@ func (c *Core) selector(group string) (*outboundgroup.Selector, error) {
 	if !ok || p == nil {
 		return nil, fmt.Errorf("proxy group %s not found", group)
 	}
-	sel, ok := p.Adapter().(*outboundgroup.Selector)
+	sel, ok := p.Adapter().(selectableGroup)
 	if !ok || sel == nil {
 		return nil, fmt.Errorf("%s is not a selector", group)
 	}

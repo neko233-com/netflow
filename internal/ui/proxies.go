@@ -29,6 +29,10 @@ func (m *Model) proxyPage(c *mygoui.Context, pal Palette) {
 			m.setMode("direct")
 		}
 		if filledButton(c, pal, "链式代理", "chain-toggle", m.Chain.On) {
+			if m.Hooks.ChainAvailable != nil && !m.Hooks.ChainAvailable() {
+				m.Notice = "链式代理尚未接入内核"
+				return
+			}
 			if m.Chain.On {
 				m.Chain = ChainState{}
 			} else {
@@ -55,7 +59,9 @@ func (m *Model) proxyPage(c *mygoui.Context, pal Palette) {
 		mygoui.Row(c).FillWidth().AlignItems(mygoui.Start).Children(func() {
 			mygoui.Column(c).Grow(1).Padding(8).Gap(8).Children(func() {
 				for i := range m.Groups {
-					m.groupBlock(c, pal, i)
+					if !m.Groups[i].Hidden {
+						m.groupBlock(c, pal, i)
+					}
 				}
 			})
 			if m.Home.Mode == "rule" || m.Home.Mode == "global" {
@@ -66,6 +72,12 @@ func (m *Model) proxyPage(c *mygoui.Context, pal Palette) {
 }
 
 func (m *Model) proxyReason() EmptyReason {
+	count := 0
+	for _, g := range m.Groups {
+		if !g.Hidden {
+			count++
+		}
+	}
 	return ResolveProxyList(ProxyListInput{
 		Mode:            m.Home.Mode,
 		Loading:         m.ProxiesLoading,
@@ -73,7 +85,7 @@ func (m *Model) proxyReason() EmptyReason {
 		HasCurrent:      m.currentProfile() != nil,
 		CoreRunning:     m.Home.Running,
 		CoreError:       m.Home.Error != "",
-		GroupCount:      len(m.Groups),
+		GroupCount:      count,
 	})
 }
 
@@ -187,6 +199,9 @@ func (m *Model) letterNav(c *mygoui.Context, pal Palette) {
 	seen := map[string]bool{}
 	mygoui.Column(c).Width(28).Padding(8, 0).Gap(2).AlignItems(mygoui.Center).Children(func() {
 		for i := range m.Groups {
+			if m.Groups[i].Hidden {
+				continue
+			}
 			letter := GroupLetter(m.Groups[i].Name)
 			if letter == "" || seen[letter] {
 				continue
@@ -265,10 +280,14 @@ func (m *Model) groupTools(c *mygoui.Context, pal Palette, g *ProxyGroup) {
 		}
 		if textButton(c, pal, "测速", "延迟测试", "delay-"+g.Name) {
 			g.Open = true
-			for i := range g.Nodes {
-				if g.Nodes[i].Delay != DelayTesting {
-					g.Nodes[i].Delay = DelayTesting
+			names := make([]string, 0, len(g.Nodes))
+			for _, node := range g.Nodes {
+				if !node.Preset {
+					names = append(names, node.Name)
 				}
+			}
+			for _, name := range names {
+				m.testProxyDelay(g.Name, name, g.TestURL)
 			}
 		}
 		if textButton(c, pal, sortMark(g.Sort), SortLabel(g.Sort), "sort-"+g.Name) {
@@ -375,8 +394,8 @@ func (m *Model) nodeRow(c *mygoui.Context, pal Palette, g *ProxyGroup, n ProxyNo
 		}
 		showCheck := row.Hovered() && n.Delay != DelayTesting
 		if showCheck {
-			mygoui.Text(c, "检测").FontSize(12).TextColor(pal.Primary)
-		} else if n.Delay > 0 {
+			mygoui.Text(c, "选择").FontSize(12).TextColor(pal.Primary)
+		} else if n.Delay >= 0 {
 			mygoui.Text(c, DelayText(n.Delay, DelayTimeout)).FontSize(14).TextColor(pal.Color(DelayTone(n.Delay, DelayTimeout)))
 		} else if selected {
 			mygoui.Text(c, "✓").FontSize(14).TextColor(pal.Primary)
@@ -406,22 +425,13 @@ func (m *Model) selectNode(g *ProxyGroup, n ProxyNode) {
 		m.Home.Node.Delay = n.Delay
 		m.Home.Node.Group = g.Name
 	}
-	if !selectorGroup(g.Type) || m.Hooks.SelectProxy == nil {
+	if !SelectableGroup(g.Type) || m.Hooks.SelectProxy == nil {
 		return
 	}
 	if err := m.Hooks.SelectProxy(g.Name, n.Name); err != nil {
 		g.Now = prevNow
 		m.Home.Node = prevNode
 		m.Notice = err.Error()
-	}
-}
-
-func selectorGroup(kind string) bool {
-	switch strings.ToLower(kind) {
-	case "selector", "select":
-		return true
-	default:
-		return false
 	}
 }
 
