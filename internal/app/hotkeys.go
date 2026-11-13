@@ -104,7 +104,8 @@ func (a *App) invokeHotkey(key string) {
 	case "rule", "global", "direct":
 		err = a.SetMode(binding.action)
 	case "tun":
-		err = a.SetTUN(!a.settings.TUN)
+		a.requestTUN(!a.settings.TUN, a.tunActionDone)
+		return
 	case "lite":
 		err = a.setLightweight(!a.model.Prefs.Lightweight)
 	case "profile":

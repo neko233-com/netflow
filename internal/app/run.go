@@ -100,6 +100,7 @@ func (a *App) ready(quitting *bool) {
 		Hidden:         a.model.Prefs.SilentStart || a.model.Prefs.Lightweight,
 		Content:        mygoui.View(a.model.View),
 	})
+	a.model.Hooks.SetTUNAsync = a.requestTUN
 	a.model.Hooks.ImportURLAsync = a.importURLAsync
 	a.model.Hooks.UpdateProfileAsync = a.updateProfileAsync
 	a.model.Hooks.UpdateProfileViaProxyAsync = a.updateProfileViaProxyAsync
@@ -175,7 +176,7 @@ func (a *App) trayClick() {
 			a.tray.PopUpMenu()
 		}
 	case "tun":
-		_ = a.SetTUN(!a.settings.TUN)
+		a.requestTUN(!a.settings.TUN, a.tunActionDone)
 	case "disable":
 		return
 	default:

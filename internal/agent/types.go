@@ -14,6 +14,9 @@ type Profile struct {
 }
 type Status struct {
 	Running       bool          `json:"running"`
+	TUN           bool          `json:"tun"`
+	TUNPending    bool          `json:"tun_pending"`
+	TUNError      string        `json:"tun_error,omitempty"`
 	Mode          string        `json:"mode"`
 	ActiveProfile string        `json:"active_profile,omitempty"`
 	Revision      uint64        `json:"revision"`
@@ -104,4 +107,14 @@ type RulesResult struct {
 	Total  int    `json:"total"`
 	Offset int    `json:"offset"`
 	Rules  []Rule `json:"rules"`
+}
+
+// TunArgs requests a user-visible TUN transition. Enabling may prompt for UAC.
+type TunArgs struct {
+	Enabled *bool `json:"enabled" jsonschema:"true to enable TUN, false to disable"`
+}
+type TunResult struct {
+	Accepted bool `json:"accepted"`
+	Pending  bool `json:"pending"`
+	TUN      bool `json:"tun"`
 }

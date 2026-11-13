@@ -16,6 +16,8 @@ try {
     $env:GOOS = 'windows'; $env:GOARCH = 'amd64'
     & go build -o resources/windows-amd64/netflow-agent.exe ./cmd/netflow-agent
     if ($LASTEXITCODE -ne 0) { throw 'Windows agent build failed' }
+    & go build '-ldflags=-H=windowsgui' -o resources/windows-amd64/netflow-kernel-worker.exe ./cmd/netflow-kernel-worker
+    if ($LASTEXITCODE -ne 0) { throw 'Windows kernel worker build failed' }
     $env:GOOS = 'darwin'; $env:GOARCH = 'arm64'
     & go build -o resources/darwin-arm64/netflow-agent ./cmd/netflow-agent
     if ($LASTEXITCODE -ne 0) { throw 'macOS agent build failed' }

@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appdir"
 	"github.com/neko233-com/netflow/internal/profile"
 )
@@ -69,5 +71,31 @@ func TestPreviewRejectsTrailingAndOversizedInputBeforeBridge(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), "bridge") {
 			t.Fatalf("invalid preview input accepted: %v", err)
 		}
+	}
+}
+
+func TestTUNCommandUsesBridge(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, args json.RawMessage) (any, error) {
+		var in agent.TunArgs
+		if method != "tun" || json.Unmarshal(args, &in) != nil || in.Enabled == nil || !*in.Enabled {
+			t.Error("incorrect TUN request")
+		}
+		return agent.TunResult{Accepted: true, Pending: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	var out bytes.Buffer
+	if err = run([]string{"--config-dir", dir, "tun", "on"}, bytes.NewReader(nil), &out); err != nil {
+		t.Fatal(err)
+	}
+	var result agent.TunResult
+	if json.Unmarshal(out.Bytes(), &result) != nil || !result.Accepted || !result.Pending {
+		t.Fatalf("unexpected response %s", out.String())
+	}
+	if err = run([]string{"--config-dir", dir, "tun", "bad"}, bytes.NewReader(nil), &out); err == nil {
+		t.Fatal("invalid TUN argument accepted")
 	}
 }

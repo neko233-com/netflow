@@ -7,7 +7,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/profile"
 )
 
@@ -116,7 +115,7 @@ func TestSavedSelectionSkipsMissingNode(t *testing.T) {
 // under -race, so tests reload this core instead of starting another.
 var (
 	kernelOnce sync.Once
-	kernelCore *core.Core
+	kernelCore coreEngine
 	kernelErr  error
 )
 

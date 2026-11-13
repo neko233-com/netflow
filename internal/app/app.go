@@ -57,7 +57,7 @@ type App struct {
 	autostart autostart.Controller
 	tun       tun.Controller
 	svc       service.Manager
-	core      *core.Core
+	core      coreEngine
 
 	settings        appconfig.Settings
 	model           *ui.Model
@@ -84,6 +84,10 @@ type App struct {
 	profileAutoRetry map[string]time.Time
 	shortcuts        shortcutRegistrar
 	hotkeys          map[string]hotkeyBinding
+	privilegedTUN    bool
+	tunBusy          bool
+	tunLastError     string
+	localCoreFactory func() coreEngine
 }
 
 // New checks options and fills the M1 defaults. It does not start the
@@ -114,7 +118,7 @@ func New(opt Options) *App {
 		autostart: opt.AutoStart,
 		tun:       opt.TUN,
 		svc:       opt.Service,
-		core:      opt.Core,
+		core:      newSwitchableEngine(opt.Core),
 	}
 }
 
@@ -155,6 +159,7 @@ func (a *App) Prepare() error {
 		}
 	}
 	a.settings = settings
+	tunNeedsConsent := settings.TUN && !a.tunAllowed()
 	var tunPreflightErr error
 	if settings.TUN && a.tunAllowed() {
 		tunPreflightErr = a.checkTUNHost()
@@ -172,6 +177,8 @@ func (a *App) Prepare() error {
 	a.applySettings()
 	if tunPreflightErr != nil {
 		a.model.Notice = "虚拟网卡未启动: " + tunPreflightErr.Error()
+	} else if tunNeedsConsent {
+		a.model.Notice = "虚拟网卡未自动启动，请重新开启并授权"
 	}
 	for _, page := range ui.Pages() {
 		if page.Path == a.model.Prefs.StartPage {
@@ -285,7 +292,7 @@ func (a *App) applySettings() {
 	a.model.Home.SystemProxy = prefs.SystemProxy
 	a.model.Home.TUN = prefs.TUN
 	a.model.Home.AutoLaunch = prefs.AutoLaunch
-	a.model.Home.TUNAvailable = a.tunAllowed()
+	a.model.Home.TUNAvailable = a.tunRequestAvailable()
 	a.model.ServiceInstalled = a.serviceReady()
 }
 
@@ -464,7 +471,7 @@ func (a *App) setDirectTUN(on bool) error {
 	if previous == on && a.core.Status().TUN == on {
 		return nil
 	}
-	if a.tun != nil {
+	if a.tun != nil && !a.privilegedTUN {
 		if err := a.tun.Set(on); err != nil {
 			return err
 		}
@@ -473,7 +480,7 @@ func (a *App) setDirectTUN(on bool) error {
 	rollback := func(cause error) error {
 		a.settings.TUN = previous
 		var errorsFound []error
-		if a.tun != nil {
+		if a.tun != nil && !a.privilegedTUN {
 			if err := a.tun.Set(previous); err != nil {
 				errorsFound = append(errorsFound, err)
 			}
@@ -493,6 +500,11 @@ func (a *App) setDirectTUN(on bool) error {
 		return rollback(err)
 	}
 	a.refreshHome()
+	if !on {
+		if err := a.releaseWorkerTUN(); err != nil {
+			return fmt.Errorf("虚拟网卡已关闭，但%w", err)
+		}
+	}
 	return nil
 }
 
@@ -531,6 +543,12 @@ func (a *App) checkTUNHost() error {
 }
 
 func (a *App) tunAllowed() bool {
+	if a == nil {
+		return false
+	}
+	if a.privilegedTUN {
+		return true
+	}
 	if a.serviceReady() {
 		return true
 	}
@@ -638,6 +656,11 @@ func (a *App) refreshHome() {
 	}
 	h.Version = st.Version
 	h.Running = st.Running
+	if st.Error != "" {
+		h.Error = st.Error
+	} else if st.Running {
+		h.Error = ""
+	}
 	if st.MixedPort > 0 {
 		h.MixedPort = st.MixedPort
 	}
@@ -650,7 +673,7 @@ func (a *App) refreshHome() {
 	if a.serviceReady() {
 		h.TUN = a.settings.TUN
 	}
-	h.TUNAvailable = a.tunAllowed()
+	h.TUNAvailable = a.tunRequestAvailable()
 	if a.serviceReady() {
 		a.model.ServiceInstalled = true
 		if h.RunMode == "" || h.RunMode == ui.RunSidecar {

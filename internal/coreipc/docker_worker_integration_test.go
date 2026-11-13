@@ -1,0 +1,211 @@
+//go:build linux && integration
+
+package coreipc
+
+import (
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"syscall"
+	"testing"
+
+	"github.com/metacubex/bbolt"
+	"github.com/neko233-com/netflow/internal/tun"
+	"time"
+)
+
+func dockerState(t *testing.T, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("ip", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("ip: %s: %v", out, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
+}
+
+func TestDockerWorkerHelper(t *testing.T) {
+	if os.Getenv("NETFLOW_DOCKER_WORKER_CHILD") != "1" {
+		return
+	}
+	pipe := os.NewFile(3, "parent-kernel-pipe")
+	if pipe == nil {
+		t.Fatal("missing parent pipe")
+	}
+	if err := NewWorker().Serve(pipe); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The worker and client are separate processes. Closing the IPC connection
+// simulates a GUI crash and must remove the TUN and restore kernel routes.
+func TestDockerWorkerCleansTUNAfterDisconnect(t *testing.T) {
+	if os.Getenv("NETFLOW_DOCKER_TUN") != "1" {
+		t.Skip("requires explicit isolated Docker TUN test")
+	}
+	if _, err := os.Stat("/.dockerenv"); err != nil {
+		t.Fatal("refusing TUN test outside Docker")
+	}
+	routes := dockerState(t, "-4", "route", "show", "table", "all")
+	rules := dockerState(t, "-4", "rule", "show")
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := os.NewFile(uintptr(fds[0]), "parent")
+	child := os.NewFile(uintptr(fds[1]), "child")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestDockerWorkerHelper$", "-test.timeout=30s")
+	cmd.Env = append(os.Environ(), "NETFLOW_DOCKER_WORKER_CHILD=1")
+	cmd.ExtraFiles = []*os.File{child}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	child.Close()
+	defer func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() }()
+	nc, err := net.FileConn(parent)
+	parent.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(nc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	dir := t.TempDir()
+	// Simulate the desktop kernel retaining the original Bolt cache lock.
+	lockedCache, err := bbolt.Open(filepath.Join(dir, "cache.db"), 0600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockedCache.Close()
+	config := `mixed-port: 0
+port: 0
+socks-port: 0
+log-level: error
+mode: rule
+tun:
+  enable: false
+  device: other-client
+  stack: system
+  auto-route: false
+  auto-detect-interface: false
+rules:
+  - MATCH,DIRECT
+`
+	composed, err := tun.Compose([]byte(config), true, "netflow-ipc0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = string(composed)
+	peer := os.Getenv("NETFLOW_TUN_TEST_PEER")
+	if peer != "" {
+		if ip := net.ParseIP(peer); ip == nil || ip.To4() == nil || ip.IsLoopback() {
+			t.Fatal("invalid isolated peer address")
+		}
+		config = strings.Replace(config, "MATCH,DIRECT", "MATCH,REJECT", 1)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = client.Start(dir); err != nil {
+		t.Fatal(err)
+	}
+	if !client.Status().TUN {
+		t.Fatal("worker did not report TUN active")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "netflow-worker-cache.db")); err != nil {
+		t.Fatalf("worker cache missing while original cache is locked: %v", err)
+	}
+	if _, err = net.InterfaceByName("netflow-ipc0"); err != nil {
+		t.Fatalf("missing TUN: %v", err)
+	}
+	if peer != "" {
+		// Force this test destination through TUN; the core's outbound
+		// auto-detection must still deliver DIRECT traffic via eth0.
+		if out, err := exec.Command("ip", "route", "replace", peer+"/32", "dev", "netflow-ipc0").CombinedOutput(); err != nil {
+			t.Fatalf("test route: %s: %v", out, err)
+		}
+		httpClient := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}
+		url := "http://" + net.JoinHostPort(peer, "8080") + "/"
+		if resp, err := httpClient.Get(url); err == nil {
+			resp.Body.Close()
+			t.Fatal("REJECT rule did not block TUN traffic")
+		}
+		config = strings.Replace(config, "MATCH,REJECT", "MATCH,DIRECT", 1)
+		if err = os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err = client.Reload(); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := httpClient.Get(url)
+		if err != nil {
+			t.Fatalf("DIRECT TUN traffic: %v", err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != 200 || string(body) != "OK" {
+			t.Fatalf("peer response: %d %q %v", resp.StatusCode, body, err)
+		}
+		_, up, down := client.Connections()
+		if up == 0 || down == 0 {
+			t.Fatalf("TUN traffic counters did not advance: up=%d down=%d", up, down)
+		}
+	} else {
+		t.Log("no isolated peer supplied; TUN traffic forwarding not tested")
+	}
+	// Leave a delay probe in flight to ensure an abandoned RPC cannot keep
+	// the TUN worker alive after the UI pipe disappears.
+	probeStarted, releaseProbe := make(chan struct{}), make(chan struct{})
+	probeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(probeStarted)
+		<-releaseProbe
+	}))
+	defer probeServer.Close()
+	go func() { _, _ = client.TestDelay("", "DIRECT", probeServer.URL, 30*time.Second) }()
+	select {
+	case <-probeStarted:
+	case <-time.After(5 * time.Second):
+		close(releaseProbe)
+		t.Fatal("delay probe did not start")
+	}
+	if err = client.Close(); err != nil {
+		close(releaseProbe)
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- cmd.Wait() }()
+	select {
+	case err = <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		close(releaseProbe)
+		t.Fatal("worker did not exit after disconnect")
+	}
+	close(releaseProbe)
+	if _, err = net.InterfaceByName("netflow-ipc0"); err == nil {
+		t.Fatal("orphan TUN after worker exit")
+	}
+	if got := dockerState(t, "-4", "route", "show", "table", "all"); got != routes {
+		t.Fatalf("routes changed after worker exit:\nbefore %s\nafter %s", routes, got)
+	}
+	if got := dockerState(t, "-4", "rule", "show"); got != rules {
+		t.Fatalf("rules changed after worker exit:\nbefore %s\nafter %s", rules, got)
+	}
+}

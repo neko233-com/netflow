@@ -18,5 +18,17 @@ using a temporary configuration rather than the user's network settings.
 For MSI validation, inspect and install the newly built package for the current
 user, check its registration and file hashes, and preserve the user's data.
 
-These checks do not verify real system-proxy switching, TUN, code signatures,
-Apple notarization, or running the macOS app on a Mac.
+`pwsh -File scripts/test-docker-tun.ps1` uses a disposable Linux Docker
+container with its own network namespace, `NET_ADMIN` and `/dev/net/tun` to
+check real TUN creation, removal and restoration of IPv4 routes and rules,
+including when a separate kernel worker loses its parent connection. A second
+isolated container checks that REJECT blocks traffic and DIRECT forwards it.
+The test requires a Linux Docker engine and package-mirror access. It does not
+validate Windows Wintun, macOS utun or IPv6 routing.
+
+These checks do not verify Windows TUN, code signatures, Apple notarization,
+or running the macOS app on a Mac.
+
+The Windows background worker icon is generated from `resources/icon.ico`:
+`windres --input scripts/netflow-worker.rc --input-format rc --output-format coff --target pe-x86-64 --output cmd/netflow-kernel-worker/icon_windows_amd64.syso`.
+The checked-in resource object lets release builds run without windres.

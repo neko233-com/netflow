@@ -86,6 +86,7 @@ def main():
     mac = BUILD / "darwin-arm64" / "NetFlow.app"
     check_pe(windows / "NetFlow.exe")
     check_pe(windows / "netflow-agent.exe", subsystem=3)
+    check_pe(windows / "netflow-kernel-worker.exe")
     check_macho(mac / "Contents/Resources/netflow-agent")
     with (mac / "Contents" / "Info.plist").open("rb") as f:
         plist = plistlib.load(f)

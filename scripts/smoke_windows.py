@@ -44,11 +44,11 @@ def main():
     try:
         installed = os.environ.get("NETFLOW_SMOKE_INSTALLED") == "1"
         if installed:
-            for name in ("NetFlow.exe", "netflow-agent.exe"):
+            for name in ("NetFlow.exe", "netflow-agent.exe", "netflow-kernel-worker.exe"):
                 shutil.copyfile(Path(os.environ["LOCALAPPDATA"]) / "Programs" / "NetFlow" / name, sandbox / name)
         else:
             with zipfile.ZipFile(ARCHIVE) as z:
-                for name in ("NetFlow.exe", "netflow-agent.exe"):
+                for name in ("NetFlow.exe", "netflow-agent.exe", "netflow-kernel-worker.exe"):
                     with z.open("NetFlow/" + name) as src, (sandbox / name).open("wb") as dst:
                         shutil.copyfileobj(src, dst)
         origin = ThreadingHTTPServer(("127.0.0.1", 0), Origin)

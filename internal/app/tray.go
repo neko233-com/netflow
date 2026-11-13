@@ -303,11 +303,7 @@ func (a *App) trayActions() TrayActions {
 				a.model.Notice = err.Error()
 			}
 		},
-		SetTUN: func(on bool) {
-			if err := a.SetTUN(on); err != nil && a.model != nil {
-				a.model.Notice = err.Error()
-			}
-		},
+		SetTUN: func(on bool) { a.requestTUN(on, a.tunActionDone) },
 		SetLite: func(on bool) {
 			if err := a.setLightweight(on); err != nil && a.model != nil {
 				a.model.Notice = err.Error()

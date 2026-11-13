@@ -1,6 +1,6 @@
 # NetFlow
 
-NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 UI 和 [mihomo](https://github.com/MetaCubeX/mihomo) 的桌面代理客户端，目标是逐步实现 Clash Verge 的常用功能。界面不是网页，也不需要 WebView。内核目前使用 [基于 mihomo v1.19.33 的公开补丁版本](https://github.com/neko233-com/mihomo/tree/v1.19.33-netflow.4)，修复日志等级并发访问、控制器生命周期竞争以及 TUN 状态同步问题。
+NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 UI 和 [mihomo](https://github.com/MetaCubeX/mihomo) 的桌面代理客户端，目标是逐步实现 Clash Verge 的常用功能。界面不是网页，也不需要 WebView。内核目前使用 [基于 mihomo v1.19.33 的公开补丁版本](https://github.com/neko233-com/mihomo/tree/v1.19.33-netflow.6)，修复日志等级并发访问、控制器生命周期竞争以及 TUN 状态同步问题。
 
 **目前是开发预览版，尚未达到 Clash Verge 功能对等，也不建议替代现有稳定客户端。** 本项目从 [Clash Go](https://github.com/charlzyx/clash-go) 的 `0a0fd79` 版本开始，保留上游 MIT 许可和署名，正进行 Windows 适配。
 
@@ -12,7 +12,7 @@ NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 U
 
 - 已接入 mihomo 内核、订阅 URL 导入、配置激活、代理组切换、节点测速、代理与规则集合更新、模式切换、规则和连接显示、日志与托盘界面。部分功能仍需更完整的真实环境回归。
 - 系统接入聚焦虚拟网卡（TUN），界面和托盘不再提供系统代理开关。Windows 升级启动时只恢复仍由旧版 NetFlow 持有的系统代理备份，不覆盖其他应用的设置。
-- Windows 的 TUN 和特权服务尚未实现；权限不可用时会在内存中关闭订阅自带的 TUN 配置。特权服务在所有平台暂时禁用，避免影响上游 Clash Go 的服务。Linux 系统代理尚未实现，macOS 代理实现沿用上游但本项目尚未验证。不要在这些平台把预览状态当成正式支持。
+- 开发分支增加了 Windows TUN 的实验性独立特权内核：开启时会请求管理员授权，常见的活动 TUN 网卡会被拒绝以减少冲突；每次重新启动应用后需重新开启并授权。当前授权需要使用同一 Windows 账户。切换进程时两侧缓存独立，Fake-IP 缓存连续性尚未验证。该实现尚未在 Windows 上验证真实 Wintun、DNS、路由和异常恢复，不应当作生产支持；已发布的 v0.2.7 预览包不含此实现。macOS TUN 的特权服务尚未实现。Linux Docker 测试仅验证了独立网络命名空间中的 IPv4 TUN、规则和连接断开后的清理。
 - 支持本地文件选择或拖放导入、远程订阅后台下载、按订阅设置自动更新、批量更新与删除、重新激活订阅，并显示服务端提供的订阅流量及到期时间。可设置订阅下载的 User-Agent、超时、代理和证书验证；内核代理或系统手动 HTTP(S) 代理不可用时返回错误，不会改为直连。系统代理选项不处理 PAC、自动检测或绕过列表；同时启用时优先内核代理。删除时会保留当前订阅。Windows 开机自启通过当前用户注册表实现，静默启动依赖托盘；部分设置尚未接入。
 - 代理模式、局域网、IPv6、统一延迟、日志等级和监听端口可在界面中修改，作为全局覆写持久化，不修改订阅原文件；设置失败会尝试恢复。旧版 NetFlow 遗留的系统代理会在升级时安全恢复。链式代理尚未接入内核；其他设置页面中的部分控件仍只保存界面偏好，请以实际功能和错误提示为准。
 - DNS 覆写按订阅保存；设置中的编辑器接受 mihomo `dns` 段内容，应用时校验合并后的配置并在内核重载失败时尝试回滚。DNS 监听端口需要自行避免冲突。
@@ -24,7 +24,7 @@ NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 U
 
 ## Agent 规则重写
 
-启动 NetFlow 后，随安装包提供的 `netflow-agent.exe` 支持命令行和 MCP 标准输入输出接口。它通过当前用户配置目录中的临时令牌连接本机随机端口，不监听外网；应保护配置目录及令牌，Windows 文件权限继承自所在目录，同一账户下的进程也能调用该接口。退出程序后临时端点被删除。
+启动 NetFlow 后，随安装包提供的 `netflow-agent.exe` 支持命令行和 MCP 标准输入输出接口。开发分支的 `tun on` / `tun off` 会请求切换；若返回 `pending`，应通过 `status` 查看 `tun_pending` 与 `tun_error`，开启时可能弹出管理员授权。它通过当前用户配置目录中的临时令牌连接本机随机端口，不监听外网；应保护配置目录及令牌，Windows 文件权限继承自所在目录，同一账户下的进程也能调用该接口。退出程序后临时端点被删除。
 
 ```powershell
 $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"

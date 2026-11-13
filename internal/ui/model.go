@@ -23,6 +23,7 @@ type Hooks struct {
 	SystemDark                 func() bool
 	ApplyHotkeys               func(Prefs) error
 	SetTUN                     func(on bool) error
+	SetTUNAsync                func(on bool, done func(error))
 	SetMode                    func(mode string) error
 	SelectProxy                func(group, node string) error
 	UseProfile                 func(uid string) error
@@ -422,9 +423,28 @@ func (m *Model) setProxy(on bool) {
 }
 
 func (m *Model) setTUN(on bool) {
+	if m.Busy == "tun" {
+		return
+	}
 	if on && !m.Home.TUNAvailable {
 		m.Notice = "TUN 暂不可用：需要特权服务或管理员权限"
 		m.Home.TUN = false
+		return
+	}
+	if m.Hooks.SetTUNAsync != nil {
+		m.Busy = "tun"
+		m.Notice = "正在切换虚拟网卡模式…"
+		m.Hooks.SetTUNAsync(on, func(err error) {
+			m.Busy = ""
+			if err != nil {
+				m.Notice = err.Error()
+				return
+			}
+			m.Home.TUN, m.Prefs.TUN = on, on
+			if m.Notice == "正在切换虚拟网卡模式…" {
+				m.Notice = "虚拟网卡模式已更新"
+			}
+		})
 		return
 	}
 	prev := m.Home.TUN

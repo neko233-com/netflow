@@ -84,6 +84,27 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		if callErr = decodeStrict(args, &input); callErr == nil {
 			value, callErr = a.agentSelect(input)
 		}
+	case "tun":
+		var input agent.TunArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if input.Enabled == nil {
+				callErr = errors.New("enabled is required")
+			} else {
+				var completed, returned bool
+				var immediateErr error
+				a.requestTUN(*input.Enabled, func(err error) {
+					a.tunActionDone(err)
+					if !returned {
+						completed, immediateErr = true, err
+					}
+				})
+				returned = true
+				callErr = immediateErr
+				if !completed || callErr == nil {
+					value = agent.TunResult{Accepted: true, Pending: !completed, TUN: a.core.Status().TUN}
+				}
+			}
+		}
 	case "mode":
 		var input agent.ModeArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {

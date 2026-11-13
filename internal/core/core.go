@@ -26,6 +26,7 @@ const configFileName = "config.yaml"
 // and does not touch the mihomo singleton itself.
 type Status struct {
 	Running      bool
+	Error        string
 	Version      string
 	MixedPort    int
 	HTTPPort     int

@@ -26,11 +26,15 @@ func Compose(data []byte, enabled bool, device string) ([]byte, error) {
 		}
 	}
 	result := Use(config, true)
+	block := mapAny(result["tun"])
+	// The product's TUN switch promises system routing and must not inherit a
+	// subscription's disabled routing or outbound-interface detection.
+	block["auto-route"] = true
+	block["auto-detect-interface"] = true
 	if device != "" {
-		block := mapAny(result["tun"])
 		block["device"] = device
-		result["tun"] = block
 	}
+	result["tun"] = block
 	return yaml.Marshal(result)
 }
 
