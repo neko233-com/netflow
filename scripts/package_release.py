@@ -1,0 +1,122 @@
+"""Package and structurally validate MyGo's Windows and macOS build output."""
+
+import hashlib
+import json
+from pathlib import Path
+import plistlib
+import shutil
+import stat
+import struct
+import sys
+import tempfile
+import zipfile
+
+
+ROOT = Path(__file__).resolve().parent.parent
+BUILD = ROOT / "build" / "release-artifacts"
+VERSION = json.loads((ROOT / "mygo.json").read_text(encoding="utf-8"))["version"]
+OUT = ROOT / "build" / "releases" / VERSION
+
+
+def check_pe(path, require_amd64=True):
+    with path.open("rb") as f:
+        header = f.read(64)
+        if header[:2] != b"MZ":
+            raise ValueError(f"not a PE executable: {path}")
+        offset = struct.unpack_from("<I", header, 60)[0]
+        f.seek(offset)
+        pe = f.read(96)
+    machine = struct.unpack_from("<H", pe, 4)[0]
+    magic = struct.unpack_from("<H", pe, 24)[0]
+    if pe[:4] != b"PE\0\0" or machine not in (0x14C, 0x8664) or (require_amd64 and (machine != 0x8664 or magic != 0x20B)):
+        raise ValueError(f"unexpected PE architecture: {path}")
+    if magic not in (0x10B, 0x20B) or struct.unpack_from("<H", pe, 24 + 68)[0] != 2:
+        raise ValueError(f"not a Windows GUI executable: {path}")
+
+
+def check_macho(path):
+    with path.open("rb") as f:
+        header = f.read(32)
+    if len(header) < 32 or struct.unpack_from("<I", header)[0] != 0xFEEDFACF or struct.unpack_from("<I", header, 4)[0] != 0x100000C:
+        raise ValueError(f"not a 64-bit arm64 Mach-O: {path}")
+
+
+def zip_tree(source, target, prefix, executable, exclude=()):
+    with zipfile.ZipFile(target, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as z:
+        for file in sorted(source.rglob("*")):
+            if not file.is_file():
+                continue
+            if file.is_symlink():
+                raise ValueError(f"unexpected symlink: {file}")
+            rel = file.relative_to(source).as_posix()
+            if rel in exclude:
+                continue
+            info = zipfile.ZipInfo(f"{prefix}/{rel}", (2026, 1, 1, 0, 0, 0))
+            info.create_system = 3
+            mode = 0o755 if rel == executable else 0o644
+            info.external_attr = (stat.S_IFREG | mode) << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            with file.open("rb") as src, z.open(info, "w", force_zip64=True) as dst:
+                shutil.copyfileobj(src, dst, length=1024 * 1024)
+    with zipfile.ZipFile(target) as z:
+        bad = z.testzip()
+        if bad:
+            raise ValueError(f"invalid ZIP entry: {bad}")
+        entry = z.getinfo(f"{prefix}/{executable}")
+        if executable.startswith("Contents/MacOS/") and not ((entry.external_attr >> 16) & 0o111):
+            raise ValueError("the macOS executable lost its execute bit")
+
+
+def main():
+    windows = BUILD / "windows-amd64"
+    mac = BUILD / "darwin-arm64" / "NetFlow.app"
+    check_pe(windows / "NetFlow.exe")
+    with (mac / "Contents" / "Info.plist").open("rb") as f:
+        plist = plistlib.load(f)
+    executable = "Contents/MacOS/" + plist["CFBundleExecutable"]
+    check_macho(mac / executable)
+    if plist.get("CFBundleIdentifier") != "com.neko233.netflow":
+        raise ValueError("unexpected macOS bundle identifier")
+    for folder in (windows, mac / "Contents" / "Resources"):
+        for expected in ("LICENSE", "LICENSES", "README.md"):
+            if not (folder / expected).exists():
+                raise ValueError(f"missing bundled file: {folder / expected}")
+    OUT.mkdir(parents=True, exist_ok=True)
+    installers = sorted(windows.glob("*setup*.exe"))
+    if len(installers) > 1:
+        raise ValueError("multiple Windows installers found")
+    with tempfile.TemporaryDirectory(prefix=".packaging-", dir=OUT) as tmp:
+        stage = Path(tmp)
+        win_zip = stage / f"NetFlow-{VERSION}-windows-amd64-portable.zip"
+        mac_zip = stage / f"NetFlow-{VERSION}-macos-arm64.zip"
+        zip_tree(windows, win_zip, "NetFlow", "NetFlow.exe", exclude=[p.name for p in installers])
+        zip_tree(mac, mac_zip, "NetFlow.app", executable)
+        artifacts = [win_zip, mac_zip]
+        if installers:
+            check_pe(installers[0], require_amd64=False)
+            installer = stage / f"NetFlow-{VERSION}-windows-amd64-setup.exe"
+            shutil.copyfile(installers[0], installer)
+            artifacts.append(installer)
+        checksums = []
+        for file in sorted(artifacts):
+            h = hashlib.sha256()
+            with file.open("rb") as f:
+                for block in iter(lambda: f.read(1024 * 1024), b""):
+                    h.update(block)
+            checksums.append(f"{h.hexdigest()}  {file.name}")
+        sums = stage / "SHA256SUMS.txt"
+        sums.write_text("\n".join(checksums) + "\n", encoding="utf-8")
+        files = artifacts + [sums]
+        for file in files:
+            if (OUT / file.name).exists():
+                raise FileExistsError(OUT / file.name)
+        for file in files:
+            file.rename(OUT / file.name)
+            print(OUT / file.name)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, KeyError, struct.error) as error:
+        sys.exit(str(error))

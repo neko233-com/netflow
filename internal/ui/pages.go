@@ -63,7 +63,7 @@ type HomeState struct {
 }
 
 // AppVersion is the NetFlow version shown with a leading v.
-const AppVersion = "0.1.0"
+const AppVersion = "0.1.0-alpha.1"
 
 func pageByPath(path string) (Page, bool) {
 	for _, p := range Pages() {

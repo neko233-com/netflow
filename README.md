@@ -4,6 +4,10 @@ NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 U
 
 **目前是开发预览版，尚未达到 Clash Verge 功能对等，也不建议替代现有稳定客户端。** 本项目从 [Clash Go](https://github.com/charlzyx/clash-go) 的 `0a0fd79` 版本开始，保留上游 MIT 许可和署名，正进行 Windows 适配。
 
+## 下载
+
+从 [GitHub Releases](https://github.com/neko233-com/netflow/releases) 下载 Windows x64 安装程序或便携 ZIP，或 macOS Apple Silicon 的应用 ZIP。macOS 包在 Windows 上交叉构建，未在 Mac 上运行验证，也未进行 Apple 开发者签名和公证；Gatekeeper 可能阻止打开。Windows 文件同样未进行代码签名。
+
 ## 当前状态
 
 - 已接入 mihomo 内核、订阅 URL 导入、配置激活、代理组切换、模式切换、规则和连接显示、日志与托盘界面。部分功能仍需更完整的真实环境回归。
@@ -24,6 +28,8 @@ go build -o build/NetFlow.exe ./cmd/clash-go
 ```
 
 Windows 默认将用户数据保存在 `%APPDATA%\netflow`。开发时可通过绝对路径环境变量 `NETFLOW_CONFIG_DIR` 指定隔离的配置目录。配置、订阅链接、日志、代理备份及其他用户数据不应提交到仓库。
+
+在 Windows 上运行 `pwsh -File scripts/build-release.ps1` 可构建上述两个平台并生成 ZIP、Windows 安装程序和 SHA-256 校验文件。MyGo 如需下载 NSIS 会校验其固定版本的摘要。若只需便携包，可加 `-SkipInstaller`。打包脚本不创建 DMG，也不会替代 macOS 原机运行测试、签名或公证。更新依赖后运行 `python scripts/collect_licenses.py` 并检查 [第三方许可清单](LICENSES/third_party/README.md)。
 
 ## 许可与来源
 

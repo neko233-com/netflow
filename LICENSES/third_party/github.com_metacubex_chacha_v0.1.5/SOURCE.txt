@@ -1,0 +1,6 @@
+The v0.1.5 module contains the nested notices in this directory but does not
+contain a root LICENSE, although some source headers refer to one.
+LICENSE.upstream-later is the upstream root license added after v0.1.5 at:
+https://github.com/MetaCubeX/chacha/blob/7b981d42c3baca5a004e7b0ecfb9b67ee20e583a/LICENSE
+The v0.1.5 source is at:
+https://github.com/MetaCubeX/chacha/tree/07294f500ca8384015f6cc21311de7b6f093607d
