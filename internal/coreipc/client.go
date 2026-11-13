@@ -134,7 +134,18 @@ func (c *Client) Start(dir string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.short("Start", Apply{Directory: dir, Config: data}, &Empty{}); err != nil {
+	var capabilities Capabilities
+	if err := c.short("Capabilities", Empty{}, &capabilities); err != nil {
+		return err
+	}
+	var files []StageFile
+	if capabilities.IsolatedFiles {
+		files, err = snapshotDirectory(dir)
+		if err != nil {
+			return err
+		}
+	}
+	if err := c.call("Start", Apply{Directory: dir, Config: data, Files: files}, &Empty{}, 45*time.Second); err != nil {
 		return err
 	}
 	c.mu.Lock()
@@ -155,7 +166,18 @@ func (c *Client) Reload() error {
 	if err != nil {
 		return err
 	}
-	return c.short("Reload", Apply{Config: data}, &Empty{})
+	var capabilities Capabilities
+	if err := c.short("Capabilities", Empty{}, &capabilities); err != nil {
+		return err
+	}
+	var files []StageFile
+	if capabilities.IsolatedFiles {
+		files, err = snapshotDirectory(dir)
+		if err != nil {
+			return err
+		}
+	}
+	return c.call("Reload", Apply{Config: data, Files: files}, &Empty{}, 45*time.Second)
 }
 func (c *Client) Stop() error {
 	c.applyMu.Lock()
@@ -165,6 +187,11 @@ func (c *Client) Stop() error {
 func (c *Client) EffectiveConfig() ([]byte, error) {
 	var out ConfigResult
 	err := c.short("EffectiveConfig", Empty{}, &out)
+	return out.Value, err
+}
+func (c *Client) StageDirectory() (string, error) {
+	var out TextResult
+	err := c.short("StageDirectory", Empty{}, &out)
 	return out.Value, err
 }
 func (c *Client) Status() core.Status {

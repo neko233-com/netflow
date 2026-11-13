@@ -126,6 +126,13 @@ func LaunchWindows(ctx context.Context, exe string) (*Client, error) {
 		if state != windows.WAIT_OBJECT_0 {
 			return errors.New("特权内核未在规定时间内退出")
 		}
+		var exitCode uint32
+		if err := windows.GetExitCodeProcess(proc, &exitCode); err != nil {
+			return err
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("特权内核退出失败，代码 %d", exitCode)
+		}
 		return nil
 	}
 	transferred = true

@@ -31,7 +31,7 @@ func main() {
 	if err != nil {
 		os.Exit(3)
 	}
-	if err = coreipc.NewWorker().Serve(conn); err != nil {
+	if err = coreipc.NewElevatedWorker().Serve(conn); err != nil {
 		os.Exit(4)
 	}
 }

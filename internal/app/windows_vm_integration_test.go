@@ -5,8 +5,10 @@ package app
 import (
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -31,6 +33,9 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
+
+//go:embed testdata/GeoIP2-Country-Test.mmdb
+var vmGeoFixture []byte
 
 func vmCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 	c := exec.CommandContext(ctx, name, args...)
@@ -375,7 +380,62 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		t.Fatalf("unexpected external provider error: %v", err)
 	}
 	t.Log("elevated worker rejected inherited unsafe path exceptions")
+	stageDir, err := worker.StageDirectory()
+	if err != nil {
+		t.Fatalf("isolated worker directory: %v", err)
+	}
+	if _, err := os.ReadDir(stageDir); !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		t.Fatalf("filtered user could access privileged directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "unauthorized.txt"), []byte("x"), 0600); !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		t.Fatalf("filtered user could modify privileged directory: %v", err)
+	}
+	t.Log("filtered user cannot read or modify the privileged kernel directory")
+	// A provider path under the source directory can be a junction to another
+	// directory. The elevated worker must materialize it inside its own stage.
+	junction := filepath.Join(workerDir, "junction")
+	junctionContext, junctionCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	junctionOutput, junctionErr := vmCommand(junctionContext, "cmd.exe", "/c", "mklink", "/J", junction, unsafeDir).CombinedOutput()
+	junctionCancel()
+	if junctionErr != nil {
+		t.Fatalf("create test junction: %s %v", junctionOutput, junctionErr)
+	}
+	originalProvider, err := os.ReadFile(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	junctionConfig := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ntun: {enable: false}\nproxy-providers:\n  linked:\n    type: http\n    url: 'http://10.233.42.1:18765/v1/provider.yaml'\n    path: junction/provider.yaml\n    interval: 3600\nrules: ['MATCH,DIRECT']\n"
+	if err := os.WriteFile(filepath.Join(workerDir, "config.yaml"), []byte(junctionConfig), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Start(workerDir); err != nil {
+		t.Fatalf("start junction provider: %v", err)
+	}
+	if err := worker.UpdateProxyProvider("linked"); err != nil {
+		t.Fatalf("update junction provider: %v", err)
+	}
+	if err := worker.Stop(); err != nil {
+		t.Fatalf("stop junction provider: %v", err)
+	}
+	afterProvider, err := os.ReadFile(provider)
+	if err != nil || string(afterProvider) != string(originalProvider) {
+		t.Fatalf("provider update followed unprivileged junction: %v", err)
+	}
+	t.Log("provider update did not follow a junction in the user's directory")
+	if err := os.Mkdir(filepath.Join(workerDir, "providers"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workerDir, "Country.mmdb"), vmGeoFixture, 0600); err != nil {
+		t.Fatal(err)
+	}
+	localProvider := filepath.Join(workerDir, "providers", "nodes.yaml")
+	providerBody := "proxies:\n  - {name: test, type: ss, server: 127.0.0.1, port: 1, cipher: aes-128-gcm, password: test}\n"
+	if err := os.WriteFile(localProvider, []byte(providerBody), 0600); err != nil {
+		t.Fatal(err)
+	}
 	workerConfig := strings.Replace(config, "MATCH,REJECT", "MATCH,DIRECT", 1)
+	workerConfig = strings.Replace(workerConfig, "  - MATCH,DIRECT", "  - GEOIP,US,DIRECT\n  - MATCH,DIRECT", 1)
+	workerConfig += "\nproxy-providers:\n  local:\n    type: file\n    path: providers/nodes.yaml\n"
 	composed, err := tun.Compose([]byte(workerConfig), true, "NetFlowVM")
 	if err != nil {
 		t.Fatal(err)
@@ -394,6 +454,25 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	if err := worker.Start(workerDir); err != nil {
 		t.Fatalf("start worker: %v", err)
 	}
+	checkProvider := func(count int) {
+		t.Helper()
+		for _, p := range worker.ProxyProviders() {
+			if p.Name == "local" && p.Count == count {
+				return
+			}
+		}
+		t.Fatalf("isolated provider does not contain %d nodes: %+v", count, worker.ProxyProviders())
+	}
+	checkProvider(1)
+	providerBody += "  - {name: second, type: ss, server: 127.0.0.1, port: 2, cipher: aes-128-gcm, password: test}\n"
+	if err := os.WriteFile(localProvider, []byte(providerBody), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Reload(); err != nil {
+		t.Fatalf("reload isolated provider: %v", err)
+	}
+	checkProvider(2)
+	t.Log("unprivileged provider files were copied and refreshed inside the isolated worker")
 	for i, stack := range []string{"system", "mixed", "gvisor", "mips"} {
 		if i > 0 {
 			writeStack(stack)

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/metacubex/mihomo/component/profile/cachefile"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
@@ -25,6 +26,17 @@ type Selection struct{ Group, Node string }
 type Apply struct {
 	Directory string
 	Config    []byte
+	Files     []StageFile
+}
+type StageFile struct {
+	Path string
+	Data []byte
+}
+type Capabilities struct{ IsolatedFiles bool }
+type fileStage interface {
+	Directory() string
+	Apply([]StageFile) error
+	Close() error
 }
 type Delay struct {
 	Group, Node, URL string
@@ -51,14 +63,17 @@ type Logs struct{ Items []LogLine }
 // Worker serves exactly one private transport. When that transport closes, it
 // tears down the kernel so a lost UI cannot leave an orphan TUN process.
 type Worker struct {
-	kernel   *core.Core
-	applyMu  sync.Mutex
-	logMu    sync.Mutex
-	logs     []LogLine
-	sequence uint64
-	stopLogs func()
-	home     string
-	closed   bool
+	kernel          *core.Core
+	applyMu         sync.Mutex
+	logMu           sync.Mutex
+	logs            []LogLine
+	sequence        uint64
+	stopLogs        func()
+	home            string
+	closed          bool
+	stageFactory    func() (fileStage, error)
+	stage           fileStage
+	cacheConfigured bool
 }
 
 func NewWorker() *Worker {
@@ -122,6 +137,15 @@ func (w *Worker) Serve(c io.ReadWriteCloser) error {
 	w.applyMu.Lock()
 	w.closed = true
 	err := w.kernel.Stop()
+	if w.stage != nil {
+		if w.cacheConfigured {
+			if cache := cachefile.Cache(); cache.DB != nil {
+				err = errors.Join(err, cache.Close())
+			}
+		}
+		err = errors.Join(err, w.stage.Close())
+		w.stage = nil
+	}
 	w.applyMu.Unlock()
 	w.stopLogs()
 	return err
@@ -131,6 +155,21 @@ func validConfig(b []byte) error {
 	if len(b) == 0 || len(b) > MaxConfigBytes {
 		return errors.New("invalid effective kernel configuration size")
 	}
+	return nil
+}
+
+func (w *Worker) Capabilities(_ Empty, out *Capabilities) error {
+	out.IsolatedFiles = w.stageFactory != nil
+	return nil
+}
+
+func (w *Worker) StageDirectory(_ Empty, out *TextResult) error {
+	w.applyMu.Lock()
+	defer w.applyMu.Unlock()
+	if w.stage == nil {
+		return errors.New("特权内核隔离目录不可用")
+	}
+	out.Value = w.stage.Directory()
 	return nil
 }
 
@@ -154,12 +193,27 @@ func (w *Worker) Start(in Apply, out *Empty) error {
 		return errors.New("worker cannot change its configuration directory")
 	}
 	w.home = dir
+	kernelDir := dir
+	if w.stageFactory != nil {
+		if w.stage == nil {
+			stage, err := w.stageFactory()
+			if err != nil {
+				return err
+			}
+			w.stage = stage
+		}
+		if err := w.stage.Apply(in.Files); err != nil {
+			return err
+		}
+		kernelDir = w.stage.Directory()
+	}
 	// The UI's embedded kernel keeps its own cache open after Stop. A distinct
 	// worker cache avoids lock conflicts without moving subscription files.
-	C.SetCacheFile(filepath.Join(dir, "netflow-worker-cache.db"))
+	C.SetCacheFile(filepath.Join(kernelDir, "netflow-worker-cache.db"))
+	w.cacheConfigured = true
 	b := append([]byte(nil), in.Config...)
 	w.kernel.SetTransformer(func([]byte, string) ([]byte, error) { return b, nil })
-	return w.kernel.Start(in.Directory)
+	return w.kernel.Start(kernelDir)
 }
 func (w *Worker) Reload(in Apply, out *Empty) error {
 	if err := validConfig(in.Config); err != nil {
@@ -170,6 +224,11 @@ func (w *Worker) Reload(in Apply, out *Empty) error {
 	if w.closed {
 		return errors.New("kernel transport closed")
 	}
+	if w.stage != nil {
+		if err := w.stage.Apply(in.Files); err != nil {
+			return err
+		}
+	}
 	b := append([]byte(nil), in.Config...)
 	w.kernel.SetTransformer(func([]byte, string) ([]byte, error) { return b, nil })
 	return w.kernel.Reload()
@@ -179,7 +238,15 @@ func (w *Worker) Stop(_ Empty, out *Empty) error {
 	defer w.applyMu.Unlock()
 	return w.kernel.Stop()
 }
-func (w *Worker) Status(_ Empty, out *core.Status) error { *out = w.kernel.Status(); return nil }
+func (w *Worker) Status(_ Empty, out *core.Status) error {
+	w.applyMu.Lock()
+	defer w.applyMu.Unlock()
+	*out = w.kernel.Status()
+	if w.stageFactory != nil && out.Running {
+		out.ConfigDir = w.home
+	}
+	return nil
+}
 func (w *Worker) EffectiveConfig(_ Empty, out *ConfigResult) (err error) {
 	out.Value, err = w.kernel.EffectiveConfig()
 	return
