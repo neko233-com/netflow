@@ -36,7 +36,15 @@ func NewClient(c io.ReadWriteCloser) (*Client, error) {
 	}
 	return &Client{rpc: rpc.NewClient(c)}, nil
 }
-func (c *Client) Close() error          { return c.rpc.Close() }
+func (c *Client) Close() error {
+	c.closeOnce.Do(func() {
+		c.closeErr = c.rpc.Close()
+		if c.closeHook != nil {
+			c.closeErr = errors.Join(c.closeErr, c.closeHook())
+		}
+	})
+	return c.closeErr
+}
 func (c *Client) TransportError() error { c.mu.Lock(); defer c.mu.Unlock(); return c.transportErr }
 func (c *Client) call(method string, in, out any, timeout time.Duration) error {
 	done := c.rpc.Go("Kernel."+method, in, out, make(chan *rpc.Call, 1)).Done

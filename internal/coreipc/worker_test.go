@@ -1,6 +1,7 @@
 package coreipc
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -8,6 +9,21 @@ import (
 	"testing"
 	"time"
 )
+
+func TestClientCloseWaitsForWorkerOnce(t *testing.T) {
+	left, right := net.Pipe()
+	defer right.Close()
+	c, err := NewClient(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("worker did not exit")
+	calls := 0
+	c.closeHook = func() error { calls++; return want }
+	if !errors.Is(c.Close(), want) || !errors.Is(c.Close(), want) || calls != 1 {
+		t.Fatalf("close must wait once and preserve the worker error: calls=%d", calls)
+	}
+}
 
 func TestWorkerOverPrivateConnection(t *testing.T) {
 	t.Setenv("CI", "1")
