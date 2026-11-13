@@ -62,7 +62,9 @@ def main():
         (data / "config.yaml").write_text(
             f"mixed-port: {port}\nport: 0\nsocks-port: 0\nallow-lan: false\n"
             "mode: rule\nlog-level: error\nipv6: false\ngeo-auto-update: false\n"
-            "dns:\n  enable: false\ntun:\n  enable: false\nrules:\n  - MATCH,DIRECT\n",
+            "dns:\n  enable: false\ntun:\n  enable: false\n"
+            "proxy-groups:\n  - name: SmokeGroup\n    type: select\n    proxies: [DIRECT, REJECT]\n"
+            "rules:\n  - MATCH,DIRECT\n",
             encoding="utf-8",
         )
         env = dict(os.environ, NETFLOW_CONFIG_DIR=str(data), GOMAXPROCS="1")
@@ -107,6 +109,17 @@ def main():
                 time.sleep(0.2)
         if not status["running"]:
             raise RuntimeError("agent reported core stopped")
+        groups = call("groups")["groups"]
+        if not any(g["name"] == "SmokeGroup" and len(g["nodes"]) == 2 for g in groups):
+            raise RuntimeError("agent did not list real proxy group members")
+        if call("rules", "0", "1")["total"] < 1:
+            raise RuntimeError("agent did not list active rules")
+        if not call("select", "SmokeGroup", "REJECT")["ok"]:
+            raise RuntimeError("agent proxy selection failed")
+        if not call("mode", "global")["ok"] or not call("mode", "rule")["ok"]:
+            raise RuntimeError("agent mode changes failed")
+        if call("close-connection", "missing")["closed"]:
+            raise RuntimeError("agent reported a nonexistent connection as closed")
         change = {"scope":"global", "operation":"set", "layer":{"prepend":["IP-CIDR,127.0.0.1/32,REJECT"]}}
         proposal = call("preview", data=json.dumps(change))
         call("apply", proposal["proposal_id"])
@@ -197,11 +210,17 @@ def main():
             mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n"); mcp.stdin.flush()
             response = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
             names = {item["name"] for item in response["result"]["tools"]}
-            if names != {"netflow_status", "netflow_preview_rewrite", "netflow_apply_rewrite"}:
+            expected = {"netflow_status", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
+                        "netflow_select_proxy", "netflow_set_mode", "netflow_use_profile", "netflow_close_connection",
+                        "netflow_migration_preview", "netflow_migration_import", "netflow_migration_export"}
+            if names != expected:
                 raise RuntimeError(f"unexpected MCP tools: {names}")
             response = rpc({"jsonrpc":"2.0", "id":3, "method":"tools/call", "params":{"name":"netflow_status", "arguments":{}}})
             if response.get("result", {}).get("isError") or "error" in response:
                 raise RuntimeError(f"MCP status failed: {response}")
+            response = rpc({"jsonrpc":"2.0", "id":4, "method":"tools/call", "params":{"name":"netflow_proxy_groups", "arguments":{}}})
+            if response.get("result", {}).get("isError") or "error" in response:
+                raise RuntimeError(f"MCP proxy groups failed: {response}")
         finally:
             mcp.terminate(); mcp.wait(timeout=10)
         print(f"Windows {'installed' if installed else 'portable'}: routing, CLI global/connection rewrites and expiry, MCP handshake/status passed.")

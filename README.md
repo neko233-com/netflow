@@ -39,6 +39,22 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 
 预览验证配置并返回两分钟内有效的提案；配置或订阅变化后须重新预览。应用失败时尝试恢复旧规则。连接层根据源 IP、目标域名或 IP、端口及网络匹配**后续连接**，可能同时影响其他符合条件的连接；已建立的连接不能被重新路由，可显式选择关闭原连接。规则只在规则模式下控制路由。Agent 状态包含连接元数据，务必只授予可信程序访问权限。
 
+CLI 还提供 `groups`、`rules [偏移 [数量]]`、`select <组> <节点>`、`mode <rule|global|direct>`、`use-profile <订阅 ID>` 和 `close-connection <连接 ID>`；对应的 MCP 工具分别以 `netflow_` 开头。关闭不存在的连接会返回 `closed: false`。这些操作直接改变运行状态，规则覆写仍需要先预览再应用。
+
+## Clash Verge 迁移
+
+关闭 NetFlow 后，可用随安装包提供的命令行工具预览和导入 Clash Verge Rev 的配置目录或备份 ZIP：
+
+```powershell
+$agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
+$source = "$env:APPDATA\io.github.clash-verge-rev.clash-verge-rev"
+& $agent migrate-preview $source
+& $agent migrate-import $source
+& $agent migrate-export "$env:USERPROFILE\Desktop\netflow-verge-backup.zip"
+```
+
+导入会合并订阅，保留已有订阅、节点选择、流量信息、下载选项及可转换的规则；已有当前订阅不会被替换。原始 Verge 扩展会保存在 NetFlow 配置目录的私有存档中，其中脚本、合并、节点和代理组扩展不会在 NetFlow 自动执行或应用。迁出时会尝试恢复关联的原始扩展；未关联的全局扩展、临时连接规则和部分配置无法完整迁出，规则追加顺序也可能不同。迁出备份可能包含脚本和订阅凭据，目标 Verge 可能执行其中的脚本。系统代理、TUN 和开机自启不会自动启用。对应 MCP 工具是 `netflow_migration_preview`、`netflow_migration_import` 和 `netflow_migration_export`，迁入和迁出同样要求先关闭 NetFlow。迁出不会覆盖已有文件。
+
 ## 开发
 
 需要 Go 1.27.3（Go 可通过 `GOTOOLCHAIN=auto` 下载所需工具链）。Windows 开发示例：

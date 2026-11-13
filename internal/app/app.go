@@ -593,7 +593,9 @@ func (a *App) installCurrentProfile() error {
 		return nil
 	}
 	filePath, err := profileFilePath(a.dir, rel)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	body, err := os.ReadFile(filePath)
 	if err != nil {
 		return err
@@ -874,7 +876,11 @@ func (a *App) UseProfile(uid string) error {
 	if rel == "" {
 		return errors.New("订阅不存在")
 	}
-	body, err := os.ReadFile(filepath.Join(a.dir, rel))
+	filePath, err := profileFilePath(a.dir, rel)
+	if err != nil {
+		return err
+	}
+	body, err := os.ReadFile(filePath)
 	if err != nil {
 		return err
 	}

@@ -51,6 +51,8 @@ type CatalogOption struct {
 	TimeoutSeconds  int    `json:"timeout,omitempty"`
 	DNSEnabled      bool   `json:"dns_override_enabled,omitempty"`
 	DNSOverride     string `json:"dns_override,omitempty"`
+	VergeArchive    string `json:"verge_archive,omitempty"`
+	VergeUID        string `json:"verge_uid,omitempty"`
 }
 
 // File is profiles.json.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -44,28 +45,80 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			callErr = err
 			return
 		}
-		switch method {
-		case "show":
+		if method == "show" {
 			a.showMain()
 			value = map[string]bool{"shown": true}
-		case "status":
-			value, callErr = a.agentStatus()
-		case "preview":
-			var change agent.Change
-			if callErr = decodeStrict(args, &change); callErr == nil {
-				value, callErr = a.agentPreview(change)
-			}
-		case "apply":
-			var input agent.ApplyArgs
-			if callErr = decodeStrict(args, &input); callErr == nil {
-				value, callErr = a.agentApply(input.ProposalID)
-			}
-		default:
-			callErr = errors.New("unknown agent method")
+			return
 		}
+		value, callErr = a.agentCommand(method, args)
 	})
 	if !executed {
 		return nil, errors.New("desktop application is shutting down")
+	}
+	return value, callErr
+}
+
+func (a *App) agentCommand(method string, args json.RawMessage) (value any, callErr error) {
+	switch method {
+	case "status":
+		value, callErr = a.agentStatus()
+	case "preview":
+		var change agent.Change
+		if callErr = decodeStrict(args, &change); callErr == nil {
+			value, callErr = a.agentPreview(change)
+		}
+	case "apply":
+		var input agent.ApplyArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentApply(input.ProposalID)
+		}
+	case "groups":
+		value, callErr = a.agentGroups()
+	case "rules":
+		var input agent.RulesArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentRules(input)
+		}
+	case "select":
+		var input agent.SelectArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentSelect(input)
+		}
+	case "mode":
+		var input agent.ModeArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if a.core == nil || !a.core.Status().Running {
+				callErr = errors.New("core is not running")
+			} else {
+				callErr = a.SetMode(input.Mode)
+			}
+			value = agent.ActionResult{OK: callErr == nil}
+		}
+	case "use-profile":
+		var input agent.ProfileArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if a.core == nil || !a.core.Status().Running {
+				callErr = errors.New("core is not running")
+			} else {
+				callErr = a.UseProfile(input.ProfileID)
+			}
+			value = agent.ActionResult{OK: callErr == nil}
+		}
+	case "close-connection":
+		var input agent.ConnectionArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if input.ConnectionID == "" {
+				callErr = errors.New("connection id is required")
+			} else if a.core == nil || !a.core.Status().Running {
+				callErr = errors.New("core is not running")
+			} else {
+				var closed bool
+				closed, callErr = a.core.CloseExistingConnection(input.ConnectionID)
+				value = agent.CloseResult{Closed: closed}
+			}
+		}
+	default:
+		callErr = errors.New("unknown agent method")
 	}
 	return value, callErr
 }
@@ -76,7 +129,14 @@ func decodeStrict(raw json.RawMessage, out any) error {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	return decoder.Decode(out)
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("unexpected trailing JSON")
+	}
+	return nil
 }
 
 func (a *App) expiryLoop(stop <-chan struct{}) {

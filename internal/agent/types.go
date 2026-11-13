@@ -53,3 +53,55 @@ type ApplyResult struct {
 	ClosedConnection bool     `json:"closed_connection"`
 	Warnings         []string `json:"warnings,omitempty"`
 }
+
+type ProxyNode struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+	UDP  bool   `json:"udp"`
+}
+type ProxyGroup struct {
+	Name    string      `json:"name"`
+	Type    string      `json:"type"`
+	Current string      `json:"current"`
+	Nodes   []ProxyNode `json:"nodes"`
+}
+type GroupsResult struct {
+	Groups []ProxyGroup `json:"groups"`
+}
+type SelectArgs struct {
+	Group string `json:"group" jsonschema:"proxy group name"`
+	Node  string `json:"node" jsonschema:"member name"`
+}
+type ModeArgs struct {
+	Mode string `json:"mode" jsonschema:"rule, global, or direct"`
+}
+type ProfileArgs struct {
+	ProfileID string `json:"profile_id" jsonschema:"profile id"`
+}
+type ConnectionArgs struct {
+	ConnectionID string `json:"connection_id" jsonschema:"active connection id"`
+}
+type ActionResult struct {
+	OK       bool     `json:"ok"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+type CloseResult struct {
+	Closed bool `json:"closed"`
+}
+type MigrationPath struct {
+	Path string `json:"path" jsonschema:"absolute path to a Clash Verge directory or backup ZIP"`
+}
+type RulesArgs struct {
+	Offset int `json:"offset,omitempty" jsonschema:"zero-based offset"`
+	Limit  int `json:"limit,omitempty" jsonschema:"page size, 1 to 500; default 100"`
+}
+type Rule struct {
+	Type    string `json:"type"`
+	Payload string `json:"payload"`
+	Policy  string `json:"policy"`
+}
+type RulesResult struct {
+	Total  int    `json:"total"`
+	Offset int    `json:"offset"`
+	Rules  []Rule `json:"rules"`
+}

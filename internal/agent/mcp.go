@@ -2,8 +2,12 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/neko233-com/netflow/internal/appdir"
+	"github.com/neko233-com/netflow/internal/migration"
 )
 
 type Empty struct{}
@@ -29,6 +33,85 @@ func NewMCP(client Client) *mcp.Server {
 			var out ApplyResult
 			err := client.Call(ctx, "apply", args, &out)
 			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_proxy_groups", Description: "List live proxy groups, selected nodes, and resolved members without subscription credentials.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, GroupsResult, error) {
+			var out GroupsResult
+			err := client.Call(ctx, "groups", nil, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_rules", Description: "Read a page of active kernel rules in evaluation order.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in RulesArgs) (*mcp.CallToolResult, RulesResult, error) {
+		var out RulesResult
+		err := client.Call(ctx, "rules", in, &out)
+		return nil, out, err
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_select_proxy", Description: "Select a member of a selectable proxy group; affects subsequent connections and persists the choice when possible."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in SelectArgs) (*mcp.CallToolResult, ActionResult, error) {
+			var out ActionResult
+			err := client.Call(ctx, "select", in, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_set_mode", Description: "Set routing mode to rule, global, or direct; changes network routing."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in ModeArgs) (*mcp.CallToolResult, ActionResult, error) {
+			var out ActionResult
+			err := client.Call(ctx, "mode", in, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_use_profile", Description: "Activate an existing subscription profile and reload the core; may interrupt connections."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in ProfileArgs) (*mcp.CallToolResult, ActionResult, error) {
+			var out ActionResult
+			err := client.Call(ctx, "use-profile", in, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_close_connection", Description: "Close one identified active connection. Returns closed=false if it already ended.", Annotations: &mcp.ToolAnnotations{DestructiveHint: func() *bool { b := true; return &b }()}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in ConnectionArgs) (*mcp.CallToolResult, CloseResult, error) {
+			var out CloseResult
+			err := client.Call(ctx, "close-connection", in, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_migration_preview", Description: "Inspect a Clash Verge configuration directory or backup ZIP without modifying it. Reports unsupported extensions.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(_ context.Context, _ *mcp.CallToolRequest, in MigrationPath) (*mcp.CallToolResult, migration.Preview, error) {
+			if !filepath.IsAbs(in.Path) {
+				return nil, migration.Preview{}, errors.New("source path must be absolute")
+			}
+			source, err := migration.ReadVerge(in.Path)
+			if err != nil {
+				return nil, migration.Preview{}, err
+			}
+			return nil, source.Preview(), nil
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_migration_import", Description: "Import Clash Verge profiles into this NetFlow configuration. Close NetFlow first; existing profiles are preserved and unexecuted extensions are archived."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in MigrationPath) (*mcp.CallToolResult, migration.ImportResult, error) {
+			if !filepath.IsAbs(in.Path) || !filepath.IsAbs(client.Dir) {
+				return nil, migration.ImportResult{}, errors.New("source and config paths must be absolute")
+			}
+			source, err := migration.ReadVerge(in.Path)
+			if err != nil {
+				return nil, migration.ImportResult{}, err
+			}
+			if err = source.ValidateTarget(client.Dir); err != nil {
+				return nil, migration.ImportResult{}, err
+			}
+			lock, err := appdir.Acquire(client.Dir)
+			if err != nil {
+				return nil, migration.ImportResult{}, err
+			}
+			defer lock.Close()
+			result, err := source.ImportVerge(client.Dir)
+			return nil, result, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_migration_export", Description: "Export a new Clash Verge-compatible backup ZIP without overwriting a file. Close NetFlow first; output may contain credentials and preserved scripts."},
+		func(_ context.Context, _ *mcp.CallToolRequest, in MigrationPath) (*mcp.CallToolResult, migration.ExportResult, error) {
+			if !filepath.IsAbs(in.Path) || !filepath.IsAbs(client.Dir) {
+				return nil, migration.ExportResult{}, errors.New("destination and config paths must be absolute")
+			}
+			lock, err := appdir.Acquire(client.Dir)
+			if err != nil {
+				return nil, migration.ExportResult{}, err
+			}
+			defer lock.Close()
+			result, err := migration.ExportVerge(client.Dir, in.Path)
+			return nil, result, err
 		})
 	return s
 }
