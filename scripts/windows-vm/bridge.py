@@ -2,6 +2,9 @@
 import hashlib
 import json
 import os
+import re
+import socket
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -14,6 +17,51 @@ if len(RUN_ID) != 32 or any(c not in "0123456789abcdef" for c in RUN_ID):
 RESULTS.mkdir(parents=True, exist_ok=True)
 files = {}
 manifest = None
+
+def monitor_command(conn, command):
+    conn.sendall((command + "\n").encode("ascii"))
+    data = b""
+    while b"(qemu) " not in data:
+        block = conn.recv(65536)
+        if not block or len(data) > 8 * 1024 * 1024:
+            raise OSError("invalid QEMU monitor response")
+        data += block
+    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", data.decode("utf-8", "replace"))
+
+def detach_setup_media():
+    # SetupComplete has copied C:\OEM before FirstLogonCommands runs. Only
+    # unplug the unique QEMU USB setup disk, never the guest's system disk.
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.settimeout(5)
+        conn.connect("/run/shm/monitor.sock")
+        greeting = b""
+        while b"(qemu) " not in greeting:
+            part = conn.recv(65536)
+            if not part:
+                raise OSError("QEMU monitor closed")
+            greeting += part
+        tree = monitor_command(conn, "info qom-tree")
+        section = tree.split("/peripheral-anon (container)", 1)
+        if len(section) != 2:
+            raise ValueError("QEMU peripheral tree unavailable")
+        section = section[1].split("\n  /", 1)[0]
+        devices = re.findall(r"(?m)^    /(device\[\d+\]) \(usb-storage\)\s*$", section)
+        if not devices:
+            return
+        if len(devices) != 1:
+            raise ValueError("unexpected number of USB storage devices")
+        qtree = monitor_command(conn, "info qtree")
+        if qtree.count('drive = "setup"') != 1 or qtree.count("dev: usb-storage") != 1:
+            raise ValueError("USB storage is not the unique setup medium")
+        response = monitor_command(conn, "device_del /machine/peripheral-anon/" + devices[0])
+        if "Error" in response or "not found" in response:
+            raise OSError("QEMU refused to unplug setup medium")
+        for _ in range(20):
+            time.sleep(0.5)
+            if "(usb-storage)" not in monitor_command(conn, "info qom-tree"):
+                print("Windows guest: setup medium detached", flush=True)
+                return
+        raise OSError("QEMU setup medium did not detach")
 
 def load_manifest():
     global manifest
@@ -80,8 +128,11 @@ class Handler(BaseHTTPRequestHandler):
                 if event not in {"setup-start", "setup-refused", "setup-reboot", "agent-elevated", "agent-ready", "agent-update"}:
                     raise ValueError("invalid event")
                 print("Windows guest: " + event, flush=True)
+                if event == "setup-start":
+                    detach_setup_media()
                 return self.send_bytes(200, b"OK", "text/plain")
-            except (ValueError, UnicodeDecodeError):
+            except (ValueError, UnicodeDecodeError, OSError) as err:
+                print("Windows guest event failed: " + str(err), flush=True)
                 return self.send_error(400)
         if self.path != "/v1/result":
             return self.send_error(404)

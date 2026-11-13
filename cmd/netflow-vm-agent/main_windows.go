@@ -239,6 +239,29 @@ func updateAgent(m manifest, dir string) (bool, error) {
 	event("agent-update")
 	return true, nil
 }
+
+func pruneCache(dir string, m manifest) {
+	keep := map[string]bool{}
+	for name, a := range m.Files {
+		keep[a.SHA256+filepath.Ext(name)] = true
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || keep[name] || name == "result-"+m.ID+".json" {
+			continue
+		}
+		ext := filepath.Ext(name)
+		stem := strings.TrimSuffix(name, ext)
+		if ((ext == ".exe" || ext == ".msi") && validHex(stem, 64)) || (ext == ".json" && strings.HasPrefix(stem, "result-") && validHex(strings.TrimPrefix(stem, "result-"), 32)) {
+			// Only known content-addressed files are removed; no recursive cleanup.
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
+}
 func disposableGuest() bool {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DESCRIPTION\System\BIOS`, registry.QUERY_VALUE)
 	if err != nil {
@@ -293,6 +316,7 @@ func main() {
 			if updated {
 				return
 			}
+			pruneCache(root, m)
 			marker := filepath.Join(root, "result-"+m.ID+".json")
 			var r result
 			if data, e := os.ReadFile(marker); e == nil && len(data) < 2*1024*1024 && json.Unmarshal(data, &r) == nil && r.ID == m.ID {

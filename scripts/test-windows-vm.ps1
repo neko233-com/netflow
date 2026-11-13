@@ -68,6 +68,9 @@ try {
             $record = $result | ConvertFrom-Json
             $record.output
             if (-not $record.ok) { throw "Windows validation failed: $($record.error)" }
+            # Once a bootable disk has passed validation, the verified ISO is
+            # no longer needed. Keep the virtual disk and all result records.
+            docker exec $container sh -c 'if test -f /storage/windows.system || test -f /storage/windows.boot; then rm -f -- /storage/netflow-media/win10x64-enterprise-ltsc-eval.iso /storage/netflow-media/win10x64-enterprise-ltsc-eval.iso.aria2; fi'
             Write-Output "Windows validation passed: $runID"
             return
         }
