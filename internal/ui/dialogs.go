@@ -21,6 +21,7 @@ func (m *Model) overlay(c *mygoui.Context, pal Palette) {
 	m.batchDeleteDialog(c, pal)
 	m.ruleEditorDialog(c, pal)
 	m.updateDialog(c, pal)
+	m.profileQRDialog(c, pal)
 	m.profileForm(c, pal)
 	m.providerDialog(c, pal)
 	m.simpleDialog(c, pal, &m.Dialogs.Theme, "主题设置", m.themeBody)

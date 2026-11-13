@@ -349,7 +349,7 @@ func (m *Model) profileMenu(c *mygoui.Context, menu *mygoui.Menu, p *ProfileItem
 	}
 	if remote {
 		if menu.Item("分享二维码").Chosen() {
-			m.Notice = "订阅二维码"
+			m.openProfileQR(p.URL)
 		}
 	}
 	if menu.Item("编辑信息").Chosen() {

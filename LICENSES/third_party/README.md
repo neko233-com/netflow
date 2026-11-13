@@ -97,6 +97,7 @@ The original module paths and versions are listed below. Module source is availa
 - `github.com/sina-ghaderi/rabaead@v0.0.0-20220730151906-ab6e06b96e8c` — [github.com_sina-ghaderi_rabaead_v0.0.0-20220730151906-ab6e06b96e8c](github.com_sina-ghaderi_rabaead_v0.0.0-20220730151906-ab6e06b96e8c/)
 - `github.com/sina-ghaderi/rabbitio@v0.0.0-20220730151941-9ce26f4f872e` — [github.com_sina-ghaderi_rabbitio_v0.0.0-20220730151941-9ce26f4f872e](github.com_sina-ghaderi_rabbitio_v0.0.0-20220730151941-9ce26f4f872e/)
 - `github.com/sirupsen/logrus@v1.9.4` — [github.com_sirupsen_logrus_v1.9.4](github.com_sirupsen_logrus_v1.9.4/)
+- `github.com/skip2/go-qrcode@v0.0.0-20200617195104-da1b6568686e` — [github.com_skip2_go-qrcode_v0.0.0-20200617195104-da1b6568686e](github.com_skip2_go-qrcode_v0.0.0-20200617195104-da1b6568686e/)
 - `github.com/stangelandcl/ppmd@v0.1.1` — [github.com_stangelandcl_ppmd_v0.1.1](github.com_stangelandcl_ppmd_v0.1.1/)
 - `github.com/u-root/uio@v0.0.0-20230220225925-ffce2a382923` — [github.com_u-root_uio_v0.0.0-20230220225925-ffce2a382923](github.com_u-root_uio_v0.0.0-20230220225925-ffce2a382923/)
 - `github.com/ulikunitz/xz@v0.5.15` — [github.com_ulikunitz_xz_v0.5.15](github.com_ulikunitz_xz_v0.5.15/)

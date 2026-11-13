@@ -118,6 +118,9 @@ type Model struct {
 	DNSDraft          string
 	DNSProfileID      string
 	RuntimeConfig     string
+	QRImage           mygoui.ImageSource
+	QRURL             string
+	QROpen            bool
 	ForceTray         bool
 	Dialogs           dialogSet
 	Hooks             Hooks
