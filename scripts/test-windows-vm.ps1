@@ -32,7 +32,7 @@ try {
         docker volume create --label "$label=1" $volume | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Could not create validation volume' }
     }
-    foreach ($name in @('Dockerfile', 'entry.sh', 'download-media.sh', 'bridge.py', 'install.bat')) {
+    foreach ($name in @('Dockerfile', 'entry.sh', 'download-media.sh', 'bridge.py', 'test_monitor.py', 'install.bat')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot "windows-vm/$name") -Destination (Join-Path $context $name) -Force
     }
     $env:GOOS='windows'; $env:GOARCH='amd64'
@@ -55,6 +55,8 @@ try {
     [IO.File]::WriteAllText((Join-Path $payload 'ready'), 'ready', [Text.UTF8Encoding]::new($false))
     docker build -t netflow-windows-vm:local $context
     if ($LASTEXITCODE -ne 0) { throw 'Docker image build failed' }
+    docker run --rm --network none --cpus=1 --entrypoint python3 netflow-windows-vm:local /opt/netflow/test_monitor.py
+    if ($LASTEXITCODE -ne 0) { throw 'Setup-media safety test failed' }
     $runID = [guid]::NewGuid().ToString('N')
     $guestPassword = [guid]::NewGuid().ToString('N') + 'Aa1!'
     docker run -d --name $container --label "$label=1" --cpus=1 --memory=5g --device=/dev/kvm --mount "type=volume,source=$volume,target=/storage" --mount "type=bind,source=$payload,target=/payload,readonly" -e "NETFLOW_RUN_ID=$runID" -e USERNAME=NetFlowTest -e "PASSWORD=$guestPassword" netflow-windows-vm:local | Out-Null
