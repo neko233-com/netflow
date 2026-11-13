@@ -306,6 +306,7 @@ func main() {
 		return
 	}
 	for {
+		delay := 3 * time.Second
 		m, err := getManifest()
 		if err == nil {
 			updated, e := updateAgent(m, root)
@@ -320,14 +321,18 @@ func main() {
 			marker := filepath.Join(root, "result-"+m.ID+".json")
 			var r result
 			if data, e := os.ReadFile(marker); e == nil && len(data) < 2*1024*1024 && json.Unmarshal(data, &r) == nil && r.ID == m.ID {
-				_ = post(r)
+				if post(r) == nil {
+					delay = 10 * time.Second
+				}
 			} else {
+				event("test-start")
 				r = execute(m, root)
+				event("test-finished")
 				data, _ := json.Marshal(r)
 				_ = os.WriteFile(marker, data, 0600)
 				_ = post(r)
 			}
 		}
-		time.Sleep(3 * time.Second)
+		time.Sleep(delay)
 	}
 }

@@ -125,7 +125,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not 1 <= length <= 64:
                     raise ValueError("invalid event size")
                 event = self.rfile.read(length).decode("ascii")
-                if event not in {"setup-start", "setup-refused", "setup-reboot", "agent-elevated", "agent-ready", "agent-update"}:
+                if event not in {"setup-start", "setup-refused", "setup-reboot", "agent-elevated", "agent-ready", "agent-update", "test-start", "test-finished"}:
                     raise ValueError("invalid event")
                 print("Windows guest: " + event, flush=True)
                 if event == "setup-start":
