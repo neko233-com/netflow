@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import stat
 import struct
@@ -37,8 +38,21 @@ def check_pe(path, require_amd64=True):
 def check_macho(path):
     with path.open("rb") as f:
         header = f.read(32)
+        commands = f.read(struct.unpack_from("<I", header, 20)[0]) if len(header) == 32 else b""
     if len(header) < 32 or struct.unpack_from("<I", header)[0] != 0xFEEDFACF or struct.unpack_from("<I", header, 4)[0] != 0x100000C:
         raise ValueError(f"not a 64-bit arm64 Mach-O: {path}")
+    offset = 0
+    for _ in range(struct.unpack_from("<I", header, 16)[0]):
+        command, size = struct.unpack_from("<II", commands, offset)
+        if size < 8 or offset + size > len(commands):
+            raise ValueError("invalid Mach-O load command")
+        if command == 0x32 and size >= 24:  # LC_BUILD_VERSION
+            platform, minimum = struct.unpack_from("<II", commands, offset + 8)
+            if platform != 1:
+                raise ValueError("Mach-O does not target macOS")
+            return (minimum >> 16, (minimum >> 8) & 255, minimum & 255)
+        offset += size
+    raise ValueError("Mach-O has no macOS build version")
 
 
 def zip_tree(source, target, prefix, executable, exclude=()):
@@ -74,9 +88,21 @@ def main():
     with (mac / "Contents" / "Info.plist").open("rb") as f:
         plist = plistlib.load(f)
     executable = "Contents/MacOS/" + plist["CFBundleExecutable"]
-    check_macho(mac / executable)
+    minimum = check_macho(mac / executable)
     if plist.get("CFBundleIdentifier") != "com.neko233.netflow":
         raise ValueError("unexpected macOS bundle identifier")
+    plist_min = tuple(int(n) for n in plist["LSMinimumSystemVersion"].split("."))
+    if (plist_min + (0, 0, 0))[:3] < minimum:
+        raise ValueError(f"plist minimum {plist_min} is older than executable minimum {minimum}")
+    # Apple bundle version fields use numeric components; the pre-release
+    # suffix remains in the app UI, archive name, and GitHub release tag.
+    bundle_version = VERSION.split("-", 1)[0]
+    if not re.fullmatch(r"\d+\.\d+\.\d+", bundle_version):
+        raise ValueError("bundle version must have three numeric components")
+    plist["CFBundleVersion"] = bundle_version
+    plist["CFBundleShortVersionString"] = bundle_version
+    with (mac / "Contents" / "Info.plist").open("wb") as f:
+        plistlib.dump(plist, f, sort_keys=False)
     for folder in (windows, mac / "Contents" / "Resources"):
         for expected in ("LICENSE", "LICENSES", "README.md"):
             if not (folder / expected).exists():

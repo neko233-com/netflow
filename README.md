@@ -6,7 +6,7 @@ NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 U
 
 ## 下载
 
-从 [GitHub Releases](https://github.com/neko233-com/netflow/releases) 下载 Windows x64 安装程序或便携 ZIP，或 macOS Apple Silicon 的应用 ZIP。macOS 包在 Windows 上交叉构建，未在 Mac 上运行验证，也未进行 Apple 开发者签名和公证；Gatekeeper 可能阻止打开。Windows 文件同样未进行代码签名。
+从 [GitHub Releases](https://github.com/neko233-com/netflow/releases) 下载 Windows x64 安装程序或便携 ZIP，或 macOS 13 及以上 Apple Silicon 的应用 ZIP。macOS 包在 Windows 上交叉构建，未在 Mac 上运行验证，也未进行 Apple 开发者签名和公证；Gatekeeper 可能阻止打开。Windows 文件同样未进行代码签名。
 
 ## 当前状态
 
