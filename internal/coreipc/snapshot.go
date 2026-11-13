@@ -50,7 +50,7 @@ func snapshotDirectory(root string) ([]StageFile, error) {
 		}
 		if !strings.ContainsAny(rel, `/\`) {
 			switch strings.ToLower(rel) {
-			case "cache.db", "netflow-worker-cache.db", ".netflow.lock":
+			case "cache.db", "netflow-worker-cache.db", ".netflow.lock", ".netflow-stage-owner":
 				return nil
 			}
 		}

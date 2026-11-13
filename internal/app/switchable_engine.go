@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	mihomodns "github.com/metacubex/mihomo/dns"
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/rules"
@@ -211,6 +212,25 @@ func (s *switchableEngine) replace(next coreEngine, before func() error, commit 
 	if before != nil {
 		if err := before(); err != nil {
 			return rollback(err)
+		}
+	}
+	if source, ok := old.(interface {
+		ExportFakeIPState() (*mihomodns.FakeIPState, error)
+	}); ok {
+		state, err := source.ExportFakeIPState()
+		if err != nil {
+			return rollback(fmt.Errorf("读取 Fake-IP 状态失败: %w", err))
+		}
+		if state != nil {
+			dest, ok := next.(interface {
+				StageFakeIPState(*mihomodns.FakeIPState) error
+			})
+			if !ok {
+				return rollback(errors.New("新内核不支持 Fake-IP 状态交接"))
+			}
+			if err := dest.StageFakeIPState(state); err != nil {
+				return rollback(fmt.Errorf("准备 Fake-IP 状态失败: %w", err))
+			}
 		}
 	}
 	next.SetTransformer(s.transform)

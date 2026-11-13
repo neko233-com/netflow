@@ -12,6 +12,7 @@ import (
 
 	"github.com/metacubex/mihomo/component/profile/cachefile"
 	C "github.com/metacubex/mihomo/constant"
+	mihomodns "github.com/metacubex/mihomo/dns"
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/rules"
@@ -45,7 +46,9 @@ type Delay struct {
 type DelayResult struct{ Milliseconds int }
 type BoolResult struct{ Value bool }
 type TextResult struct{ Value string }
+type TextListResult struct{ Values []string }
 type ConfigResult struct{ Value []byte }
+type FakeIPStateResult struct{ State *mihomodns.FakeIPState }
 type Connections struct {
 	Items            []conn.Item
 	Upload, Download int64
@@ -172,6 +175,14 @@ func (w *Worker) StageDirectory(_ Empty, out *TextResult) error {
 	out.Value = w.stage.Directory()
 	return nil
 }
+func (w *Worker) CleanedStages(_ Empty, out *TextListResult) error {
+	w.applyMu.Lock()
+	defer w.applyMu.Unlock()
+	if stage, ok := w.stage.(interface{ CleanedStages() []string }); ok {
+		out.Values = stage.CleanedStages()
+	}
+	return nil
+}
 
 func (w *Worker) Start(in Apply, out *Empty) error {
 	if err := validConfig(in.Config); err != nil {
@@ -250,6 +261,13 @@ func (w *Worker) Status(_ Empty, out *core.Status) error {
 func (w *Worker) EffectiveConfig(_ Empty, out *ConfigResult) (err error) {
 	out.Value, err = w.kernel.EffectiveConfig()
 	return
+}
+func (w *Worker) ExportFakeIPState(_ Empty, out *FakeIPStateResult) (err error) {
+	out.State, err = w.kernel.ExportFakeIPState()
+	return err
+}
+func (w *Worker) StageFakeIPState(in FakeIPStateResult, out *Empty) error {
+	return w.kernel.StageFakeIPState(in.State)
 }
 func (w *Worker) Select(in Selection, out *Empty) error { return w.kernel.Select(in.Group, in.Node) }
 func (w *Worker) Selected(in Name, out *TextResult) (err error) {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
 	mihomodns "github.com/metacubex/mihomo/dns"
@@ -51,12 +52,14 @@ type ProxyNode struct {
 
 // Core controls the process-wide mihomo singleton.
 type Core struct {
-	mu        sync.Mutex
-	running   bool
-	dir       string
-	profileID string
-	transform func([]byte, string) ([]byte, error)
-	effective []byte
+	mu                sync.Mutex
+	running           bool
+	dir               string
+	profileID         string
+	transform         func([]byte, string) ([]byte, error)
+	effective         []byte
+	disableController bool
+	pendingFakeIP     *mihomodns.FakeIPState
 }
 
 // SetTransformer installs an in-memory transformation; the original config
@@ -72,6 +75,49 @@ func (c *Core) ProfileID() string      { c.mu.Lock(); defer c.mu.Unlock(); retur
 
 // New returns a core that is not running.
 func New() *Core { return &Core{} }
+
+// DisableExternalController is used by privileged kernel workers, which are
+// controlled only through their authenticated private IPC connection.
+func (c *Core) DisableExternalController() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.disableController = true
+}
+
+// ExportFakeIPState is valid after Stop: the DNS listener is closed but its
+// allocation table remains available until the process is torn down.
+func (c *Core) ExportFakeIPState() (*mihomodns.FakeIPState, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	mapper := resolver.DefaultHostMapper
+	if mapper == nil {
+		return nil, nil
+	}
+	enhancer, ok := mapper.(*mihomodns.ResolverEnhancer)
+	if !ok {
+		return nil, errors.New("无法读取 Fake-IP 映射状态")
+	}
+	state, err := enhancer.ExportFakeIPState()
+	if err != nil {
+		return nil, err
+	}
+	if state.IPv4 == nil && state.IPv6 == nil {
+		return nil, nil
+	}
+	return &state, nil
+}
+
+// StageFakeIPState installs state into the next DNS configuration before it
+// opens its DNS or TUN listeners.
+func (c *Core) StageFakeIPState(state *mihomodns.FakeIPState) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.running {
+		return errors.New("运行中的内核不能接收 Fake-IP 状态")
+	}
+	c.pendingFakeIP = state
+	return nil
+}
 
 // Start loads config.yaml from homeDir (writing DefaultConfig when the
 // file is absent) and applies it with hub.Parse. homeDir becomes
@@ -199,6 +245,7 @@ func (c *Core) ProviderProxies(name string) []ProxyNode {
 }
 
 func (c *Core) apply() error {
+	defer func() { c.pendingFakeIP = nil }()
 	homeDir := C.Path.HomeDir()
 	path := C.Path.Config()
 	if err := os.MkdirAll(homeDir, 0o700); err != nil {
@@ -231,8 +278,35 @@ func (c *Core) apply() error {
 	if err != nil {
 		return fmt.Errorf("disable external controller: %w", err)
 	}
-	if err := hub.Parse(suppressed); err != nil {
-		return fmt.Errorf("apply config: %w", err)
+	if c.pendingFakeIP == nil {
+		if err := hub.Parse(suppressed); err != nil {
+			return fmt.Errorf("apply config: %w", err)
+		}
+	} else {
+		safeConfig, err := executor.ParseWithBytes(suppressed)
+		if err != nil {
+			return fmt.Errorf("parse config: %w", err)
+		}
+		if safeConfig.DNS == nil {
+			return errors.New("Fake-IP 状态与 DNS 配置不兼容")
+		}
+		if state := c.pendingFakeIP.IPv4; state != nil {
+			if safeConfig.DNS.FakeIPPool == nil {
+				return errors.New("Fake-IP IPv4 状态与 DNS 配置不兼容")
+			}
+			if err := safeConfig.DNS.FakeIPPool.ImportSnapshot(*state); err != nil {
+				return fmt.Errorf("恢复 Fake-IP IPv4 状态: %w", err)
+			}
+		}
+		if state := c.pendingFakeIP.IPv6; state != nil {
+			if safeConfig.DNS.FakeIPPool6 == nil {
+				return errors.New("Fake-IP IPv6 状态与 DNS 配置不兼容")
+			}
+			if err := safeConfig.DNS.FakeIPPool6.ImportSnapshot(*state); err != nil {
+				return fmt.Errorf("恢复 Fake-IP IPv6 状态: %w", err)
+			}
+		}
+		hub.ApplyConfigWithRestoredFakeIP(safeConfig)
 	}
 	actual := executor.GetGeneral()
 	if err := verifyTUNState(cfg.General.Tun.Enable, actual.Tun.Enable); err != nil {
@@ -249,7 +323,9 @@ func (c *Core) apply() error {
 			return fmt.Errorf("%s proxy port %d could not be opened (actual %d)", port.name, port.want, port.got)
 		}
 	}
-	startExternalController(cfg.Controller.ExternalController, cfg.Controller.Secret, cfg.General.LogLevel == log.DEBUG)
+	if !c.disableController {
+		startExternalController(cfg.Controller.ExternalController, cfg.Controller.Secret, cfg.General.LogLevel == log.DEBUG)
+	}
 	c.effective = append(c.effective[:0], data...)
 	return nil
 }

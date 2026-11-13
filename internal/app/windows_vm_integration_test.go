@@ -203,8 +203,14 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	})}
 	go func() { _ = dnsServer.ActivateAndServe() }()
 	defer dnsServer.Shutdown()
+	dnsListener, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsAddress := dnsListener.LocalAddr().String()
+	dnsListener.Close()
 	dir := t.TempDir()
-	config := fmt.Sprintf("mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\nipv6: false\nmode: rule\ndns:\n  enable: true\n  enhanced-mode: fake-ip\n  nameserver: ['%s']\ntun:\n  enable: false\n  stack: system\n  auto-route: true\n  auto-detect-interface: true\nrules:\n  - MATCH,REJECT\n", packet.LocalAddr().String())
+	config := fmt.Sprintf("mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\nipv6: false\nmode: rule\nprofile: {store-fake-ip: true}\ndns:\n  enable: true\n  listen: '%s'\n  enhanced-mode: fake-ip\n  nameserver: ['%s']\ntun:\n  enable: false\n  stack: system\n  auto-route: true\n  auto-detect-interface: true\nrules:\n  - MATCH,REJECT\n", dnsAddress, packet.LocalAddr().String())
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -251,6 +257,22 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		data, _ := os.ReadFile(filepath.Join(dir, "gui.log"))
 		t.Fatalf("installed GUI did not start agent: %v status=%+v log=%s", err, s, data)
 	}
+	lookupFake := func(name, server string) string {
+		t.Helper()
+		query := new(dns.Msg)
+		query.SetQuestion(name, dns.TypeA)
+		answer, _, e := (&dns.Client{Net: "udp", Timeout: 5 * time.Second}).Exchange(query, server)
+		if e != nil || len(answer.Answer) == 0 {
+			t.Fatalf("fake-IP lookup for %s: %v", name, e)
+		}
+		record, ok := answer.Answer[0].(*dns.A)
+		if !ok || !strings.HasPrefix(record.A.String(), "198.18.") {
+			t.Fatalf("unexpected fake IP for %s: %+v", name, answer.Answer)
+		}
+		return record.A.String()
+	}
+	alpha := lookupFake("alpha.netflow-test.example.", dnsAddress)
+	beta := lookupFake("beta.netflow-test.example.", dnsAddress)
 	if out, e := call("tun", "on"); e != nil {
 		t.Fatalf("TUN on request: %s %v", out, e)
 	}
@@ -266,6 +288,10 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		t.Fatalf("TUN did not start: %+v %v", s, err)
 	}
 	t.Log("filtered GUI launched elevated worker and reported TUN active")
+	if lookupFake("beta.netflow-test.example.", dnsAddress) != beta || lookupFake("alpha.netflow-test.example.", dnsAddress) != alpha {
+		t.Fatal("Fake-IP mappings changed when switching to the privileged worker")
+	}
+	t.Log("persistent Fake-IP mappings survived the switch to the privileged worker")
 	query := new(dns.Msg)
 	query.SetQuestion("netflow-test.example.", dns.TypeA)
 	answer, _, err := (&dns.Client{Net: "udp", Timeout: 5 * time.Second}).Exchange(query, "8.8.8.8:53")
@@ -318,6 +344,10 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		t.Fatalf("TUN shutdown did not restore networking: status=%+v error=%v\nroutes before=%v after=%v\nDNS before=%v after=%v", s, err, beforeRoutes, routes, beforeDNS, servers)
 	}
 	t.Log("original IPv4/IPv6 routes and adapter DNS restored")
+	if lookupFake("netflow-test.example.", dnsAddress) != fakeIP || lookupFake("alpha.netflow-test.example.", dnsAddress) != alpha || lookupFake("beta.netflow-test.example.", dnsAddress) != beta {
+		t.Fatal("Fake-IP mappings changed when returning to the desktop kernel")
+	}
+	t.Log("persistent Fake-IP mappings survived the switch back to the desktop kernel")
 	if out, e := call("tun", "on"); e != nil {
 		t.Fatalf("second TUN on: %s %v", out, e)
 	}
@@ -436,6 +466,13 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	workerConfig := strings.Replace(config, "MATCH,REJECT", "MATCH,DIRECT", 1)
 	workerConfig = strings.Replace(workerConfig, "  - MATCH,DIRECT", "  - GEOIP,US,DIRECT\n  - MATCH,DIRECT", 1)
 	workerConfig += "\nproxy-providers:\n  local:\n    type: file\n    path: providers/nodes.yaml\n"
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	controllerAddress := listener.Addr().String()
+	listener.Close()
+	workerConfig += "external-controller: " + strconv.Quote(controllerAddress) + "\nsecret: test-controller-secret\n"
 	composed, err := tun.Compose([]byte(workerConfig), true, "NetFlowVM")
 	if err != nil {
 		t.Fatal(err)
@@ -454,6 +491,11 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	if err := worker.Start(workerDir); err != nil {
 		t.Fatalf("start worker: %v", err)
 	}
+	if conn, err := net.DialTimeout("tcp4", controllerAddress, time.Second); err == nil {
+		conn.Close()
+		t.Fatal("privileged kernel exposed an external controller")
+	}
+	t.Log("privileged kernel did not expose the configured external controller")
 	checkProvider := func(count int) {
 		t.Helper()
 		for _, p := range worker.ProxyProviders() {
@@ -514,4 +556,146 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	}
 	waitRestored("worker disconnect")
 	t.Log("worker disconnect restored IPv4/IPv6 routes and DNS")
+
+	launchWorker := func() *coreipc.Client {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		client, err := coreipc.LaunchWindows(ctx, filepath.Join(install, "netflow-kernel-worker.exe"))
+		if err != nil {
+			t.Fatalf("launch test worker: %v", err)
+		}
+		return client
+	}
+	containsPath := func(paths []string, want string) bool {
+		for _, path := range paths {
+			if strings.EqualFold(filepath.Clean(path), filepath.Clean(want)) {
+				return true
+			}
+		}
+		return false
+	}
+	victim := launchWorker()
+	defer victim.Close()
+	if err := victim.Start(workerDir); err != nil {
+		t.Fatalf("start worker for forced termination: %v", err)
+	}
+	victimStage, err := victim.StageDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	observerDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(observerDir, "config.yaml"), []byte("mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\ntun: {enable: false}\nrules: ['MATCH,DIRECT']\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	observer := launchWorker()
+	if err := observer.Start(observerDir); err != nil {
+		observer.Close()
+		t.Fatalf("start active-stage observer: %v", err)
+	}
+	cleaned, err := observer.CleanedStages()
+	if err != nil || containsPath(cleaned, victimStage) {
+		observer.Close()
+		t.Fatalf("active worker stage was considered abandoned: %v %v", cleaned, err)
+	}
+	if err := observer.Close(); err != nil {
+		t.Fatalf("close observer: %v", err)
+	}
+	if err := coreipc.TerminateWorkerForIntegration(victim); err != nil {
+		t.Fatalf("terminate isolated worker: %v", err)
+	}
+	if err := victim.Close(); err == nil {
+		t.Fatal("forced worker termination was not reported")
+	}
+	waitRestored("forced worker termination")
+	cleaner := launchWorker()
+	defer cleaner.Close()
+	if err := cleaner.Start(observerDir); err != nil {
+		t.Fatalf("start abandoned-stage cleaner: %v", err)
+	}
+	cleaned, err = cleaner.CleanedStages()
+	if err != nil || !containsPath(cleaned, victimStage) {
+		t.Fatalf("abandoned worker stage was not cleaned: %v %v", cleaned, err)
+	}
+	if err := cleaner.Close(); err != nil {
+		t.Fatalf("close cleaner: %v", err)
+	}
+	t.Log("forced worker termination restored networking; the next worker cleaned its abandoned private stage without touching an active stage")
+
+	// Repeat only the handoff with the default in-memory cache; the full TUN
+	// stack and crash tests above use persistent fake-IP storage.
+	memoryDir := t.TempDir()
+	memoryConfig := strings.Replace(config, "store-fake-ip: true", "store-fake-ip: false", 1)
+	if err := os.WriteFile(filepath.Join(memoryDir, "config.yaml"), []byte(memoryConfig), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryDir, "settings.json"), []byte(`{"prefs":"{\"SilentStart\":true}"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	memoryContext, stopMemory := context.WithCancel(context.Background())
+	defer stopMemory()
+	memoryGUI := vmCommand(memoryContext, filepath.Join(install, "NetFlow.exe"))
+	memoryGUI.Env = append(os.Environ(), "NETFLOW_CONFIG_DIR="+memoryDir, "GOMAXPROCS=1")
+	memoryLog, err := os.Create(filepath.Join(memoryDir, "gui.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer memoryLog.Close()
+	memoryGUI.Stdout, memoryGUI.Stderr = memoryLog, memoryLog
+	if err := memoryGUI.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = memoryGUI.Process.Kill(); _ = memoryGUI.Wait() }()
+	memoryCall := func(args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return vmCommand(ctx, agentExe, append([]string{"--config-dir", memoryDir}, args...)...).CombinedOutput()
+	}
+	memoryStatus := func() (agent.Status, error) {
+		var result agent.Status
+		out, err := memoryCall("status")
+		if err == nil {
+			err = json.Unmarshal(out, &result)
+		}
+		return result, err
+	}
+	deadline = time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		s, err = memoryStatus()
+		if err == nil && s.Running {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil || !s.Running {
+		data, _ := os.ReadFile(filepath.Join(memoryDir, "gui.log"))
+		t.Fatalf("memory-cache GUI startup: %+v %v %s", s, err, data)
+	}
+	memoryA := lookupFake("memory-a.netflow-test.example.", dnsAddress)
+	memoryB := lookupFake("memory-b.netflow-test.example.", dnsAddress)
+	for _, enabled := range []bool{true, false} {
+		action := "off"
+		if enabled {
+			action = "on"
+		}
+		if out, e := memoryCall("tun", action); e != nil {
+			t.Fatalf("memory-cache TUN %s: %s %v", action, out, e)
+		}
+		deadline = time.Now().Add(90 * time.Second)
+		for time.Now().Before(deadline) {
+			s, err = memoryStatus()
+			if err == nil && !s.TUNPending && (s.TUN == enabled || s.TUNError != "") {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if err != nil || s.TUN != enabled || s.TUNError != "" {
+			t.Fatalf("memory-cache TUN %s: %+v %v", action, s, err)
+		}
+		if lookupFake("memory-b.netflow-test.example.", dnsAddress) != memoryB || lookupFake("memory-a.netflow-test.example.", dnsAddress) != memoryA {
+			t.Fatalf("in-memory Fake-IP changed after TUN %s", action)
+		}
+	}
+	waitRestored("memory-cache TUN shutdown")
+	t.Log("in-memory Fake-IP mappings survived both TUN switches")
 }

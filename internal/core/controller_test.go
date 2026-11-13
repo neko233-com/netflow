@@ -2,12 +2,39 @@ package core
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestDisabledExternalControllerStaysClosedOnReload(t *testing.T) {
+	dir := t.TempDir()
+	addr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	config := fmt.Sprintf("mixed-port: 0\nport: 0\nsocks-port: 0\nexternal-controller: %s\nsecret: test-secret\nrules: ['MATCH,DIRECT']\n", addr)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := New()
+	c.DisableExternalController()
+	if err := c.Start(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Stop() })
+	for i := 0; i < 2; i++ {
+		if i == 1 {
+			if err := c.Reload(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+			conn.Close()
+			t.Fatal("disabled controller accepted a connection")
+		}
+	}
+}
 
 func TestExternalControllerListens(t *testing.T) {
 	dir := t.TempDir()

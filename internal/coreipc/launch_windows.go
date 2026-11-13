@@ -117,6 +117,7 @@ func LaunchWindows(ctx context.Context, exe string) (*Client, error) {
 		_ = windows.TerminateProcess(proc, 1)
 		return nil, err
 	}
+	client.workerPID = pid
 	client.closeHook = func() error {
 		defer windows.CloseHandle(proc)
 		state, waitErr := windows.WaitForSingleObject(proc, 10000)

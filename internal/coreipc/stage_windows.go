@@ -22,23 +22,32 @@ import (
 func NewElevatedWorker() *Worker {
 	w := NewWorker()
 	w.stageFactory = createWindowsStage
+	w.kernel.DisableExternalController()
 	return w
 }
 
 type windowsStage struct {
-	dir    string
-	parent windows.Handle
-	handle windows.Handle
-	files  map[string]string
-	hashes map[string][32]byte
+	dir     string
+	parent  windows.Handle
+	handle  windows.Handle
+	files   map[string]string
+	hashes  map[string][32]byte
+	cleaned []string
 }
 
-func openLockedDirectory(path string) (windows.Handle, error) {
+const stageMarkerName = ".netflow-stage-owner"
+const stageMarkerContent = "NetFlow protected kernel stage v1\n"
+
+func openLockedDirectory(path string, deleteAccess bool) (windows.Handle, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return 0, err
 	}
-	h, err := windows.CreateFile(name, windows.FILE_READ_ATTRIBUTES|windows.READ_CONTROL, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	access := uint32(windows.FILE_READ_ATTRIBUTES | windows.READ_CONTROL)
+	if deleteAccess {
+		access |= windows.DELETE
+	}
+	h, err := windows.CreateFile(name, access, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -53,6 +62,160 @@ func openLockedDirectory(path string) (windows.Handle, error) {
 	return h, nil
 }
 
+func verifyStageSecurity(h windows.Handle) error {
+	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return err
+	}
+	owner, _, err := sd.Owner()
+	admins, aerr := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	system, serr := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	control, _, cerr := sd.Control()
+	acl, _, derr := sd.DACL()
+	if err != nil || aerr != nil || serr != nil || cerr != nil || derr != nil || owner == nil || !owner.Equals(admins) || control&windows.SE_DACL_PROTECTED == 0 || acl == nil || acl.AceCount != 2 {
+		return errors.New("特权内核目录访问控制不安全")
+	}
+	var haveAdmins, haveSystem bool
+	for i := uint32(0); i < uint32(acl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(acl, i, &ace); err != nil || ace == nil || ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE || ace.Header.AceFlags&(windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE) != windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE {
+			return errors.New("特权内核目录访问控制不安全")
+		}
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		switch {
+		case sid.Equals(admins):
+			haveAdmins = true
+		case sid.Equals(system):
+			haveSystem = true
+		default:
+			return errors.New("特权内核目录包含意外的访问者")
+		}
+	}
+	if !haveAdmins || !haveSystem {
+		return errors.New("特权内核目录访问控制不完整")
+	}
+	return nil
+}
+
+func safeStageRoot(path, parent string) bool {
+	if !filepath.IsAbs(path) || !filepath.IsAbs(parent) {
+		return false
+	}
+	base := filepath.Base(path)
+	nonce := strings.TrimPrefix(base, "NetFlowKernel-")
+	_, err := hex.DecodeString(nonce)
+	return strings.EqualFold(filepath.Dir(path), parent) && strings.HasPrefix(base, "NetFlowKernel-") && len(nonce) == 32 && err == nil
+}
+
+// clearLockedStage keeps the directory handle open without FILE_SHARE_DELETE,
+// so no other process can swap its root while privileged cleanup is running.
+func clearLockedStage(dir, parent string, h windows.Handle) error {
+	closed := false
+	defer func() {
+		if !closed {
+			_ = windows.CloseHandle(h)
+		}
+	}()
+	if !safeStageRoot(dir, parent) {
+		return errors.New("拒绝清理意外的特权内核目录")
+	}
+	var original windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &original); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if strings.EqualFold(entry.Name(), stageMarkerName) {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		rel, err := filepath.Rel(dir, path)
+		if err != nil || rel == "." || !filepath.IsLocal(rel) {
+			return errors.New("拒绝清理意外的隔离文件")
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
+	marker := filepath.Join(dir, stageMarkerName)
+	if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// Windows may reject opening or renaming children while a directory
+	// handle requests DELETE. Hold a non-delete lock during file cleanup,
+	// then reacquire a delete handle and verify the same filesystem object.
+	if err := windows.CloseHandle(h); err != nil {
+		return err
+	}
+	closed = true
+	deleteHandle, err := openLockedDirectory(dir, true)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(deleteHandle)
+	var current windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(deleteHandle, &current); err != nil {
+		return err
+	}
+	if !sameDirectory(original, current) || verifyStageSecurity(deleteHandle) != nil {
+		return errors.New("拒绝清理已替换的特权内核目录")
+	}
+	remove := byte(1)
+	return windows.SetFileInformationByHandle(deleteHandle, windows.FileDispositionInfo, &remove, 1)
+}
+
+func sameDirectory(a, b windows.ByHandleFileInformation) bool {
+	return a.VolumeSerialNumber == b.VolumeSerialNumber && a.FileIndexHigh == b.FileIndexHigh && a.FileIndexLow == b.FileIndexLow
+}
+
+func cleanupAbandonedStages(parent string) []string {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return nil
+	}
+	var cleaned []string
+	for _, entry := range entries {
+		path := filepath.Join(parent, entry.Name())
+		if !entry.IsDir() || !safeStageRoot(path, parent) {
+			continue
+		}
+		// A live worker's handle does not share DELETE, so this open fails and
+		// its files are never considered for cleanup.
+		h, err := openLockedDirectory(path, true)
+		if err != nil {
+			continue
+		}
+		var original windows.ByHandleFileInformation
+		valid := verifyStageSecurity(h) == nil && windows.GetFileInformationByHandle(h, &original) == nil
+		_ = windows.CloseHandle(h)
+		if !valid {
+			continue
+		}
+		readHandle, err := openLockedDirectory(path, false)
+		if err != nil {
+			continue
+		}
+		var current windows.ByHandleFileInformation
+		valid = windows.GetFileInformationByHandle(readHandle, &current) == nil && sameDirectory(original, current) && verifyStageSecurity(readHandle) == nil
+		marker := filepath.Join(path, stageMarkerName)
+		info, statErr := os.Lstat(marker)
+		if valid && statErr == nil && info.Mode().IsRegular() && info.Size() == int64(len(stageMarkerContent)) {
+			data, readErr := os.ReadFile(marker)
+			if readErr == nil && string(data) == stageMarkerContent {
+				if clearLockedStage(path, parent, readHandle) == nil {
+					cleaned = append(cleaned, path)
+				}
+				continue
+			}
+		}
+		_ = windows.CloseHandle(readHandle)
+	}
+	return cleaned
+}
+
 func createWindowsStage() (fileStage, error) {
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return nil, errors.New("特权内核需要管理员权限")
@@ -62,7 +225,7 @@ func createWindowsStage() (fileStage, error) {
 		return nil, err
 	}
 	parentPath := filepath.Join(winDir, "Temp")
-	parent, err := openLockedDirectory(parentPath)
+	parent, err := openLockedDirectory(parentPath, false)
 	if err != nil {
 		return nil, fmt.Errorf("保护特权临时目录: %w", err)
 	}
@@ -72,6 +235,7 @@ func createWindowsStage() (fileStage, error) {
 			_ = windows.CloseHandle(parent)
 		}
 	}()
+	cleaned := cleanupAbandonedStages(parentPath)
 	sd, err := windows.SecurityDescriptorFromString("O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")
 	if err != nil {
 		return nil, err
@@ -92,31 +256,29 @@ func createWindowsStage() (fileStage, error) {
 		} else if err != nil {
 			return nil, err
 		}
-		h, err := openLockedDirectory(dir)
+		h, err := openLockedDirectory(dir, false)
 		if err != nil {
 			_ = os.Remove(dir)
 			return nil, err
 		}
-		ownerSD, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
-		if err != nil {
+		if err := verifyStageSecurity(h); err != nil {
 			_ = windows.CloseHandle(h)
 			_ = os.Remove(dir)
 			return nil, err
 		}
-		owner, _, err := ownerSD.Owner()
-		admins, sidErr := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
-		if err != nil || sidErr != nil || !owner.Equals(admins) {
+		if err := os.WriteFile(filepath.Join(dir, stageMarkerName), []byte(stageMarkerContent), 0600); err != nil {
 			_ = windows.CloseHandle(h)
 			_ = os.Remove(dir)
-			return nil, errors.New("特权内核目录所有者不安全")
+			return nil, err
 		}
 		ok = true
-		return &windowsStage{dir: dir, parent: parent, handle: h}, nil
+		return &windowsStage{dir: dir, parent: parent, handle: h, cleaned: cleaned}, nil
 	}
 	return nil, errors.New("无法创建特权内核隔离目录")
 }
 
-func (s *windowsStage) Directory() string { return s.dir }
+func (s *windowsStage) Directory() string       { return s.dir }
+func (s *windowsStage) CleanedStages() []string { return append([]string(nil), s.cleaned...) }
 
 func (s *windowsStage) Apply(files []StageFile) error {
 	if len(files) > maxStageFiles {
@@ -129,6 +291,9 @@ func (s *windowsStage) Apply(files []StageFile) error {
 			return errors.New("特权内核输入路径无效")
 		}
 		key := strings.ToLower(filepath.Clean(file.Path))
+		if key == stageMarkerName {
+			return errors.New("特权内核输入包含保留文件名")
+		}
 		if seen[key] {
 			return errors.New("特权内核输入路径重复")
 		}
@@ -218,37 +383,13 @@ func (s *windowsStage) writeFile(file StageFile) error {
 func (s *windowsStage) Close() error {
 	var errs []error
 	winDir, err := windows.GetWindowsDirectory()
-	base := filepath.Base(s.dir)
-	nonce := strings.TrimPrefix(base, "NetFlowKernel-")
-	_, nonceErr := hex.DecodeString(nonce)
-	safeRoot := err == nil && strings.EqualFold(filepath.Dir(s.dir), filepath.Join(winDir, "Temp")) && strings.HasPrefix(base, "NetFlowKernel-") && len(nonce) == 32 && nonceErr == nil
-	if !safeRoot {
-		errs = append(errs, errors.New("拒绝清理意外的特权内核目录"))
-	} else {
-		entries, readErr := os.ReadDir(s.dir)
-		if readErr != nil {
-			errs = append(errs, readErr)
-		} else {
-			for _, e := range entries {
-				path := filepath.Join(s.dir, e.Name())
-				rel, relErr := filepath.Rel(s.dir, path)
-				if relErr != nil || rel == "." || !filepath.IsLocal(rel) {
-					errs = append(errs, errors.New("拒绝清理意外的隔离文件"))
-					continue
-				}
-				if err := os.RemoveAll(path); err != nil {
-					errs = append(errs, err)
-				}
-			}
-		}
-	}
-	if err := windows.CloseHandle(s.handle); err != nil {
+	if err != nil {
 		errs = append(errs, err)
-	}
-	if safeRoot {
-		if err := os.Remove(s.dir); err != nil {
-			errs = append(errs, err)
+		if closeErr := windows.CloseHandle(s.handle); closeErr != nil {
+			errs = append(errs, closeErr)
 		}
+	} else if err := clearLockedStage(s.dir, filepath.Join(winDir, "Temp"), s.handle); err != nil {
+		errs = append(errs, err)
 	}
 	if err := windows.CloseHandle(s.parent); err != nil {
 		errs = append(errs, err)

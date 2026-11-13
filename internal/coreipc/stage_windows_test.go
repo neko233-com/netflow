@@ -30,10 +30,26 @@ func TestStageRejectsTraversalBeforeWritingAndUpdatesFiles(t *testing.T) {
 	if err := s.Apply([]StageFile{{Path: "A", Data: []byte("1")}, {Path: "a", Data: []byte("2")}}); err == nil {
 		t.Fatal("accepted case-colliding paths")
 	}
+	if err := s.Apply([]StageFile{{Path: ".NETFLOW-STAGE-OWNER", Data: []byte("x")}}); err == nil {
+		t.Fatal("accepted reserved ownership marker")
+	}
 	if err := s.Apply(nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "providers", "a.yaml")); !os.IsNotExist(err) {
 		t.Fatalf("deleted source file remained staged: %v", err)
+	}
+}
+
+func TestStageCleanupRejectsUnexpectedRoot(t *testing.T) {
+	parent := t.TempDir()
+	good := filepath.Join(parent, "NetFlowKernel-0123456789abcdef0123456789abcdef")
+	if !safeStageRoot(good, parent) {
+		t.Fatal("rejected own stage")
+	}
+	for _, bad := range []string{filepath.Join(parent, "NetFlowKernel-other"), filepath.Join(parent, "other", filepath.Base(good)), filepath.Join(parent, "Unrelated-0123456789abcdef0123456789abcdef")} {
+		if safeStageRoot(bad, parent) {
+			t.Fatalf("accepted unexpected path %q", bad)
+		}
 	}
 }

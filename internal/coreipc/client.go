@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	mihomodns "github.com/metacubex/mihomo/dns"
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/rules"
@@ -28,6 +29,7 @@ type Client struct {
 	closeOnce    sync.Once
 	closeHook    func() error
 	closeErr     error
+	workerPID    uint32
 }
 
 func NewClient(c io.ReadWriteCloser) (*Client, error) {
@@ -46,6 +48,7 @@ func (c *Client) Close() error {
 	return c.closeErr
 }
 func (c *Client) TransportError() error { c.mu.Lock(); defer c.mu.Unlock(); return c.transportErr }
+func (c *Client) WorkerPID() uint32     { return c.workerPID }
 func (c *Client) call(method string, in, out any, timeout time.Duration) error {
 	done := c.rpc.Go("Kernel."+method, in, out, make(chan *rpc.Call, 1)).Done
 	timer := time.NewTimer(timeout)
@@ -193,6 +196,19 @@ func (c *Client) StageDirectory() (string, error) {
 	var out TextResult
 	err := c.short("StageDirectory", Empty{}, &out)
 	return out.Value, err
+}
+func (c *Client) CleanedStages() ([]string, error) {
+	var out TextListResult
+	err := c.short("CleanedStages", Empty{}, &out)
+	return out.Values, err
+}
+func (c *Client) ExportFakeIPState() (*mihomodns.FakeIPState, error) {
+	var out FakeIPStateResult
+	err := c.call("ExportFakeIPState", Empty{}, &out, 45*time.Second)
+	return out.State, err
+}
+func (c *Client) StageFakeIPState(state *mihomodns.FakeIPState) error {
+	return c.call("StageFakeIPState", FakeIPStateResult{State: state}, &Empty{}, 45*time.Second)
 }
 func (c *Client) Status() core.Status {
 	var out core.Status
