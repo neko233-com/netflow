@@ -19,10 +19,10 @@ import (
 // the native UI thread so concurrent user and Agent actions stay serialized.
 func (a *App) importURLAsync(raw string, done func(error)) {
 	go func() {
-		body, err := fetchProfile(raw)
+		result, err := fetchProfileResponse(raw, &http.Client{Timeout: 20 * time.Second}, "")
 		mygo.RunOnMain(func() {
 			if err == nil {
-				err = a.importURLData(raw, body)
+				err = a.importURLData(raw, result.body, result.headers)
 			}
 			done(err)
 			if a.win != nil {
@@ -90,10 +90,10 @@ func (a *App) updateProfileWithOptionsAsync(uid string, forceProxy bool, done fu
 	}
 	go func() {
 		defer client.CloseIdleConnections()
-		body, err := fetchProfileWithClient(item.URL, client, item.Option.UserAgent)
+		result, err := fetchProfileResponse(item.URL, client, item.Option.UserAgent)
 		mygo.RunOnMain(func() {
 			if err == nil {
-				err = a.updateProfileData(uid, item.URL, body)
+				err = a.updateProfileData(uid, item.URL, result.body, result.headers)
 			}
 			done(err)
 			if a.win != nil {
@@ -126,10 +126,10 @@ func (a *App) createProfileAsync(form ui.ProfileForm, done func(error)) {
 	}
 	go func() {
 		defer client.CloseIdleConnections()
-		body, err := fetchProfileWithClient(raw, client, options.UserAgent)
+		result, err := fetchProfileResponse(raw, client, options.UserAgent)
 		mygo.RunOnMain(func() {
 			if err == nil {
-				err = a.importURLData(raw, body)
+				err = a.importURLData(raw, result.body, result.headers)
 				if err == nil {
 					catalog, readErr := a.profiles.Load()
 					if readErr != nil {

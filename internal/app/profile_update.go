@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,11 +24,11 @@ func (a *App) UpdateProfile(uid string) error {
 		return err
 	}
 	defer client.CloseIdleConnections()
-	body, err := fetchProfileWithClient(item.URL, client, item.Option.UserAgent)
+	result, err := fetchProfileResponse(item.URL, client, item.Option.UserAgent)
 	if err != nil {
 		return err
 	}
-	return a.updateProfileData(uid, item.URL, body)
+	return a.updateProfileData(uid, item.URL, result.body, result.headers)
 }
 
 func (a *App) profileURL(uid string) (string, error) {
@@ -51,7 +52,7 @@ func (a *App) profileItem(uid string) (profile.CatalogItem, error) {
 	return profile.CatalogItem{}, errors.New("远程订阅不存在")
 }
 
-func (a *App) updateProfileData(uid, expectedURL string, body []byte) error {
+func (a *App) updateProfileData(uid, expectedURL string, body []byte, headers http.Header) error {
 	f, err := a.profiles.Load()
 	if err != nil {
 		return err
@@ -126,6 +127,7 @@ func (a *App) updateProfileData(uid, expectedURL string, body []byte) error {
 		}
 	}
 	f.Items[index].Updated = time.Now().UTC().Truncate(time.Second)
+	profile.ApplySubscriptionUserInfo(&f.Items[index], headers)
 	if err = a.profiles.Save(f); err != nil {
 		return rollback(err)
 	}

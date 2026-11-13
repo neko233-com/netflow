@@ -1109,14 +1109,14 @@ func (a *App) SetMode(mode string) error {
 // ImportURL stores a remote subscription and, when it is the current one,
 // installs it as the kernel profile.
 func (a *App) ImportURL(raw string) error {
-	body, err := fetchProfile(raw)
+	result, err := fetchProfileResponse(raw, &http.Client{Timeout: 20 * time.Second}, "")
 	if err != nil {
 		return err
 	}
-	return a.importURLData(raw, body)
+	return a.importURLData(raw, result.body, result.headers)
 }
 
-func (a *App) importURLData(raw string, body []byte) error {
+func (a *App) importURLData(raw string, body []byte, headers http.Header) error {
 	if a.profiles == nil {
 		a.profiles = profile.NewStore(a.dir)
 	}
@@ -1127,7 +1127,7 @@ func (a *App) importURLData(raw string, body []byte) error {
 	if err != nil {
 		return err
 	}
-	item, err := a.profiles.ImportRemote(raw, func(string) ([]byte, error) { return body, nil })
+	item, err := a.profiles.ImportRemoteWithHeaders(raw, func(string) ([]byte, error) { return body, nil }, headers)
 	if err != nil {
 		return err
 	}
@@ -1286,35 +1286,35 @@ func (a *App) restartCore() error {
 	return nil
 }
 
-func fetchProfile(raw string) ([]byte, error) {
-	client := &http.Client{Timeout: 20 * time.Second}
-	return fetchProfileWithClient(raw, client, "")
+type subscriptionResponse struct {
+	body    []byte
+	headers http.Header
 }
 
-func fetchProfileWithClient(raw string, client *http.Client, userAgent string) ([]byte, error) {
+func fetchProfileResponse(raw string, client *http.Client, userAgent string) (subscriptionResponse, error) {
 	req, err := http.NewRequest(http.MethodGet, raw, nil)
 	if err != nil {
-		return nil, err
+		return subscriptionResponse{}, err
 	}
 	if userAgent != "" {
 		req.Header.Set("User-Agent", userAgent)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return subscriptionResponse{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, io.ErrUnexpectedEOF
+		return subscriptionResponse{}, io.ErrUnexpectedEOF
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
 	if err != nil {
-		return nil, err
+		return subscriptionResponse{}, err
 	}
 	if len(body) > 8<<20 {
-		return nil, errors.New("订阅超过 8 MiB")
+		return subscriptionResponse{}, errors.New("订阅超过 8 MiB")
 	}
-	return body, nil
+	return subscriptionResponse{body: body, headers: resp.Header.Clone()}, nil
 }
 
 func (a *App) proxyEndpoint() string {

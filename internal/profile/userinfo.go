@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Extra is the traffic and expiry block carried on a subscription.
@@ -16,6 +17,37 @@ type Extra struct {
 	Download uint64
 	Total    uint64
 	Expire   uint64
+}
+
+// ApplySubscriptionUserInfo keeps existing values when a response omits the
+// header and saturates untrusted byte counts to the catalog's signed range.
+func ApplySubscriptionUserInfo(item *CatalogItem, h http.Header) {
+	if item == nil {
+		return
+	}
+	info, ok := ParseSubscriptionUserInfo(h)
+	if !ok {
+		return
+	}
+	used := info.Upload
+	if math.MaxUint64-used < info.Download {
+		used = math.MaxUint64
+	} else {
+		used += info.Download
+	}
+	if used > math.MaxInt64 {
+		used = math.MaxInt64
+	}
+	total := info.Total
+	if total > math.MaxInt64 {
+		total = math.MaxInt64
+	}
+	item.Used, item.Total = int64(used), int64(total)
+	item.Expire = time.Time{}
+	// Dates beyond year 9999 cannot be encoded as JSON by time.Time.
+	if info.Expire > 0 && info.Expire <= 253402300799 {
+		item.Expire = time.Unix(int64(info.Expire), 0).UTC()
+	}
 }
 
 // ParseSubscriptionUserInfo reads the subscription-userinfo header.

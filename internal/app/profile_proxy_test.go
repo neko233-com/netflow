@@ -27,12 +27,12 @@ func TestFetchProfileThroughProxyNeverFallsBackToDirect(t *testing.T) {
 	proxyAddr := strings.TrimPrefix(proxy.URL, "http://")
 	client := newSubscriptionClient(proxyAddr, time.Second, false)
 	defer client.CloseIdleConnections()
-	body, err := fetchProfileWithClient(target.URL+"/subscription", client, "")
-	if err != nil || len(body) == 0 || !seen.Load() {
-		t.Fatalf("proxy fetch: %s %v", body, err)
+	response, err := fetchProfileResponse(target.URL+"/subscription", client, "")
+	if err != nil || len(response.body) == 0 || !seen.Load() {
+		t.Fatalf("proxy fetch: %s %v", response.body, err)
 	}
 	proxy.Close()
-	if _, err := fetchProfileWithClient(target.URL+"/subscription", client, ""); err == nil {
+	if _, err := fetchProfileResponse(target.URL+"/subscription", client, ""); err == nil {
 		t.Fatal("unavailable proxy unexpectedly succeeded")
 	}
 	if got := direct.Load(); got != 0 {

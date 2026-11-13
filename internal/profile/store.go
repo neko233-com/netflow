@@ -3,6 +3,7 @@ package profile
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -296,6 +297,11 @@ func ValidURL(raw string) bool {
 // ImportRemote fetches url, stores the body, and appends a remote item.
 // The new item becomes current when the file had none.
 func (s *Store) ImportRemote(raw string, fetch func(string) ([]byte, error)) (CatalogItem, error) {
+	return s.ImportRemoteWithHeaders(raw, fetch, nil)
+}
+
+// ImportRemoteWithHeaders stores response traffic metadata with the profile.
+func (s *Store) ImportRemoteWithHeaders(raw string, fetch func(string) ([]byte, error), headers http.Header) (CatalogItem, error) {
 	raw = strings.TrimSpace(raw)
 	if !ValidURL(raw) {
 		return CatalogItem{}, ErrInvalidURL
@@ -325,6 +331,7 @@ func (s *Store) ImportRemote(raw string, fetch func(string) ([]byte, error)) (Ca
 		File:    rel,
 		Option:  CatalogOption{UpdateInterval: 1440, AllowAutoUpdate: true, TimeoutSeconds: 60},
 	}
+	ApplySubscriptionUserInfo(&item, headers)
 	f.Items = append(f.Items, item)
 	if f.Current == "" {
 		f.Current = uid

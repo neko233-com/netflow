@@ -24,7 +24,7 @@ func TestSubscriptionClientHonorsTLSUserAgentTimeoutAndProxyPolicy(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = fetchProfileWithClient(server.URL, normal, "NetFlow-Test/1"); err == nil {
+	if _, err = fetchProfileResponse(server.URL, normal, "NetFlow-Test/1"); err == nil {
 		t.Fatal("untrusted certificate accepted without opt-in")
 	}
 	normal.CloseIdleConnections()
@@ -37,7 +37,7 @@ func TestSubscriptionClientHonorsTLSUserAgentTimeoutAndProxyPolicy(t *testing.T)
 	if client.Timeout != 3*time.Second {
 		t.Fatalf("timeout %v", client.Timeout)
 	}
-	if _, err = fetchProfileWithClient(server.URL, client, opts.UserAgent); err != nil || !received.Load() {
+	if _, err = fetchProfileResponse(server.URL, client, opts.UserAgent); err != nil || !received.Load() {
 		t.Fatalf("configured fetch: %v", err)
 	}
 	for _, options := range []profile.CatalogOption{{UseClashProxy: true}, {UseSystemProxy: true}, {TimeoutSeconds: 301}, {UserAgent: "x\r\ny"}} {
