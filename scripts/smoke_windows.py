@@ -107,8 +107,11 @@ def main():
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(0.2)
-        if not status["running"]:
-            raise RuntimeError("agent reported core stopped")
+        if not status["running"] or status["tun"] or status["tun_pending"]:
+            raise RuntimeError("unexpected initial core or TUN state")
+        tun_result = call("tun", "off")
+        if not tun_result["accepted"] or tun_result["pending"] or tun_result["tun"]:
+            raise RuntimeError("safe TUN-off command failed")
         groups = call("groups")["groups"]
         if not any(g["name"] == "SmokeGroup" and len(g["nodes"]) == 2 for g in groups):
             raise RuntimeError("agent did not list real proxy group members")
@@ -210,7 +213,7 @@ def main():
             mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n"); mcp.stdin.flush()
             response = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
             names = {item["name"] for item in response["result"]["tools"]}
-            expected = {"netflow_status", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
+            expected = {"netflow_status", "netflow_set_tun", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
                         "netflow_select_proxy", "netflow_set_mode", "netflow_use_profile", "netflow_close_connection",
                         "netflow_migration_preview", "netflow_migration_import", "netflow_migration_export"}
             if names != expected:
