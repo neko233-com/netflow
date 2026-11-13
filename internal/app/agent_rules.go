@@ -223,6 +223,18 @@ func (a *App) previewSources(items []profile.CatalogItem, before, after rewrite.
 		if id != active {
 			base = profile.EnsureMixedPort(base, 7897)
 		}
+		var archivePath string
+		var archiveHash [32]byte
+		base, archivePath, archiveHash, err = a.applyProfileVergeExtensionsSnapshot(base, id)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if archivePath != "" {
+			if previous, exists := hashes[archivePath]; exists && previous != archiveHash {
+				return nil, nil, nil, errors.New("Verge 存档在预览期间发生变化，请重试")
+			}
+			hashes[archivePath] = archiveHash
+		}
 		base, err = a.applyProfileTUN(base)
 		if err != nil {
 			return nil, nil, nil, err

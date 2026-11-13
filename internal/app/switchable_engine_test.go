@@ -32,6 +32,9 @@ type switchTestEngine struct {
 func (e *switchTestEngine) Status() core.Status {
 	return core.Status{Running: e.running, TUN: e.tun, ConfigDir: e.dir}
 }
+func (e *switchTestEngine) EffectiveConfig() ([]byte, error) {
+	return os.ReadFile(filepath.Join(e.dir, "config.yaml"))
+}
 func (e *switchTestEngine) Start(dir string) error {
 	e.starts++
 	if e.onStart != nil {

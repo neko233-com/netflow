@@ -195,6 +195,51 @@ func TestImportVergeDNSFormatsPreserveSubscriptionAndHosts(t *testing.T) {
 	}
 }
 
+func TestImportVergeDataExtensionsApplyFromPrivateArchive(t *testing.T) {
+	source := fixture(t)
+	index := "current: p1\nitems:\n  - uid: p1\n    type: local\n    name: Test\n    file: p1.yaml\n    option: {proxies: p2, groups: g1, merge: m1}\n  - {uid: p2, type: proxies, file: p2.yaml}\n  - {uid: g1, type: groups, file: g1.yaml}\n  - {uid: m1, type: merge, file: m1.yaml}\n  - {uid: Merge, type: merge, file: Merge.yaml}\n"
+	files := map[string]string{
+		"profiles.yaml":       index,
+		"profiles/p1.yaml":    "proxies: [{name: old, type: socks5, server: 127.0.0.1, port: 1}]\nproxy-groups: [{name: Select, type: select, proxies: [old, DIRECT]}]\nrules: ['MATCH,DIRECT']\n",
+		"profiles/p2.yaml":    "prepend: [{name: new, type: socks5, server: 127.0.0.1, port: 2}]\nappend: []\ndelete: [old]\n",
+		"profiles/g1.yaml":    "prepend: []\nappend: [{name: Extra, type: select, proxies: [DIRECT]}]\ndelete: []\n",
+		"profiles/m1.yaml":    "profile: {store-selected: false}\n",
+		"profiles/Merge.yaml": "profile: {store-fake-ip: true}\n",
+	}
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(source, filepath.FromSlash(name)), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := ReadVerge(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	if _, err := s.ImportVerge(target); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := profile.NewStore(target).Load()
+	if err != nil || len(catalog.Items) != 1 || !catalog.Items[0].Option.VergeExtensions {
+		t.Fatalf("extensions not enabled: %+v %v", catalog, err)
+	}
+	item := catalog.Items[0]
+	body, err := os.ReadFile(filepath.Join(target, item.File))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, archive, hash, err := ComposeArchived(target, item.Option.VergeArchive, item.Option.VergeUID, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archive == "" || hash == ([32]byte{}) || !bytes.Contains(out, []byte("name: new")) || !bytes.Contains(out, []byte("name: Extra")) || !bytes.Contains(out, []byte("store-fake-ip: true")) || bytes.Contains(out, []byte("name: old")) {
+		t.Fatalf("extension composition failed: %s", out)
+	}
+	if _, err := ArchivePath(target, filepath.Join("..", "outside.zip")); err == nil {
+		t.Fatal("accepted archive traversal")
+	}
+}
+
 // Opt-in read-only integration with the user's real Verge data; target is temporary.
 func TestRealVergeImport(t *testing.T) {
 	source := os.Getenv("NETFLOW_TEST_VERGE_SOURCE")

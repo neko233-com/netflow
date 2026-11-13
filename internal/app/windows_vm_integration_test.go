@@ -160,7 +160,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(verge, "profiles"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(verge, "profiles.yaml"), []byte("current: p1\nitems:\n  - {uid: p1, type: remote, name: Test, url: 'https://example.test/sub', file: p1.yaml}\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(verge, "profiles.yaml"), []byte("current: p1\nitems:\n  - {uid: p1, type: remote, name: Test, url: 'https://example.test/sub', file: p1.yaml, option: {proxies: p2, groups: g1, merge: m1}}\n  - {uid: p2, type: proxies, file: p2.yaml}\n  - {uid: g1, type: groups, file: g1.yaml}\n  - {uid: m1, type: merge, file: m1.yaml}\n  - {uid: Merge, type: merge, file: Merge.yaml}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	reservation, err := net.ListenPacket("udp4", "127.0.0.1:0")
@@ -169,9 +169,19 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	}
 	migrationDNS := reservation.LocalAddr().String()
 	_ = reservation.Close()
-	vergeConfig := fmt.Sprintf("mixed-port: 0\nport: 0\nsocks-port: 0\nipv6: false\ndns:\n  enable: true\n  listen: '%s'\n  enhanced-mode: redir-host\n  use-hosts: true\n  nameserver: ['127.0.0.1:3']\n  fallback: ['127.0.0.1:2']\nrules: ['MATCH,DIRECT']\n", migrationDNS)
+	vergeConfig := fmt.Sprintf("mixed-port: 0\nport: 0\nsocks-port: 0\nipv6: false\nproxies: [{name: old, type: socks5, server: 127.0.0.1, port: 2}]\nproxy-groups: [{name: Select, type: select, proxies: [old, DIRECT]}]\ndns:\n  enable: true\n  listen: '%s'\n  enhanced-mode: redir-host\n  use-hosts: true\n  nameserver: ['127.0.0.1:3']\n  fallback: ['127.0.0.1:2']\nrules: ['MATCH,DIRECT']\n", migrationDNS)
 	if err := os.WriteFile(filepath.Join(verge, "profiles", "p1.yaml"), []byte(vergeConfig), 0600); err != nil {
 		t.Fatal(err)
+	}
+	for name, contents := range map[string]string{
+		"p2.yaml":    "prepend: [{name: new, type: socks5, server: 127.0.0.1, port: 2}]\ndelete: [old]\n",
+		"g1.yaml":    "append: [{name: Extra, type: select, proxies: [DIRECT]}]\n",
+		"m1.yaml":    "profile: {store-selected: true}\n",
+		"Merge.yaml": "profile: {store-fake-ip: false}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(verge, "profiles", name), []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(verge, "verge.yaml"), []byte("profile_dns_settings:\n  p1: {enabled: true}\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -233,8 +243,38 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if !ok || answer.A.String() != "192.0.2.77" {
 			t.Fatalf("migrated hosts not applied: %v", response.Answer)
 		}
+		commandCtx, commandCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		out, err := vmCommand(commandCtx, agentExe, "--config-dir", migrationTarget, "groups").CombinedOutput()
+		commandCancel()
+		if err != nil {
+			t.Fatalf("migrated groups query failed: %s: %v", out, err)
+		}
+		var groups agent.GroupsResult
+		if err := json.Unmarshal(out, &groups); err != nil {
+			t.Fatalf("invalid groups response: %s: %v", out, err)
+		}
+		selectFound, extraFound, newFound := false, false, false
+		for _, group := range groups.Groups {
+			if group.Name == "Extra" {
+				extraFound = true
+			}
+			if group.Name == "Select" {
+				selectFound = true
+				for _, node := range group.Nodes {
+					if node.Name == "old" {
+						t.Fatal("deleted proxy remained in migrated group")
+					}
+					if node.Name == "new" {
+						newFound = true
+					}
+				}
+			}
+		}
+		if !selectFound || !extraFound || !newFound {
+			t.Fatalf("migrated proxy extensions missing: %s", out)
+		}
 	}()
-	t.Log("migrated DNS retained subscription settings and served the imported hosts entry")
+	t.Log("migrated DNS, hosts, proxy and group extensions applied by installed GUI")
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
 	if err != nil {
 		t.Fatal(err)
@@ -749,7 +789,11 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 			action = "on"
 		}
 		if out, e := memoryCall("tun", action); e != nil {
-			t.Fatalf("memory-cache TUN %s: %s %v", action, out, e)
+			data, _ := os.ReadFile(filepath.Join(memoryDir, "gui.log"))
+			eventCtx, eventCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			events, eventErr := vmCommand(eventCtx, "wevtutil.exe", "qe", "Application", "/q:*[System[(EventID=1000 or EventID=1001)]]", "/c:5", "/rd:true", "/f:text").CombinedOutput()
+			eventCancel()
+			t.Fatalf("memory-cache TUN %s: %s %v\nGUI log: %s\nApplication events (%v): %s", action, out, e, data, eventErr, events)
 		}
 		deadline = time.Now().Add(90 * time.Second)
 		for time.Now().Before(deadline) {

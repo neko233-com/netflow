@@ -11,7 +11,9 @@ func (a *App) agentGroups() (agent.GroupsResult, error) {
 	if a == nil || a.core == nil || !a.core.Status().Running || a.model == nil {
 		return agent.GroupsResult{}, errors.New("core is not running")
 	}
-	a.loadGroups()
+	if err := a.loadGroupsWithSelection(false); err != nil {
+		return agent.GroupsResult{}, err
+	}
 	result := agent.GroupsResult{Groups: []agent.ProxyGroup{}}
 	for _, row := range a.model.Groups {
 		g, err := a.core.Group(row.Name)

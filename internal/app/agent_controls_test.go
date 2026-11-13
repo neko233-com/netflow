@@ -54,6 +54,15 @@ func TestAgentControlsOperateOnRealCore(t *testing.T) {
 	if selected, err := a.core.Selected("TestGroup"); err != nil || selected != "REJECT" {
 		t.Fatalf("core choice %s %v", selected, err)
 	}
+	if err := a.core.Select("TestGroup", "DIRECT"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.agentCommand("groups", nil); err != nil {
+		t.Fatal(err)
+	}
+	if selected, err := a.core.Selected("TestGroup"); err != nil || selected != "DIRECT" {
+		t.Fatalf("read-only group listing changed selection: %s %v", selected, err)
+	}
 	if _, err = a.agentCommand("mode", json.RawMessage(`{"mode":"global"}`)); err != nil || a.core.Status().Mode != "global" {
 		t.Fatalf("mode: %v", err)
 	}

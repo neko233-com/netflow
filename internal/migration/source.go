@@ -66,6 +66,7 @@ type Source struct {
 	dnsFlags  map[string]bool
 	dnsHosts  []byte
 	originDir string
+	itemByID  map[string]int
 }
 
 type PreviewProfile struct {
@@ -156,7 +157,7 @@ func ReadVerge(source string) (*Source, error) {
 		if err = read("profiles.yaml", true); err != nil {
 			return nil, err
 		}
-		for _, name := range []string{"verge.yaml", "config.yaml", "dns_config.yaml"} {
+		for _, name := range []string{"verge.yaml", "config.yaml", "dns_config.yaml", "profiles/Merge.yaml"} {
 			if err = read(name, false); err != nil {
 				return nil, err
 			}
@@ -168,7 +169,7 @@ func ReadVerge(source string) (*Source, error) {
 		if len(idx.Items) > 5000 {
 			return nil, errors.New("订阅条目过多")
 		}
-		total := 0
+		total := len(files["profiles/Merge.yaml"])
 		for _, item := range idx.Items {
 			if !safeFilename(item.File) {
 				return nil, errors.New("订阅文件名无效")
@@ -246,11 +247,13 @@ func ReadVerge(source string) (*Source, error) {
 		return nil, errors.New("订阅条目过多")
 	}
 	seen := map[string]bool{}
-	for _, item := range idx.Items {
+	itemByID := make(map[string]int, len(idx.Items))
+	for i, item := range idx.Items {
 		if item.UID == "" || len(item.UID) > 128 || seen[item.UID] {
 			return nil, errors.New("订阅标识缺失或重复")
 		}
 		seen[item.UID] = true
+		itemByID[item.UID] = i
 		if !safeFilename(item.File) {
 			return nil, errors.New("订阅文件名无效")
 		}
@@ -258,7 +261,7 @@ func ReadVerge(source string) (*Source, error) {
 			return nil, errors.New("备份缺少引用的订阅文件")
 		}
 	}
-	s := &Source{index: idx, files: files, dnsFlags: map[string]bool{}, originDir: originDir}
+	s := &Source{index: idx, files: files, dnsFlags: map[string]bool{}, originDir: originDir, itemByID: itemByID}
 	if b := files["verge.yaml"]; len(b) > 0 {
 		var v struct {
 			ProfileDNS map[string]struct {
@@ -331,6 +334,16 @@ func ReadVerge(source string) (*Source, error) {
 		if err := validProfile(body); err != nil {
 			return nil, fmt.Errorf("订阅数据无效: %w", err)
 		}
+		ext, err := s.extensions(item.UID)
+		if err != nil {
+			return nil, err
+		}
+		if hasExtensions(ext) {
+			body, err = profile.ComposeVergeExtensions(body, ext)
+			if err != nil {
+				return nil, fmt.Errorf("Verge 扩展无效: %w", err)
+			}
+		}
 		if s.dnsFlags[item.UID] && (len(s.dns) > 0 || len(s.dnsHosts) > 0) {
 			if _, err := profile.ComposeVergeDNS(body, string(s.dns), string(s.dnsHosts)); err != nil {
 				return nil, fmt.Errorf("DNS 覆写无效: %w", err)
@@ -378,6 +391,13 @@ func (s *Source) Preview() Preview {
 		if item.Option.Script != "" {
 			unsupported["脚本扩展会保留，但不会自动执行"] = true
 		}
+		for _, ref := range []struct{ id, kind string }{{item.Option.Proxies, "proxies"}, {item.Option.Groups, "groups"}, {item.Option.Merge, "merge"}} {
+			if ref.id != "" {
+				if i, ok := s.itemByID[ref.id]; !ok || s.index.Items[i].Type != ref.kind {
+					unsupported["部分数据扩展引用不存在或类型不匹配，未应用"] = true
+				}
+			}
+		}
 		if s.dnsFlags[item.UID] && len(s.dns) == 0 && len(s.dnsHosts) == 0 {
 			unsupported["有订阅启用 DNS 覆写，但源配置缺少 DNS 内容"] = true
 		}
@@ -386,15 +406,12 @@ func (s *Source) Preview() Preview {
 				unsupported["追加规则在 NetFlow 中位于 MATCH 前，顺序可能与 Verge 不同"] = true
 			}
 		}
-		if item.Option.Merge != "" || item.Option.Proxies != "" || item.Option.Groups != "" {
-			unsupported["合并、节点和代理组扩展会保留，尚未自动应用"] = true
-		}
 	}
-	for _, msg := range []string{"脚本扩展会保留，但不会自动执行", "合并、节点和代理组扩展会保留，尚未自动应用", "追加规则在 NetFlow 中位于 MATCH 前，顺序可能与 Verge 不同", "有订阅启用 DNS 覆写，但源配置缺少 DNS 内容", "文件型规则或代理集合的外部文件未迁入，可能需要重新下载或修正路径"} {
+	for _, msg := range []string{"脚本扩展会保留，但不会自动执行", "部分数据扩展引用不存在或类型不匹配，未应用", "追加规则在 NetFlow 中位于 MATCH 前，顺序可能与 Verge 不同", "有订阅启用 DNS 覆写，但源配置缺少 DNS 内容", "文件型规则或代理集合的外部文件未迁入，可能需要重新下载或修正路径"} {
 		if unsupported[msg] {
 			out.Warnings = append(out.Warnings, msg)
 		}
 	}
-	out.Warnings = append(out.Warnings, "全局扩展保存在原始存档中，尚未自动应用", "订阅在激活时还会进行完整内核校验", "系统代理、TUN 和开机自启不会自动启用")
+	out.Warnings = append(out.Warnings, "全局脚本及未关联扩展保存在原始存档中，不会自动执行", "订阅在激活时还会进行完整内核校验", "系统代理、TUN 和开机自启不会自动启用")
 	return out
 }

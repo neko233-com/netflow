@@ -55,6 +55,7 @@ type CatalogOption struct {
 	DNSVergeHosts   string `json:"dns_verge_hosts,omitempty"`
 	VergeArchive    string `json:"verge_archive,omitempty"`
 	VergeUID        string `json:"verge_uid,omitempty"`
+	VergeExtensions bool   `json:"verge_extensions,omitempty"`
 }
 
 // File is profiles.json.

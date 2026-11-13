@@ -37,6 +37,10 @@ func (a *App) validateEffectiveProfile(body []byte, profileID string) error {
 func (a *App) validateEffectiveProfileWithDNS(body []byte, profileID string, dns *dnsOverride) error {
 	data := profile.EnsureMixedPort(body, 7897)
 	var err error
+	data, err = a.applyProfileVergeExtensions(data, profileID)
+	if err != nil {
+		return err
+	}
 	data, err = a.applyProfileTUN(data)
 	if err != nil {
 		return err

@@ -196,6 +196,11 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 		created = append(created, full)
 		mapped[v.UID] = id
 		item := profile.CatalogItem{UID: id, Type: v.Type, Name: v.Name, Description: v.Desc, URL: v.URL, Home: v.Home, File: rel, Option: profile.CatalogOption{UpdateInterval: v.Option.UpdateInterval, AllowAutoUpdate: v.Option.AllowAutoUpdate, UseSystemProxy: v.Option.WithProxy, UseClashProxy: v.Option.SelfProxy, UserAgent: v.Option.UserAgent, TimeoutSeconds: v.Option.Timeout, VergeArchive: archiveRel, VergeUID: v.UID}}
+		ext, e := s.extensions(v.UID)
+		if e != nil {
+			return ImportResult{}, e
+		}
+		item.Option.VergeExtensions = hasExtensions(ext)
 		if item.Name == "" {
 			item.Name = "迁入订阅"
 		}
@@ -334,6 +339,14 @@ func (s *Source) writeSourceArchive(path string) error {
 			if _, e = w.Write(s.files[name]); e != nil {
 				err = e
 				break
+			}
+		}
+		if data, ok := s.files["profiles/Merge.yaml"]; err == nil && ok && !seen["profiles/Merge.yaml"] {
+			w, e := zw.Create("profiles/Merge.yaml")
+			if e != nil {
+				err = e
+			} else if _, e = w.Write(data); e != nil {
+				err = e
 			}
 		}
 	}

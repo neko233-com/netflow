@@ -202,6 +202,11 @@ func (a *App) Prepare() error {
 	}
 	a.syncTUNStack()
 	a.core.SetTransformer(func(base []byte, profileID string) ([]byte, error) {
+		var extensionErr error
+		base, extensionErr = a.applyProfileVergeExtensions(base, profileID)
+		if extensionErr != nil {
+			return nil, extensionErr
+		}
 		var tunErr error
 		base, tunErr = a.applyProfileTUN(base)
 		if tunErr != nil {
@@ -735,17 +740,28 @@ func (a *App) installCurrentProfile() error {
 }
 
 func (a *App) loadGroups() {
+	_ = a.loadGroupsWithSelection(true)
+}
+
+func (a *App) loadGroupsWithSelection(restoreSelection bool) error {
 	if a.model == nil || a.dir == "" {
-		return
+		return errors.New("配置尚未就绪")
 	}
-	body, err := os.ReadFile(filepath.Join(a.dir, "config.yaml"))
+	var body []byte
+	var err error
+	if a.core != nil && a.core.Status().Running {
+		body, err = a.core.EffectiveConfig()
+	} else {
+		body, err = os.ReadFile(filepath.Join(a.dir, "config.yaml"))
+	}
 	if err != nil {
-		return
+		a.model.Notice = err.Error()
+		return err
 	}
 	parsed, err := profile.ParseClashYAML(body)
 	if err != nil {
 		a.model.Notice = err.Error()
-		return
+		return err
 	}
 	if parsed.Rules > 0 {
 		a.model.Home.Rules = parsed.Rules
@@ -829,7 +845,12 @@ func (a *App) loadGroups() {
 		}
 	}
 	a.model.Home.Node = ui.CurrentNode{Groups: names}
-	a.applySavedSelection()
+	if restoreSelection {
+		a.applySavedSelection()
+	} else {
+		a.syncHomeNode()
+	}
+	return nil
 }
 
 // applySavedSelection is Verge's activateSelected. The current profile's
