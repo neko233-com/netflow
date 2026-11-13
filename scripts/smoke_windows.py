@@ -1,5 +1,6 @@
 """Run the Windows portable ZIP against a local HTTP origin, without OS proxy changes."""
 
+import argparse
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -33,6 +34,9 @@ class Origin(BaseHTTPRequestHandler):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-Quiet", action="store_true", help="start with the native window hidden")
+    args = parser.parse_args()
     if os.name != "nt":
         raise RuntimeError("This smoke test needs Windows")
     build = (ROOT / "build").resolve(strict=True)
@@ -59,6 +63,9 @@ def main():
             port = reservation.getsockname()[1]
         data = sandbox / "data"
         data.mkdir()
+        if args.Quiet:
+            prefs = {"Language": "zh", "SilentStart": True}
+            (data / "settings.json").write_text(json.dumps({"prefs": json.dumps(prefs)}), encoding="utf-8")
         (data / "config.yaml").write_text(
             f"mixed-port: {port}\nport: 0\nsocks-port: 0\nallow-lan: false\n"
             "mode: rule\nlog-level: error\nipv6: false\ngeo-auto-update: false\n"

@@ -7,7 +7,7 @@ minimum version, makes portable ZIPs with Unix executable permissions, and
 calculates SHA-256 checksums. WiX Toolset 3.14 is required for the per-user MSI.
 The destination must not already contain files with the same release names.
 
-`python scripts/smoke_windows.py` extracts the portable executable into a
+`python scripts/smoke_windows.py -Quiet` extracts the portable executable into a
 unique directory inside `build`, starts it with an isolated configuration,
 and checks an HTTP request through the local mixed proxy to a local server.
 `python scripts/smoke_silent_windows.py -Quiet -Installed` verifies that the
