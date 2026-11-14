@@ -549,38 +549,58 @@ func (m *Model) hotkeyBody(c *mygoui.Context, pal Palette) {
 }
 
 func (m *Model) backupBody(c *mygoui.Context, pal Palette) {
+	mygoui.Text(c, "备份尚未实现，以下选项不会创建备份。可在退出程序后使用 Agent 的 migrate-export 命令迁出兼容数据。").FontSize(12).TextColor(pal.Warning)
 	mygoui.Text(c, "自动备份").FontSize(16).Bold()
-	m.boolLine(c, "启用定时备份", &m.Prefs.AutoBackup)
-	mygoui.Text(c, "按设定频率在后台创建本地备份文件。").FontSize(12).TextColor(pal.TextMuted)
+	backupOff := false
+	mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
+		mygoui.Text(c, "启用定时备份").FontSize(14).Grow(1)
+		mygoui.Switch(c, &backupOff).Disabled(true).Label("backup-auto-disabled")
+	})
 	mygoui.Text(c, "备份频率").FontSize(13)
 	every := itoa(m.Prefs.BackupEvery)
-	in := mygoui.TextInput(c, &every).Width(80).Disabled(!m.Prefs.AutoBackup).Label("backup-every")
-	if in.Changed() {
-		n := atoi(every)
-		if n < 1 {
-			n = 1
-		}
-		if n > 168 {
-			n = 168
-		}
-		m.Prefs.BackupEvery = n
-	}
+	mygoui.TextInput(c, &every).Width(80).Disabled(true).Label("backup-every")
 	mygoui.Text(c, "小时，默认 24，范围 1–168").FontSize(12).TextColor(pal.TextMuted)
-	m.boolLine(c, "关键变更时自动备份", &m.Prefs.BackupOnChange)
+	changeOff := false
+	mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
+		mygoui.Text(c, "关键变更时自动备份").FontSize(14).Grow(1)
+		mygoui.Switch(c, &changeOff).Disabled(true).Label("backup-change-disabled")
+	})
 	mygoui.Text(c, "手动").FontSize(16).Bold()
-	mygoui.Text(c, "本地备份").FontSize(13)
-	if filledButton(c, pal, "配置 WebDAV", "webdav-open", false) {
+	mygoui.Text(c, "本地备份尚未实现").FontSize(13)
+	if filledButton(c, pal, "WebDAV 状态", "webdav-open", false) {
 		m.Dialogs.WebDAV = true
 	}
 }
 
 func (m *Model) webdavBody(c *mygoui.Context, pal Palette) {
-	m.field(c, "WebDAV 地址", &m.Prefs.WebDAVURL)
-	m.field(c, "用户名", &m.Prefs.WebDAVUser)
-	m.field(c, "密码", &m.Prefs.WebDAVPassword)
-	if filledButton(c, pal, "保存", "webdav-save", true) {
-		m.savePrefs()
-		m.Notice = "保存成功"
+	mygoui.Text(c, "WebDAV 备份尚未实现，不会连接服务器或发送数据。").FontSize(13).TextColor(pal.Warning)
+	if m.WebDAVSecretStored {
+		mygoui.Text(c, "检测到旧版 WebDAV 配置。Windows 会尝试使用当前账户保护；其他平台可能仍以明文保存。复制会写入剪贴板。").FontSize(12).TextColor(pal.TextMuted)
+		for _, field := range []struct{ label, key string }{{"地址", "url"}, {"用户名", "user"}, {"密码", "password"}} {
+			if filledButton(c, pal, "复制"+field.label, "webdav-copy-"+field.key, false) {
+				if m.Hooks.CopyWebDAVField == nil {
+					m.Notice = "无法读取已保存配置"
+					return
+				}
+				if err := m.Hooks.CopyWebDAVField(field.key); err != nil {
+					m.Notice = "复制失败: " + err.Error()
+					return
+				}
+				m.Notice = "已复制" + field.label + "到剪贴板"
+			}
+		}
+		if filledButton(c, pal, "清除已保存密码", "webdav-clear-secret", false) {
+			if m.Hooks.ClearWebDAVSecret == nil {
+				m.Notice = "无法清除已保存密码"
+				return
+			}
+			if err := m.Hooks.ClearWebDAVSecret(); err != nil {
+				m.Notice = "清除密码失败: " + err.Error()
+				return
+			}
+			m.Prefs.WebDAVPassword = ""
+			m.Notice = "已清除单独保存的密码；地址中的凭据不受影响"
+		}
 	}
 }
 

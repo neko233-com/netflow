@@ -25,6 +25,7 @@ import (
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/secretstore"
 	"github.com/neko233-com/netflow/internal/service"
 	"github.com/neko233-com/netflow/internal/sitetest"
 	"github.com/neko233-com/netflow/internal/sysinfo"
@@ -75,25 +76,27 @@ type App struct {
 	win  *mygo.Window
 	tray *mygo.Tray
 
-	connTrack        conn.Tracker
-	logs             *clashlog.Buffer
-	stopLogs         func()
-	liveStop         chan struct{}
-	probeSlots       chan struct{}
-	probeStop        chan struct{}
-	profileAutoStop  chan struct{}
-	profileAutoRetry map[string]time.Time
-	shortcuts        shortcutRegistrar
-	hotkeys          map[string]hotkeyBinding
-	privilegedTUN    bool
-	tunBusy          bool
-	tunLastError     string
-	geoBusy          bool
-	geoLastError     string
-	geoRestart       bool
-	providerWarning  string
-	providerJobs     map[string]providerJobRecord
-	localCoreFactory func() coreEngine
+	connTrack           conn.Tracker
+	logs                *clashlog.Buffer
+	stopLogs            func()
+	liveStop            chan struct{}
+	probeSlots          chan struct{}
+	probeStop           chan struct{}
+	profileAutoStop     chan struct{}
+	profileAutoRetry    map[string]time.Time
+	shortcuts           shortcutRegistrar
+	hotkeys             map[string]hotkeyBinding
+	privilegedTUN       bool
+	tunBusy             bool
+	tunLastError        string
+	geoBusy             bool
+	geoLastError        string
+	geoRestart          bool
+	providerWarning     string
+	providerJobs        map[string]providerJobRecord
+	webDAVProtected     string
+	webDAVProtectionErr error
+	localCoreFactory    func() coreEngine
 }
 
 // New checks options and fills the M1 defaults. It does not start the
@@ -153,6 +156,12 @@ func (a *App) Prepare() error {
 	if err != nil {
 		return err
 	}
+	var secretErr error
+	settings, a.webDAVProtected, secretErr = a.migrateWebDAVSecret(settings)
+	a.webDAVProtectionErr = nil
+	if secretErr != nil && !errors.Is(secretErr, secretstore.ErrUnsupported) {
+		a.webDAVProtectionErr = secretErr
+	}
 	if owned, ok := a.proxy.(interface{ Owned() (bool, error) }); ok {
 		active, err := owned.Owned()
 		if err != nil {
@@ -191,10 +200,13 @@ func (a *App) Prepare() error {
 	osName, osVersion := sysinfo.Current()
 	a.model = ui.NewModel(ui.HomeState{ConfigDir: dir, Version: core.Version(), OS: osName, OSVersion: osVersion})
 	a.applySettings()
+	if secretErr != nil {
+		a.model.Notice = "旧 WebDAV 凭据未迁移: " + secretErr.Error()
+	}
 	if geoErr != nil {
-		a.model.Notice = "GeoData 更新未完全应用: " + geoErr.Error()
+		a.model.Notice = strings.TrimSpace(a.model.Notice + " GeoData 更新未完全应用: " + geoErr.Error())
 	} else if geoCount > 0 {
-		a.model.Notice = fmt.Sprintf("已应用 %d 个 GeoData 数据库更新", geoCount)
+		a.model.Notice = strings.TrimSpace(a.model.Notice + fmt.Sprintf(" 已应用 %d 个 GeoData 数据库更新", geoCount))
 	}
 	if tunPreflightErr != nil {
 		a.model.Notice = strings.TrimSpace(a.model.Notice + " 虚拟网卡未启动: " + tunPreflightErr.Error())
@@ -316,6 +328,7 @@ func (a *App) applySettings() {
 	prefs.InlineModes = a.settings.InlineModes
 	prefs.Lightweight = a.settings.Lightweight
 	a.model.Prefs = prefs
+	a.model.WebDAVSecretStored = a.webDAVProtected != "" || prefs.WebDAVURL != "" || prefs.WebDAVUser != "" || prefs.WebDAVPassword != ""
 	a.model.Home.SystemProxy = prefs.SystemProxy
 	a.model.Home.TUN = prefs.TUN
 	a.model.Home.AutoLaunch = prefs.AutoLaunch
@@ -1145,6 +1158,8 @@ func (a *App) bindHooks() {
 		SetKernelOption:     a.SetKernelOption,
 		SetKernelPorts:      a.SetKernelPorts,
 		SavePrefs:           a.savePrefs,
+		ClearWebDAVSecret:   a.clearWebDAVSecret,
+		CopyWebDAVField:     a.copyWebDAVField,
 		ProbeSite:           a.probeSite,
 		SaveSites:           a.saveSites,
 		InstallService:      a.InstallService,
@@ -1431,17 +1446,22 @@ func (a *App) savePrefs(p ui.Prefs) error {
 	next.InlineModes = p.InlineModes
 	next.ProxyMenu = p.ProxyMenu
 	next.Lightweight = p.Lightweight
-	b, err := json.Marshal(p)
+	encoded, protected, err := a.encodePrefs(p)
 	if err != nil {
 		return err
 	}
-	next.Prefs = string(b)
+	next.Prefs = encoded
 	if a.store != nil {
 		if err := a.store.Save(next); err != nil {
 			return err
 		}
 	}
 	a.settings = next
+	a.webDAVProtected = protected
+	if a.model != nil && protected != "" {
+		a.model.Prefs.WebDAVURL, a.model.Prefs.WebDAVUser, a.model.Prefs.WebDAVPassword = "", "", ""
+		a.model.WebDAVSecretStored = true
+	}
 	return nil
 }
 

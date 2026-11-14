@@ -587,7 +587,15 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"prefs":"{\"SilentStart\":true}"}`), 0600); err != nil {
+	legacyPrefs, err := json.Marshal(map[string]any{"SilentStart": true, "WebDAVURL": "https://user:synthetic-url-secret@backup.invalid/?token=synthetic-token", "WebDAVUser": "synthetic-user", "WebDAVPassword": "synthetic-vm-secret", "FuturePreference": "preserved"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsBody, err := json.Marshal(map[string]string{"prefs": string(legacyPrefs)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), settingsBody, 0600); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -676,6 +684,25 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		data, _ := os.ReadFile(filepath.Join(dir, "gui.log"))
 		t.Fatalf("installed GUI did not start agent: %v status=%+v log=%s", err, s, data)
 	}
+	settingsBody, err = os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil || strings.Contains(string(settingsBody), "synthetic-vm-secret") || strings.Contains(string(settingsBody), "synthetic-url-secret") || strings.Contains(string(settingsBody), "synthetic-token") || strings.Contains(string(settingsBody), "synthetic-user") {
+		t.Fatal("legacy credential remained in the installed settings")
+	}
+	var savedSettings struct {
+		Prefs string `json:"prefs"`
+	}
+	var savedPrefs map[string]json.RawMessage
+	if json.Unmarshal(settingsBody, &savedSettings) != nil || json.Unmarshal([]byte(savedSettings.Prefs), &savedPrefs) != nil || len(savedPrefs["FuturePreference"]) == 0 {
+		t.Fatal("credential migration lost settings")
+	}
+	var protected string
+	if json.Unmarshal(savedPrefs[webDAVProtectedKey], &protected) != nil {
+		t.Fatal("protected credential missing")
+	}
+	if plain, err := unprotectWebDAV(protected); err != nil || plain.Password != "synthetic-vm-secret" || plain.User != "synthetic-user" || !strings.Contains(plain.URL, "synthetic-url-secret") {
+		t.Fatal("protected credential cannot be recovered by the guest user")
+	}
+	t.Log("installed GUI protected a legacy credential without losing unrelated settings")
 	updatedGeo, geoErr := os.ReadFile(filepath.Join(dir, "Country.mmdb"))
 	if geoErr != nil || sha256.Sum256(updatedGeo) != afterGeo {
 		t.Fatalf("installed GUI did not apply pending GeoData: %v", geoErr)
