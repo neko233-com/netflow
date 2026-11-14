@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +12,38 @@ import (
 
 	"github.com/neko233-com/netflow/internal/profile"
 )
+
+func TestSubscriptionFetchCancellationStopsInFlightRequest(t *testing.T) {
+	entered := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	client := newSubscriptionClient("", 10*time.Second, false)
+	defer client.CloseIdleConnections()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := fetchProfileResponseContext(ctx, server.URL, client, "")
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("subscription request did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("unexpected cancellation error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("subscription cancellation did not stop the request")
+	}
+}
 
 func TestSubscriptionDirectAndRedirectPolicy(t *testing.T) {
 	var plainHits atomic.Int32

@@ -3,6 +3,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1607,7 +1608,11 @@ type subscriptionResponse struct {
 }
 
 func fetchProfileResponse(raw string, client *http.Client, userAgent string) (subscriptionResponse, error) {
-	req, err := http.NewRequest(http.MethodGet, raw, nil)
+	return fetchProfileResponseContext(context.Background(), raw, client, userAgent)
+}
+
+func fetchProfileResponseContext(ctx context.Context, raw string, client *http.Client, userAgent string) (subscriptionResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
 		return subscriptionResponse{}, err
 	}
