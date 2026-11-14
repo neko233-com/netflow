@@ -132,6 +132,13 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 	if source != nil && (source.file != rel || source.hash != sha256.Sum256(oldFile)) {
 		return errors.New("订阅文件在下载期间已变化，请检查后重试")
 	}
+	// Script approvals bind the exact subscription and profile name. Updating
+	// an inactive profile used to bypass effective-config validation and leave
+	// its approval unusable on the next activation. URL replacement can also
+	// normalize the name, so it needs the same protection even for equal bytes.
+	if f.Items[index].Option.VergeScriptApproval != nil && (!bytes.Equal(body, oldFile) || nextURL != expectedURL) {
+		return errors.New("已启用的 Verge 脚本绑定当前订阅；请先关闭脚本，更新订阅后重新预览并启用")
+	}
 	shared, err := a.profiles.SharedProfileFile(f, uid)
 	if err != nil {
 		return err

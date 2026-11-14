@@ -14,7 +14,60 @@ import (
 
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/safepath"
+	"github.com/neko233-com/netflow/internal/scriptmeta"
 )
+
+func TestScriptApprovedProfileUpdatePreservesSourceAndCatalog(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		for _, replaceURL := range []bool{false, true} {
+			t.Run(fmt.Sprintf("active-%v-replace-url-%v", active, replaceURL), func(t *testing.T) {
+				dir := t.TempDir()
+				a := newProfileHarness(dir)
+				old := []byte("mode: rule\nrules: ['MATCH,DIRECT']\n")
+				if err := a.importURLData("https://first.invalid/sub", old, nil); err != nil {
+					t.Fatal(err)
+				}
+				if err := a.importURLData("https://second.invalid/sub", old, nil); err != nil {
+					t.Fatal(err)
+				}
+				catalog, snapshot, err := a.profiles.LoadForUpdate()
+				if err != nil {
+					t.Fatal(err)
+				}
+				index := 1
+				if active {
+					index = 0
+				}
+				catalog.Items[index].Option.VergeScriptApproval = &scriptmeta.Approval{}
+				if err := a.profiles.SaveIfUnchanged(catalog, snapshot); err != nil {
+					t.Fatal(err)
+				}
+				beforeCatalog, err := os.ReadFile(filepath.Join(dir, "profiles.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				beforeConfig, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				item := catalog.Items[index]
+				nextURL, next := item.URL, []byte("mode: direct\nrules: ['MATCH,DIRECT']\n")
+				if replaceURL {
+					nextURL, next = "https://replacement.invalid/sub", old
+				}
+				if err := a.updateProfileDataWithURL(item.UID, item.URL, nextURL, next, nil); err == nil {
+					t.Fatal("script-bound subscription update was accepted")
+				}
+				afterCatalog, catalogErr := os.ReadFile(filepath.Join(dir, "profiles.json"))
+				afterConfig, configErr := os.ReadFile(filepath.Join(dir, "config.yaml"))
+				afterProfile, profileErr := os.ReadFile(filepath.Join(dir, item.File))
+				if catalogErr != nil || configErr != nil || profileErr != nil || string(afterCatalog) != string(beforeCatalog) || string(afterConfig) != string(beforeConfig) || string(afterProfile) != string(old) {
+					t.Fatal("rejected update changed subscription, configuration, or catalog")
+				}
+			})
+		}
+	}
+}
 
 func TestUpdateRemoteProfile(t *testing.T) {
 	body := "rules:\n  - MATCH,DIRECT\n"
