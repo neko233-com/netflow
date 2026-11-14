@@ -62,8 +62,12 @@ func (d *serialDispatcher) call(fn func()) {
 	}
 }
 
-func (d *serialDispatcher) close() {
+func (d *serialDispatcher) stopAccepting() {
 	d.once.Do(func() { close(d.stop) })
+}
+
+func (d *serialDispatcher) close() {
+	d.stopAccepting()
 	<-d.done
 }
 
@@ -123,8 +127,12 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 		a.startProfileAuto()
 	}
 	defer func() {
-		// Prevent new callbacks, then wait for an active mutation to finish
-		// before closing services and the kernel that owns TUN and routes.
+		// Reject new callbacks immediately. Stop the kernel concurrently so it
+		// can cancel a blocked provider initialization; wait for the active
+		// transaction to finish its rollback before closing the other services.
+		dispatcher.stopAccepting()
+		coreStopped := make(chan error, 1)
+		go func() { coreStopped <- a.core.Stop() }()
 		dispatcher.close()
 		a.stopBackup()
 		if a.profileAutoStop != nil {
@@ -134,7 +142,7 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 			close(a.probeStop)
 		}
 		a.stopAgent()
-		if err := a.core.Stop(); err != nil {
+		if err := <-coreStopped; err != nil {
 			resultErr = errors.Join(resultErr, fmt.Errorf("stop core: %w", err))
 		}
 	}()

@@ -46,6 +46,18 @@ func (a *App) stopAgent() {
 }
 
 func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMessage) (any, error) {
+	// Shutdown must remain reachable while the serialized event loop is waiting
+	// for a kernel operation. The bridge invokes the cancellation only after it
+	// has written the acknowledgement, as for the normal command path.
+	if method == "shutdown" && a.headless {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if a.headlessCancel == nil {
+			return nil, errors.New("headless instance is not ready to shut down")
+		}
+		return agent.AfterResponse{Result: agent.ActionResult{OK: true}, After: a.headlessCancel}, nil
+	}
 	if method == "verge-script-cache-prune" {
 		var in agent.Empty
 		if err := decodeStrict(args, &in); err != nil {

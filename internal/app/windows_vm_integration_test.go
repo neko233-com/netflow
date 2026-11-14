@@ -1677,6 +1677,110 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	t.Fatal("busy-provider test did not restore networking")
 }
 
+func vmHeadlessUncachedShutdown(t *testing.T, agentExe string) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var enteredOnce, canceledOnce sync.Once
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enteredOnce.Do(func() { close(entered) })
+		select {
+		case <-r.Context().Done():
+			canceledOnce.Do(func() { close(canceled) })
+		case <-release:
+		}
+	}))
+	defer provider.Close()
+	defer close(release)
+	dir := t.TempDir()
+	base := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(base), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	process := vmCommand(ctx, agentExe, "--config-dir", dir, "serve")
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- process.Wait() }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			_ = process.Process.Kill()
+			<-finished
+		}
+	}()
+	client := agent.Client{Dir: dir, Timeout: 5 * time.Second}
+	deadline := time.Now().Add(90 * time.Second)
+	var status agent.Status
+	for time.Now().Before(deadline) {
+		if err := client.Call(context.Background(), "status", nil, &status); err == nil && status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if !status.TUN {
+		t.Fatalf("headless TUN not ready: %+v", status)
+	}
+	config := base + "proxy-providers:\n  uncached: {type: http, url: '" + provider.URL + "', path: providers/uncached-shutdown.yaml, interval: 3600, health-check: {enable: false}}\n"
+	if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	modeDone := make(chan error, 1)
+	go func() { modeDone <- client.Call(context.Background(), "mode", agent.ModeArgs{Mode: "direct"}, nil) }()
+	select {
+	case <-entered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("headless initial provider did not start")
+	}
+	var result agent.ActionResult
+	if err := client.Call(context.Background(), "shutdown", nil, &result); err != nil || !result.OK {
+		t.Fatalf("headless shutdown acknowledgement: %+v %v", result, err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(15 * time.Second):
+		t.Fatal("headless shutdown did not cancel initial provider")
+	}
+	select {
+	case err := <-finished:
+		stopped = true
+		if err != nil {
+			t.Fatalf("headless shutdown: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("headless shutdown remained blocked")
+	}
+	select {
+	case err := <-modeDone:
+		if err == nil {
+			t.Fatal("interrupted mode change reported success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("interrupted mode request remained blocked")
+	}
+	options, err := kernelopts.Open(dir)
+	if err != nil || options.Snapshot().Mode != nil {
+		t.Fatalf("interrupted mode change was not rolled back: %v", err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, dns, err := vmNetworkSnapshot()
+		if err == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
+			t.Log("headless Agent shutdown canceled initial provider, rolled back mode, and restored TUN networking")
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatal("headless uncached-provider shutdown did not restore networking")
+}
+
 func vmHeadlessParentExit(t *testing.T, agentExe, dir string) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -2769,6 +2873,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	vmHeadlessRoundTrip(t, agentExe, backupTarget)
 	t.Log("installed headless CLI activated TUN, applied a rewrite without visible windows, and restored networking on shutdown")
 	vmProviderBusyTUN(t, agentExe)
+	vmHeadlessUncachedShutdown(t, agentExe)
 	vmHeadlessParentExit(t, agentExe, backupTarget)
 	t.Log("headless child restored networking after its CLI launcher was forcibly terminated")
 	vmGUIAutoStartTUN(t, filepath.Join(install, "NetFlow.exe"), agentExe, backupTarget)
