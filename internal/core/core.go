@@ -226,24 +226,35 @@ func (c *Core) Status() Status {
 // ProviderProxies returns the proxies loaded for a named provider.
 // The slice is empty when the core is stopped or the provider is missing.
 func (c *Core) ProviderProxies(name string) []ProxyNode {
+	nodes, _ := c.ProviderMembers(name)
+	return nodes
+}
+
+// ProviderMembers returns the full, resolved provider, including duplicate
+// names that a filtered group might otherwise hide.
+func (c *Core) ProviderMembers(name string) ([]ProxyNode, error) {
 	if c == nil || name == "" {
-		return nil
+		return nil, errors.New("provider name is required")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.running {
-		return nil
+		return nil, errors.New("core is not running")
 	}
 	p, ok := tunnel.Providers()[name]
 	if !ok || p == nil {
-		return nil
+		return nil, fmt.Errorf("provider %s not found", name)
 	}
 	proxies := p.Proxies()
 	out := make([]ProxyNode, 0, len(proxies))
 	for _, px := range proxies {
-		out = append(out, ProxyNode{Name: px.Name(), Type: px.Type().String()})
+		if px == nil {
+			continue
+		}
+		info := px.ProxyInfo()
+		out = append(out, ProxyNode{Name: px.Name(), Type: px.Type().String(), Provider: info.ProviderName, DialerProxy: info.DialerProxy})
 	}
-	return out
+	return out, nil
 }
 
 func (c *Core) apply() error {

@@ -70,9 +70,16 @@ func (a *App) validateEffectiveProfileWithDNS(body []byte, profileID string, dns
 			return err
 		}
 	}
+	data, err = composeActiveChain(data, profileID, a.chain.Load())
+	if err != nil {
+		return err
+	}
 	cfg, err := executor.ParseWithBytes(data)
 	if err != nil {
 		return fmt.Errorf("合并后的内核配置无效: %w", err)
+	}
+	if active := a.chain.Load(); active != nil && active.ProfileID == profileID && cfg.General.Mode.String() != active.Mode {
+		return errors.New("请先断开链式代理，再更改代理模式")
 	}
 	if a.settings.SystemProxy && a.core != nil && a.core.Status().Running && cfg.General.MixedPort != a.core.Status().MixedPort {
 		return errors.New("此订阅的混合代理端口不同；请先关闭系统代理或设置统一端口")

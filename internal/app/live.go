@@ -93,6 +93,9 @@ func (a *App) liveLoop(stop <-chan struct{}) {
 							}
 						}
 					}
+					if a.model.Chain.Connected {
+						a.model.Chain.Warning = a.agentChainStatus().Warning
+					}
 					active, up, down := a.core.Connections()
 					snap := a.connTrack.Observe(active, up, down, time.Now())
 					a.updateTraffic(snap)

@@ -102,6 +102,9 @@ func (a *App) applyKernelOptions(next kernelopts.Options) error {
 	if a.tunBusy {
 		return errors.New("虚拟网卡正在切换，请稍后重试")
 	}
+	if a.chain.Load() != nil && next.Mode != nil && *next.Mode != a.core.Status().Mode {
+		return errors.New("请先断开链式代理，再切换模式")
+	}
 	if err := next.Validate(); err != nil {
 		return err
 	}
@@ -132,9 +135,16 @@ func (a *App) applyKernelOptions(next kernelopts.Options) error {
 	if err != nil {
 		return err
 	}
+	base, err = composeActiveChain(base, a.core.ProfileID(), a.chain.Load())
+	if err != nil {
+		return err
+	}
 	cfg, err := executor.ParseWithBytes(base)
 	if err != nil {
 		return fmt.Errorf("内核配置无效: %w", err)
+	}
+	if active := a.chain.Load(); active != nil && cfg.General.Mode.String() != active.Mode {
+		return errors.New("请先断开链式代理，再切换模式")
 	}
 	used := map[int]bool{}
 	for _, port := range []int{cfg.General.MixedPort, cfg.General.Port, cfg.General.SocksPort, cfg.General.RedirPort, cfg.General.TProxyPort} {

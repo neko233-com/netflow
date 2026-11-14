@@ -56,6 +56,7 @@ type ProxyNode struct {
 	Type        string
 	Provider    string
 	DialerProxy string
+	SourceGroup string
 	Delay       int
 	Now         string
 	UDP         bool
@@ -98,6 +99,8 @@ type ProxyProvider struct {
 
 // ChainState is the chain-proxy panel.
 type ChainState struct {
+	Warning    string
+	Target     string
 	On         bool
 	Ask        bool
 	Connected  bool

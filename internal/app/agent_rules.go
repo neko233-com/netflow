@@ -40,6 +40,7 @@ type agentProposal struct {
 	options       *kernelopts.Options
 	before, after []string
 	ruleBytes     int
+	chain         *activeChain
 }
 
 const maxPreviewRuleMemory = 64 << 20
@@ -178,6 +179,7 @@ type previewDraft struct {
 	hashes         map[string][32]byte
 	warnings       []string
 	configs        []validation.Config
+	chain          *activeChain
 }
 
 func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
@@ -309,11 +311,12 @@ func (a *App) prepareAgentPreview(change agent.Change) (previewDraft, error) {
 		options = &value
 	}
 	var configs []validation.Config
-	before, after, hashes, err := a.previewSources(catalog, catalogHash, options, current, state, target, change.Scope == "global", &configs)
+	chain := a.chain.Load()
+	before, after, hashes, err := a.previewSources(catalog, catalogHash, options, current, state, target, change.Scope == "global", &configs, chain)
 	if err != nil {
 		return previewDraft{}, err
 	}
-	return previewDraft{change: change, state: state, revision: revision, active: active, target: target, status: status, tunSetting: a.settings.TUN, options: options, before: before, after: after, hashes: hashes, warnings: warnings, configs: configs}, nil
+	return previewDraft{change: change, state: state, revision: revision, active: active, target: target, status: status, tunSetting: a.settings.TUN, options: options, before: before, after: after, hashes: hashes, warnings: warnings, configs: configs, chain: chain}, nil
 }
 
 func (a *App) verifyDraftSources(draft previewDraft, checked validation.Result) error {
@@ -336,7 +339,7 @@ func (a *App) finishAgentPreview(draft previewDraft, checked validation.Result) 
 		}
 	}
 	status := a.core.Status()
-	if !status.Running || a.tunBusy || a.core.ProfileID() != draft.active || a.rewrites.Snapshot().Revision != draft.revision || status.TUN != draft.status.TUN || status.Mode != draft.status.Mode || a.settings.TUN != draft.tunSetting {
+	if !status.Running || a.tunBusy || a.core.ProfileID() != draft.active || a.rewrites.Snapshot().Revision != draft.revision || status.TUN != draft.status.TUN || status.Mode != draft.status.Mode || a.settings.TUN != draft.tunSetting || a.chain.Load() != draft.chain {
 		return agent.Preview{}, errors.New("configuration or network state changed; preview again")
 	}
 	if (a.kernelOptions == nil) != (draft.options == nil) || (draft.options != nil && !reflect.DeepEqual(a.kernelOptions.Snapshot(), *draft.options)) {
@@ -389,13 +392,13 @@ func (a *App) finishAgentPreview(draft previewDraft, checked validation.Result) 
 			expires = c.ExpiresAt
 		}
 	}
-	a.agentProposals[id] = agentProposal{change: draft.change, state: draft.state, revision: draft.revision, activeProfile: draft.active, sources: draft.hashes, expires: expires, tunEnabled: status.TUN, tunSetting: draft.tunSetting, mode: status.Mode, options: draft.options, before: draft.before, after: draft.after, ruleBytes: ruleBytes}
+	a.agentProposals[id] = agentProposal{change: draft.change, state: draft.state, revision: draft.revision, activeProfile: draft.active, sources: draft.hashes, expires: expires, tunEnabled: status.TUN, tunSetting: draft.tunSetting, mode: status.Mode, options: draft.options, before: draft.before, after: draft.after, ruleBytes: ruleBytes, chain: draft.chain}
 	return agent.Preview{ProposalID: id, Revision: draft.revision, ActiveProfile: draft.active, TargetProfile: draft.target, RulesBefore: before.Rules, RulesAfter: after.Rules, RulesBeforeTotal: before.Total, RulesAfterTotal: after.Total, RulesBeforeTruncated: before.NextOffset < before.Total, RulesAfterTruncated: after.NextOffset < after.Total, Warnings: draft.warnings, ExpiresAt: expires}, nil
 }
 
 // previewSources validates the whole effective config for the selected profile.
 // A global change is also checked against every installed subscription.
-func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options *kernelopts.Options, before, after rewrite.State, target string, all bool, outConfigs *[]validation.Config) ([]string, []string, map[string][32]byte, error) {
+func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options *kernelopts.Options, before, after rewrite.State, target string, all bool, outConfigs *[]validation.Config, chain *activeChain) ([]string, []string, map[string][32]byte, error) {
 	active := a.core.ProfileID()
 	sources := map[string]string{active: filepath.Join(a.dir, "config.yaml")}
 	relativeProfiles := map[string]string{}
@@ -477,6 +480,10 @@ func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options
 				return nil, nil, nil, err
 			}
 		}
+		effective, err = composeActiveChain(effective, id, chain)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 		configs = append(configs, validation.Config{ID: id, Body: effective})
 		if id == target {
 			beforeRules, afterRules, foundTarget = oldRules, newRules, true
@@ -534,7 +541,7 @@ func (a *App) agentApply(id string) (agent.ApplyResult, error) {
 		return agent.ApplyResult{}, errors.New("proposal missing or expired; preview again")
 	}
 	delete(a.agentProposals, id)
-	if a.core.ProfileID() != p.activeProfile || a.rewrites.Snapshot().Revision != p.revision {
+	if a.core.ProfileID() != p.activeProfile || a.rewrites.Snapshot().Revision != p.revision || a.chain.Load() != p.chain {
 		return agent.ApplyResult{}, errors.New("configuration changed; preview again")
 	}
 	status := a.core.Status()

@@ -37,6 +37,8 @@ claude mcp add --scope project --transport stdio netflow -- "$agent" mcp
 
 Agent 操作规则时，先调用 `netflow_preview_rewrite` 或 `netflow_preview_rollback` 检查范围、规则和警告，再明确调用 `netflow_apply_rewrite`；过期或状态变化后的提案需要重新预览。若预览显示规则被截断，通过 `netflow_preview_rules` 和 `next_offset` 分页查看完整内容；不需要的提案可用 `netflow_cancel_preview` 释放。连接级匹配器影响之后符合条件的连接，不会重新路由已有连接。可用 `netflow_rewrite_history` 查看可回滚版本。Agent 状态与预览可能包含连接元数据或用户规则；发送给模型的内容由所选客户端及其服务处理。
 
+链式代理使用独立的预览和应用流程：先用 `netflow_proxy_groups` / `netflow_proxy_group_nodes` 查询节点及 `provider`，调用 `netflow_preview_chain` 提供目标组和按入口到出口排序的节点，再用 `netflow_apply_chain` 应用。`netflow_chain_status` 报告链路是否仍配置及节点结构是否可用，不能代替网络连通性测试；`netflow_disconnect_chain` 尝试恢复原选择，`netflow_cancel_chain_preview` 释放未应用提案。规则模式只影响选定组，全局模式使用 GLOBAL；已有连接不重新路由。链路为当前进程临时状态，退出后不会自动重连。
+
 从 GUI 复制提案 ID 后，分页查看期间应保持该规则编辑器打开；编辑规则、更换历史版本或关闭编辑器会丢弃其提案，应用或取消后也不能再读取该提案。提案最多有效两分钟。
 
 本机已用 Codex 桌面应用附带的 CLI `0.169.0-alpha.11.1` 通过临时命令行配置验证 `mcp get` 能识别安装版路径。机器上另有独立安装的 Codex CLI `0.118.0`，该旧版本遇到本机原有的 `service_tier = "default"` 时需要兼容设置才能加载配置；桌面应用附带版本可以读取该配置。Claude Code 2.1.117 已在独立临时项目中注册安装版并通过 `claude mcp get` 的连接检查，未改写用户或其他项目配置。MCP 的初始化、工具列表和实际调用另由 NetFlow 的 Windows 冒烟测试覆盖；这些检查不代表所有客户端版本均已验证。

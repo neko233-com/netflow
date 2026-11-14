@@ -67,12 +67,15 @@ def main():
         if args.Quiet:
             prefs = {"Language": "zh", "SilentStart": True}
             (data / "settings.json").write_text(json.dumps({"prefs": json.dumps(prefs)}), encoding="utf-8")
+        chain_config = ("proxies: [{name: chain-one, type: socks5, server: 127.0.0.1, port: 9}, "
+                        "{name: chain-two, type: socks5, server: 127.0.0.1, port: 10}]\n")
+        chain_group = "  - {name: SmokeChain, type: select, proxies: [chain-one, chain-two]}\n"
         (data / "config.yaml").write_text(
             f"mixed-port: {port}\nport: 0\nsocks-port: 0\nallow-lan: false\n"
             "mode: rule\nlog-level: error\nipv6: false\ngeo-auto-update: false\n"
             "dns:\n  enable: false\ntun:\n  enable: false\n"
-            "proxy-groups:\n  - name: SmokeGroup\n    type: select\n    proxies: [DIRECT, REJECT]\n"
-            "rules:\n  - MATCH,DIRECT\n",
+            + chain_config + "proxy-groups:\n  - name: SmokeGroup\n    type: select\n    proxies: [DIRECT, REJECT]\n"
+            + chain_group + "rules:\n  - MATCH,DIRECT\n",
             encoding="utf-8",
         )
         env = dict(os.environ, NETFLOW_CONFIG_DIR=str(data), GOMAXPROCS="1")
@@ -109,6 +112,18 @@ def main():
                 raise RuntimeError(f"agent {args}: {result.stderr}")
             return json.loads(result.stdout)
         data_dir = data
+        chain_input = {"target": "SmokeChain", "hops": [
+            {"name": "chain-one", "group": "SmokeChain"},
+            {"name": "chain-two", "group": "SmokeChain"},
+        ]}
+        def verify_chain_cli():
+            preview = call("chain-preview", data=json.dumps(chain_input))
+            if call("chain-status").get("configured"):
+                raise RuntimeError("chain preview changed routing")
+            if not call("chain-apply", preview["proposal_id"]).get("active"):
+                raise RuntimeError("chain did not activate")
+            if not call("chain-disconnect").get("ok") or call("chain-status").get("configured"):
+                raise RuntimeError("chain did not disconnect")
         deadline = time.monotonic() + 15
         while True:
             try:
@@ -126,6 +141,7 @@ def main():
             raise RuntimeError("startup preference changed current TUN")
         if call("tun-autostart", "off")["enabled"]:
             raise RuntimeError("GUI TUN autostart was not disabled")
+        verify_chain_cli()
         diagnostics = call("diagnostics")
         if diagnostics["schema_version"] != 1 or diagnostics["app_version"] != VERSION or not diagnostics["core_running"] or diagnostics["tun"]:
             raise RuntimeError("unexpected diagnostics")
@@ -344,7 +360,7 @@ def main():
             mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n"); mcp.stdin.flush()
             response = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
             names = {item["name"] for item in response["result"]["tools"]}
-            expected = {"netflow_status", "netflow_connections", "netflow_diagnostics", "netflow_kernel_options", "netflow_set_kernel_option", "netflow_shutdown_headless", "netflow_set_tun", "netflow_tun_autostart", "netflow_set_tun_autostart", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_preview_rules", "netflow_cancel_preview", "netflow_apply_rewrite", "netflow_rewrite_history", "netflow_preview_rollback", "netflow_clear_rewrite_history", "netflow_proxy_groups", "netflow_proxy_group_nodes", "netflow_rules",
+            expected = {"netflow_status", "netflow_connections", "netflow_diagnostics", "netflow_kernel_options", "netflow_set_kernel_option", "netflow_shutdown_headless", "netflow_set_tun", "netflow_tun_autostart", "netflow_set_tun_autostart", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_preview_rules", "netflow_cancel_preview", "netflow_apply_rewrite", "netflow_rewrite_history", "netflow_preview_rollback", "netflow_clear_rewrite_history", "netflow_chain_status", "netflow_preview_chain", "netflow_apply_chain", "netflow_cancel_chain_preview", "netflow_disconnect_chain", "netflow_proxy_groups", "netflow_proxy_group_nodes", "netflow_rules",
                         "netflow_profiles", "netflow_profile_settings", "netflow_update_profile_settings", "netflow_replace_profile_url", "netflow_import_profile", "netflow_update_profile", "netflow_profile_job_status", "netflow_delete_profile",
                         "netflow_backup_create", "netflow_backup_job_status", "netflow_restore_backup", "netflow_backup_schedule", "netflow_backup_schedule_set", "netflow_webdav_config", "netflow_webdav_save", "netflow_webdav_clear", "netflow_webdav_list", "netflow_webdav_upload", "netflow_webdav_restore",
                         "netflow_providers", "netflow_provider_page", "netflow_update_provider", "netflow_provider_job_status",
@@ -355,6 +371,16 @@ def main():
             response = rpc({"jsonrpc":"2.0", "id":18, "method":"tools/call", "params":{"name":"netflow_provider_page", "arguments":{"kind":"proxy","offset":0,"limit":1}}})
             if response.get("result", {}).get("isError") or "next_offset" not in response.get("result", {}).get("structuredContent", {}):
                 raise RuntimeError(f"MCP provider page failed: {response}")
+            response = rpc({"jsonrpc":"2.0", "id":21, "method":"tools/call", "params":{"name":"netflow_preview_chain", "arguments":chain_input}})
+            chain_preview = response.get("result", {}).get("structuredContent", {})
+            if response.get("result", {}).get("isError") or not chain_preview.get("proposal_id"):
+                raise RuntimeError(f"MCP chain preview failed: {response}")
+            response = rpc({"jsonrpc":"2.0", "id":22, "method":"tools/call", "params":{"name":"netflow_apply_chain", "arguments":{"proposal_id":chain_preview["proposal_id"]}}})
+            if response.get("result", {}).get("isError") or not response.get("result", {}).get("structuredContent", {}).get("active"):
+                raise RuntimeError(f"MCP chain apply failed: {response}")
+            response = rpc({"jsonrpc":"2.0", "id":23, "method":"tools/call", "params":{"name":"netflow_disconnect_chain", "arguments":{}}})
+            if response.get("result", {}).get("isError") or not response.get("result", {}).get("structuredContent", {}).get("ok"):
+                raise RuntimeError(f"MCP chain disconnect failed: {response}")
             response = rpc({"jsonrpc":"2.0", "id":17, "method":"tools/call", "params":{"name":"netflow_proxy_group_nodes", "arguments":{"group":"SmokeGroup","offset":1,"limit":1}}})
             if response.get("result", {}).get("isError") or response.get("result", {}).get("structuredContent", {}).get("next_offset") != 2:
                 raise RuntimeError(f"MCP group member page failed: {response}")
@@ -422,7 +448,7 @@ def main():
         headless_dir.mkdir()
         (headless_dir / "config.yaml").write_text(
             "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\n"
-            "dns: {enable: false}\ntun: {enable: false}\nrules: ['MATCH,DIRECT']\n",
+            "dns: {enable: false}\ntun: {enable: false}\n" + chain_config + "proxy-groups:\n" + chain_group + "rules: ['MATCH,DIRECT']\n",
             encoding="utf-8",
         )
         with (sandbox / "headless.log").open("wb") as headless_log:
@@ -443,6 +469,9 @@ def main():
                     if time.monotonic() >= deadline:
                         raise RuntimeError("headless Agent did not become ready")
                     time.sleep(0.2)
+                data_dir = headless_dir
+                verify_chain_cli()
+                data_dir = data
                 result = subprocess.run([agent, "--config-dir", str(headless_dir), "shutdown"], capture_output=True,
                     text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
                 if result.returncode or not json.loads(result.stdout).get("ok"):

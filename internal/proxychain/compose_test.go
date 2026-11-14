@@ -63,7 +63,7 @@ rules: ['MATCH,Target']
 		t.Fatal("original node definitions changed")
 	}
 	target := byName(t, config["proxy-groups"], "Target")
-	if fmt.Sprint(target["proxies"]) != "[entry exit "+result.Exit+"]" {
+	if fmt.Sprint(target["proxies"]) != "["+result.Exit+"]" {
 		t.Fatalf("target membership: %v", target["proxies"])
 	}
 	filtered := byName(t, config["proxy-groups"], "Filtered")
@@ -138,7 +138,7 @@ rules: ['MATCH,Target']
 	}
 	override := localClone["override"].(map[string]any)
 	expressions := override["override-expr"].([]any)
-	if len(expressions) != 2 || !strings.Contains(expressions[1].(string), "_hop_0") {
+	if len(expressions) != 3 || !strings.Contains(expressions[2].(string), "_hop_0") {
 		t.Fatalf("chain assignment missing: %v", expressions)
 	}
 	var ingress map[string]any

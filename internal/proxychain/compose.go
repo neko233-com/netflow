@@ -116,6 +116,41 @@ func exactFilter(name string) string {
 	return `\A` + strings.ReplaceAll(regexp.QuoteMeta(name), "`", `\x60`) + `\z`
 }
 
+// Supported outbound types implement Mihomo's dialer-proxy option. Unknown,
+// local and reject adapters are excluded so a provider update cannot turn an
+// intermediate hop into a direct route.
+var outboundTypes = map[string]string{
+	"ss": "Shadowsocks", "ssr": "ShadowsocksR", "socks5": "Socks5", "http": "Http",
+	"vmess": "Vmess", "vless": "Vless", "snell": "Snell", "trojan": "Trojan",
+	"hysteria": "Hysteria", "hysteria2": "Hysteria2", "wireguard": "WireGuard", "tuic": "Tuic",
+	"shadowquic": "ShadowQuic", "gost-relay": "GostRelay", "ssh": "Ssh", "mieru": "Mieru",
+	"anytls": "AnyTLS", "sudoku": "Sudoku", "masque": "Masque", "trusttunnel": "TrustTunnel",
+	"openvpn": "OpenVPN", "tailscale": "Tailscale", "zerotier": "ZeroTier", "easytier": "EasyTier",
+}
+
+// SupportedRuntimeType matches the kernel's resolved adapter type name.
+func SupportedRuntimeType(kind string) bool {
+	for _, name := range outboundTypes {
+		if name == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func rejectUnsupportedExpression() string {
+	keys := make([]string, 0, len(outboundTypes))
+	for key := range outboundTypes {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	tests := make([]string, 0, len(keys))
+	for _, key := range keys {
+		tests = append(tests, `.type != `+strconv.Quote(key))
+	}
+	return `(select(` + strings.Join(tests, ` and `) + `) | .type) = "reject"`
+}
+
 // Compose adds private clones and hidden groups without changing the original
 // proxy or provider definitions. Provider clones read the existing local cache
 // as file providers, so they do not start independent network downloads.
@@ -296,10 +331,12 @@ func Compose(base []byte, spec Spec) (Result, error) {
 			if err != nil {
 				return Result{}, err
 			}
-			clone["name"] = proxyName
-			if previous != "" {
-				clone["dialer-proxy"] = previous
+			kind, _ := clone["type"].(string)
+			if _, ok := outboundTypes[kind]; !ok {
+				return Result{}, errors.New("unsupported proxy chain hop type")
 			}
+			clone["name"] = proxyName
+			clone["dialer-proxy"] = previous
 			proxies = append(proxies, clone)
 			group["proxies"] = []any{proxyName}
 		} else {
@@ -340,7 +377,7 @@ func Compose(base []byte, spec Spec) (Result, error) {
 				return Result{}, errors.New("unsupported chain provider type")
 			}
 			clone["health-check"] = map[string]any{"enable": false}
-			if previous != "" {
+			{
 				override, err := mapping(clone["override"], "provider override")
 				if err != nil {
 					return Result{}, err
@@ -352,7 +389,7 @@ func Compose(base []byte, spec Spec) (Result, error) {
 				}
 				// Existing expressions run after fixed override fields and may
 				// set dialer-proxy; append our private chain assignment last.
-				override["override-expr"] = append(expressions, `."dialer-proxy" = `+strconv.Quote(previous))
+				override["override-expr"] = append(expressions, rejectUnsupportedExpression(), `."dialer-proxy" = `+strconv.Quote(previous))
 				clone["override"] = override
 			}
 			providers[providerName] = clone
@@ -362,11 +399,16 @@ func Compose(base []byte, spec Spec) (Result, error) {
 		groups = append(groups, group)
 	}
 	exit := fmt.Sprintf("%s_hop_%d", prefix, len(spec.Hops)-1)
-	members, err := sequence(target["proxies"], "target proxies")
-	if err != nil {
-		return Result{}, err
+	// While the chain is active the target is restricted to its generated exit.
+	// A stale cached selector, a reload, or an engine handoff can therefore not
+	// silently fall back to an unrelated proxy before selection is restored.
+	// The original subscription remains untouched and is restored on disconnect.
+	target["proxies"] = []any{exit}
+	target["default-selected"] = exit
+	target["empty-fallback"] = "REJECT"
+	for _, key := range []string{"use", "filter", "exclude-filter", "exclude-type"} {
+		delete(target, key)
 	}
-	target["proxies"] = append(members, exit)
 	root["proxies"], root["proxy-groups"], root["proxy-providers"] = proxies, groups, providers
 	body, err := yaml.Marshal(root)
 	if err != nil {

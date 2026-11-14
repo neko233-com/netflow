@@ -13,6 +13,7 @@ import (
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/ui"
+	"github.com/neko233-com/netflow/internal/validation"
 )
 
 func (a *App) startAgent() error {
@@ -38,6 +39,44 @@ func (a *App) stopAgent() {
 }
 
 func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMessage) (any, error) {
+	if method == "chain-preview" {
+		var in agent.ChainPreviewArgs
+		if err := decodeStrict(args, &in); err != nil {
+			return nil, err
+		}
+		var draft chainDraft
+		var prepareErr error
+		executed := false
+		a.runOnMain(func() {
+			executed = true
+			if prepareErr = ctx.Err(); prepareErr == nil {
+				draft, prepareErr = a.prepareAgentChain(in)
+			}
+		})
+		if !executed {
+			return nil, errors.New("desktop application is shutting down")
+		}
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+		checked, err := validateConfigurations(ctx, a.dir, []validation.Config{{ID: draft.active.ProfileID, Body: draft.composed}})
+		if err != nil {
+			return nil, err
+		}
+		var result agent.ChainPreview
+		var finishErr error
+		executed = false
+		a.runOnMain(func() {
+			executed = true
+			if finishErr = ctx.Err(); finishErr == nil {
+				result, finishErr = a.finishAgentChainPreview(draft, checked)
+			}
+		})
+		if !executed {
+			return nil, errors.New("desktop application is shutting down")
+		}
+		return result, finishErr
+	}
 	if method == "preview" || method == "rollback-preview" {
 		var change agent.Change
 		var rollback agent.RollbackArgs
@@ -118,6 +157,33 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 
 func (a *App) agentCommand(method string, args json.RawMessage) (value any, callErr error) {
 	switch method {
+	case "chain-status":
+		var input agent.Empty
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value = a.agentChainStatus()
+		}
+	case "chain-apply":
+		var input agent.ApplyArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentChainApply(input.ProposalID)
+		}
+	case "chain-cancel-preview":
+		var input agent.ApplyArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			proposal, exists := a.agentChainProposals[input.ProposalID]
+			delete(a.agentChainProposals, input.ProposalID)
+			value = agent.ActionResult{OK: exists && proposal.expires.After(time.Now())}
+		}
+	case "chain-disconnect":
+		var input agent.Empty
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			callErr = a.disconnectChain()
+			result := agent.ActionResult{OK: callErr == nil}
+			if a.chainDisconnectWarning != "" {
+				result.Warnings = []string{a.chainDisconnectWarning}
+			}
+			value = result
+		}
 	case "status":
 		value, callErr = a.agentStatus()
 	case "connections":
@@ -531,6 +597,7 @@ func (a *App) expiryLoop(stop <-chan struct{}) {
 			a.runOnMain(func() {
 				if cleanupProposals {
 					a.pruneExpiredProposals(time.Now())
+					a.pruneExpiredChainProposals(time.Now())
 				}
 				if !expired {
 					return

@@ -119,6 +119,31 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "apply", args, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_chain_status", Description: "Read the active session-only proxy chain. Target groups use the chain for new connections; existing connections are not rerouted.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, ChainStatus, error) {
+		var out ChainStatus
+		err := client.Call(ctx, "chain-status", nil, &out)
+		return nil, out, err
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_preview_chain", Description: "Validate two to eight resolved proxy nodes and preview a session-only chain without changing routing. Apply the returned proposal separately.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in ChainPreviewArgs) (*mcp.CallToolResult, ChainPreview, error) {
+		var out ChainPreview
+		err := client.Call(ctx, "chain-preview", in, &out)
+		return nil, out, err
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_apply_chain", Description: "Apply an unexpired chain preview if configuration and sources remain unchanged. This changes routing for new connections."}, func(ctx context.Context, _ *mcp.CallToolRequest, in ApplyArgs) (*mcp.CallToolResult, ChainStatus, error) {
+		var out ChainStatus
+		err := client.Call(ctx, "chain-apply", in, &out)
+		return nil, out, err
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_cancel_chain_preview", Description: "Discard a pending chain preview."}, func(ctx context.Context, _ *mcp.CallToolRequest, in ApplyArgs) (*mcp.CallToolResult, ActionResult, error) {
+		var out ActionResult
+		err := client.Call(ctx, "chain-cancel-preview", in, &out)
+		return nil, out, err
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_disconnect_chain", Description: "Disconnect the current chain and restore the target group's previous selection. Existing connections are not rerouted."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, ActionResult, error) {
+		var out ActionResult
+		err := client.Call(ctx, "chain-disconnect", nil, &out)
+		return nil, out, err
+	})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_proxy_groups", Description: "Page live proxy groups with a bounded first page of members. Use next_offset; groups may change after reload.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in PageArgs) (*mcp.CallToolResult, GroupsResult, error) {
 			var out GroupsResult

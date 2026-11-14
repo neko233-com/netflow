@@ -155,13 +155,20 @@ func TestMihomoChainTraffic(t *testing.T) {
 			}
 			c := core.New()
 			c.DisableExternalController()
-			c.SetTransformer(func([]byte, string) ([]byte, error) { return result.Config, nil })
 			if err = c.Start(dir); err != nil {
-				t.Fatalf("start: %v\n%s", err, result.Config)
+				t.Fatalf("original start: %v", err)
 			}
 			defer c.Stop()
-			if err = c.Select("TARGET", result.Exit); err != nil {
+			// Explicitly leave a conflicting cached selection before reload.
+			if err = c.Select("TARGET", "DIRECT"); err != nil {
 				t.Fatal(err)
+			}
+			c.SetTransformer(func([]byte, string) ([]byte, error) { return result.Config, nil })
+			if err = c.Reload(); err != nil {
+				t.Fatalf("chain reload: %v\n%s", err, result.Config)
+			}
+			if selected, err := c.Selected("TARGET"); err != nil || selected != result.Exit {
+				t.Fatalf("stale selection escaped chain: %s %v", selected, err)
 			}
 			proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
 			tr := &http.Transport{Proxy: http.ProxyURL(proxyURL), DisableKeepAlives: true}
@@ -202,6 +209,27 @@ func TestMihomoChainTraffic(t *testing.T) {
 				if originHits.Load() != 1 {
 					t.Fatalf("missing provider node leaked to origin: %d", originHits.Load())
 				}
+				// A provider cannot replace a named intermediate hop with a
+				// direct adapter and thereby silently bypass the entry.
+				changed := strings.Replace(nodes, "name: 'exit`node', type: socks5", "name: 'exit`node', type: direct", 1)
+				if changed == nodes {
+					t.Fatal("failed to prepare direct-node update")
+				}
+				if err := os.WriteFile(filepath.Join(dir, "nodes.yaml"), []byte("proxies:\n"+changed), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := c.UpdateProxyProvider(generated); err != nil {
+					t.Fatal(err)
+				}
+				if response, err := client.Get(origin.URL); err == nil {
+					response.Body.Close()
+					if response.StatusCode == http.StatusOK {
+						t.Fatal("direct-node update bypassed chain")
+					}
+				}
+				if originHits.Load() != 1 {
+					t.Fatalf("direct-node update reached origin: %d", originHits.Load())
+				}
 				if err := os.WriteFile(filepath.Join(dir, "nodes.yaml"), []byte("proxies:\n"+nodes), 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -230,6 +258,22 @@ func TestMihomoChainTraffic(t *testing.T) {
 			}
 			if originHits.Load() != expected {
 				t.Fatalf("chain fell back to direct: origin hits=%d", originHits.Load())
+			}
+			// Disconnect restores the original selector and saved DIRECT choice.
+			c.SetTransformer(nil)
+			if err := c.Reload(); err != nil {
+				t.Fatalf("disconnect reload: %v", err)
+			}
+			if selected, err := c.Selected("TARGET"); err != nil || selected != "DIRECT" {
+				t.Fatalf("original choice not restored: %s %v", selected, err)
+			}
+			response, err := client.Get(origin.URL)
+			if err != nil {
+				t.Fatalf("restored direct request: %v", err)
+			}
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK || originHits.Load() != expected+1 {
+				t.Fatalf("original route not restored: status=%d origin=%d", response.StatusCode, originHits.Load())
 			}
 			raw, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
 			if err != nil || string(raw) != base {

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/neko233-com/netflow/internal/agent"
@@ -72,8 +73,11 @@ type App struct {
 	started                 time.Time
 	rewrites                *rewrite.Store
 	kernelOptions           *kernelopts.Store
+	chain                   atomic.Pointer[activeChain]
+	chainDisconnectWarning  string
 	agentBridge             *agent.Bridge
 	agentProposals          map[string]agentProposal
+	agentChainProposals     map[string]chainProposal
 	agentExpiryStop         chan struct{}
 	expiryFallbackSignature string
 	rewriteWarning          string
@@ -248,33 +252,7 @@ func (a *App) Prepare() error {
 		return fmt.Errorf("读取内核选项: %w", err)
 	}
 	a.syncTUNStack()
-	a.core.SetTransformer(func(base []byte, profileID string) ([]byte, error) {
-		var extensionErr error
-		base, extensionErr = a.applyProfileVergeExtensions(base, profileID)
-		if extensionErr != nil {
-			return nil, extensionErr
-		}
-		var tunErr error
-		base, tunErr = a.applyProfileTUN(base)
-		if tunErr != nil {
-			return nil, tunErr
-		}
-		var dnsErr error
-		base, dnsErr = a.applyProfileDNS(base, profileID)
-		if dnsErr != nil {
-			return nil, dnsErr
-		}
-		state := a.rewrites.Snapshot()
-		now := time.Now()
-		if rewrite.HasActive(state, profileID, now) {
-			var err error
-			base, _, err = rewrite.Compose(base, state, profileID, now)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return kernelopts.Compose(base, a.kernelOptions.Snapshot())
-	})
+	a.core.SetTransformer(a.composeRuntime)
 	a.core.SetProfileID(a.model.CurrentProfile)
 	if err := a.installCurrentProfile(); err != nil {
 		a.model.Notice = err.Error()
@@ -1088,6 +1066,9 @@ func selectorGroup(kind string) bool {
 // profile-switch half of activateSelected. Startup does the same work
 // from Prepare via loadProfiles and loadGroups.
 func (a *App) UseProfile(uid string) error {
+	if a != nil && a.chain.Load() != nil && a.core != nil && a.core.ProfileID() != uid {
+		return errors.New("请先断开链式代理，再切换订阅")
+	}
 	if a == nil || a.profiles == nil {
 		return errors.New("订阅存储不可用")
 	}
@@ -1176,7 +1157,9 @@ func (a *App) bindHooks() {
 		SetSystemProxy:      a.SetSystemProxy,
 		SetAutoLaunch:       a.SetAutoLaunch,
 		SetLightweight:      a.setLightweight,
-		ChainAvailable:      func() bool { return false },
+		ChainAvailable:      func() bool { return true },
+		ConnectChainAsync:   a.connectChainAsync,
+		DisconnectChain:     a.disconnectChain,
 		SetTUN:              a.SetTUN,
 		SetTUNAutoStart:     a.setTUNAutoStart,
 		SetMode:             a.SetMode,
@@ -1270,6 +1253,9 @@ func (a *App) SelectProxy(group, node string) error {
 	if a == nil {
 		return nil
 	}
+	if active := a.chain.Load(); active != nil && active.Spec.Target == group {
+		return errors.New("请先断开链式代理，再更换目标组节点")
+	}
 	actual := node
 	if a.core != nil && a.core.Status().Running {
 		if err := a.core.Select(group, node); err != nil {
@@ -1327,6 +1313,9 @@ func (a *App) persistSelection(group, node string) error {
 
 // SetMode writes the profile mode and reloads the kernel when it is running.
 func (a *App) SetMode(mode string) error {
+	if a != nil && a.chain.Load() != nil && a.core != nil && a.core.Status().Mode != mode {
+		return errors.New("请先断开链式代理，再切换模式")
+	}
 	if mode != "rule" && mode != "global" && mode != "direct" {
 		return errors.New("无效的代理模式")
 	}

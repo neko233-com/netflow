@@ -198,6 +198,49 @@ func vmAgentJunctionSafety(t *testing.T) {
 	}
 }
 
+// Exercise the installed CLI against either the GUI or the headless bridge,
+// including a provider-backed hop in the isolated privileged kernel.
+func vmAgentChainRoundTrip(t *testing.T, agentExe, dir string) {
+	t.Helper()
+	invoke := func(stdin string, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		cmd := vmCommand(ctx, agentExe, append([]string{"--config-dir", dir}, args...)...)
+		if stdin != "" {
+			cmd.Stdin = strings.NewReader(stdin)
+		}
+		return cmd.CombinedOutput()
+	}
+	input := `{"target":"Select","hops":[{"name":"new","group":"Select"},{"name":"migrated-provider-node","provider":"imported","group":"FromSet"}]}`
+	out, err := invoke(input, "chain-preview")
+	var preview agent.ChainPreview
+	if err != nil || json.Unmarshal(out, &preview) != nil || preview.ProposalID == "" {
+		t.Fatalf("installed chain preview: %s %v", out, err)
+	}
+	out, err = invoke("", "chain-status")
+	var state agent.ChainStatus
+	if err != nil || json.Unmarshal(out, &state) != nil || state.Configured {
+		t.Fatalf("chain preview changed routing: %s %v", out, err)
+	}
+	out, err = invoke("", "chain-apply", preview.ProposalID)
+	if err != nil || json.Unmarshal(out, &state) != nil || !state.Configured || !state.Active {
+		t.Fatalf("installed chain apply: %s %v", out, err)
+	}
+	out, err = invoke("", "chain-status")
+	if err != nil || json.Unmarshal(out, &state) != nil || !state.Active {
+		t.Fatalf("installed chain status: %s %v", out, err)
+	}
+	out, err = invoke("", "chain-disconnect")
+	if err != nil {
+		t.Fatalf("installed chain disconnect: %s %v", out, err)
+	}
+	out, err = invoke("", "chain-status")
+	if err != nil || json.Unmarshal(out, &state) != nil || state.Configured {
+		t.Fatalf("installed chain did not disconnect: %s %v", out, err)
+	}
+	t.Log("installed CLI previewed, applied and disconnected a provider chain in the TUN worker")
+}
+
 func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -316,6 +359,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if !status.TUN || !status.Headless {
 		t.Fatalf("headless TUN did not start: %+v", status)
 	}
+	vmAgentChainRoundTrip(t, agentExe, dir)
 	var connectionPage agent.ConnectionsResult
 	if output, err := call("connections", "0", "1"); err != nil || json.Unmarshal(output, &connectionPage) != nil || connectionPage.NextOffset > connectionPage.Total {
 		t.Fatalf("installed headless connection page failed: %s %v", output, err)
@@ -1470,7 +1514,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(verge, "sets"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	for name, contents := range map[string]string{"nodes.yaml": "proxies: [{name: migrated-provider-node, type: direct}]\n", "bad.yaml": "proxies: [{name: fallback, type: direct}]\n", "rules.yaml": "payload: ['+.blocked.netflow-test.example']\n"} {
+	for name, contents := range map[string]string{"nodes.yaml": "proxies: [{name: migrated-provider-node, type: socks5, server: 127.0.0.1, port: 9}]\n", "bad.yaml": "proxies: [{name: fallback, type: direct}]\n", "rules.yaml": "payload: ['+.blocked.netflow-test.example']\n"} {
 		if err := os.WriteFile(filepath.Join(verge, "sets", name), []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -1731,6 +1775,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 			t.Fatalf("provider failure was not safely reported: %+v %v", job, err)
 		}
 		t.Log("installed Agent listed and updated a migrated HTTP provider while TUN was active")
+		vmAgentChainRoundTrip(t, agentExe, migrationTarget)
 		out, err = callMigration("groups")
 		if err != nil || !strings.Contains(string(out), "migrated-provider-node") {
 			t.Fatalf("migrated provider unavailable in TUN: %s %v", out, err)

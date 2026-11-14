@@ -303,6 +303,11 @@ func (c *Client) ProxyProviders() []core.ProxyProvider {
 	_ = c.short("ProxyProviders", Empty{}, &out)
 	return out.Items
 }
+func (c *Client) ProviderMembers(name string) ([]core.ProxyNode, error) {
+	var out ProxyNodes
+	err := c.short("ProviderMembers", Name{name}, &out)
+	return out.Items, err
+}
 func (c *Client) UpdateProxyProvider(name string) error {
 	return c.updateProxyProvider(name, nil)
 }

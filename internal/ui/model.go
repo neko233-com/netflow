@@ -20,6 +20,8 @@ type Hooks struct {
 	SetAutoLaunch              func(on bool) error
 	SetLightweight             func(on bool) error
 	ChainAvailable             func() bool
+	ConnectChainAsync          func(string, []ProxyNode, func(error))
+	DisconnectChain            func() error
 	SystemDark                 func() bool
 	ApplyHotkeys               func(Prefs) error
 	SetTUN                     func(on bool) error

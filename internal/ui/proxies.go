@@ -33,7 +33,21 @@ func (m *Model) proxyPage(c *mygoui.Context, pal Palette) {
 				m.Notice = "链式代理尚未接入内核"
 				return
 			}
+			if m.Chain.Connecting {
+				m.Notice = "代理链正在连接"
+				return
+			}
 			if m.Chain.On {
+				if m.Chain.Connected {
+					if m.Hooks.DisconnectChain == nil {
+						m.Notice = "代理链服务不可用"
+						return
+					}
+					if err := m.Hooks.DisconnectChain(); err != nil {
+						m.Notice = err.Error()
+						return
+					}
+				}
 				m.Chain = ChainState{}
 			} else {
 				m.Chain.Ask = true
@@ -148,6 +162,12 @@ func (m *Model) chainPanel(c *mygoui.Context, pal Palette) {
 			}
 			return
 		}
+		if m.Chain.Warning != "" {
+			mygoui.Text(c, m.Chain.Warning).FontSize(13).TextColor(pal.Warning)
+		}
+		if m.Chain.Target != "" {
+			mygoui.Text(c, "目标组: "+m.Chain.Target).FontSize(13).TextColor(pal.TextMuted)
+		}
 		for i, n := range m.Chain.Nodes {
 			tag := n.Name
 			if i == 0 {
@@ -183,14 +203,35 @@ func (m *Model) chainPanel(c *mygoui.Context, pal Palette) {
 		b.Children(func() { mygoui.Text(c, label).FontSize(13) })
 		if b.Clicked() {
 			if m.Chain.Connected {
+				if m.Hooks.DisconnectChain == nil {
+					m.Notice = "代理链服务不可用"
+					return
+				}
+				if err := m.Hooks.DisconnectChain(); err != nil {
+					m.Notice = err.Error()
+					return
+				}
 				m.Chain.Connected = false
 			} else if ok {
-				m.Chain.Connected = true
+				if m.Hooks.ConnectChainAsync == nil {
+					m.Notice = "代理链服务不可用"
+					return
+				}
+				m.Chain.Connecting = true
+				m.Hooks.ConnectChainAsync(m.Chain.Target, append([]ProxyNode(nil), m.Chain.Nodes...), func(err error) {
+					m.Chain.Connecting = false
+					if err != nil {
+						m.Notice = err.Error()
+						return
+					}
+					m.Chain.Connected = true
+					m.Notice = "代理链已连接，新连接将使用目标组的代理链"
+				})
 			}
 		}
-		if textButton(c, pal, "删除链式配置", "删除链式配置", "chain-clear") {
+		if !m.Chain.Connected && !m.Chain.Connecting && textButton(c, pal, "删除链式配置", "删除链式配置", "chain-clear") {
 			m.Chain.Nodes = nil
-			m.Chain.Connected = false
+			m.Chain.Target = ""
 		}
 	})
 }
@@ -403,12 +444,14 @@ func (m *Model) nodeRow(c *mygoui.Context, pal Palette, g *ProxyGroup, n ProxyNo
 			mygoui.Text(c, DelayText(n.Delay, DelayTimeout)).FontSize(13).TextColor(pal.TextMuted)
 		}
 	})
-	if row.Clicked() && SelectableGroup(g.Type) {
+	if row.Clicked() {
 		if m.Chain.On {
-			m.addChain(n)
+			m.addChain(g, n)
 			return
 		}
-		m.selectNode(g, n)
+		if SelectableGroup(g.Type) {
+			m.selectNode(g, n)
+		}
 	}
 }
 
@@ -435,12 +478,35 @@ func (m *Model) selectNode(g *ProxyGroup, n ProxyNode) {
 	}
 }
 
-func (m *Model) addChain(n ProxyNode) {
+func (m *Model) addChain(g *ProxyGroup, n ProxyNode) {
+	if m.Chain.Connected || m.Chain.Connecting {
+		m.Notice = "请先断开代理链再编辑节点"
+		return
+	}
+	if g == nil || n.Preset {
+		m.Notice = "请选择实际代理节点"
+		return
+	}
 	for _, cur := range m.Chain.Nodes {
-		if cur.Name == n.Name {
+		if cur.Name == n.Name && cur.Provider == n.Provider {
 			m.Notice = "该节点已在链式代理表中"
 			return
 		}
+	}
+	n.SourceGroup = g.Name
+	if SelectableGroup(g.Type) {
+		m.Chain.Target = g.Name
+	}
+	if m.Chain.Target == "" {
+		for _, candidate := range m.Groups {
+			if !candidate.Hidden && SelectableGroup(candidate.Type) {
+				m.Chain.Target = candidate.Name
+				break
+			}
+		}
+	}
+	if m.Home.Mode == "global" {
+		m.Chain.Target = "GLOBAL"
 	}
 	m.Chain.Nodes = append(m.Chain.Nodes, n)
 }

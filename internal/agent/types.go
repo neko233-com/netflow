@@ -316,6 +316,33 @@ type ApplyResult struct {
 	Warnings         []string `json:"warnings,omitempty"`
 }
 
+// ChainHop identifies a resolved member of a visible proxy group.
+type ChainHop struct {
+	Name     string `json:"name" jsonschema:"resolved proxy node name"`
+	Provider string `json:"provider,omitempty" jsonschema:"provider identity, omitted for inline proxies"`
+	Group    string `json:"group" jsonschema:"group currently containing the node"`
+}
+type ChainPreviewArgs struct {
+	Target string     `json:"target" jsonschema:"selectable target group; GLOBAL is used in global mode"`
+	Hops   []ChainHop `json:"hops" jsonschema:"two to eight nodes, from entry to exit"`
+}
+type ChainPreview struct {
+	ProposalID string     `json:"proposal_id"`
+	ProfileID  string     `json:"profile_id"`
+	Target     string     `json:"target"`
+	Hops       []ChainHop `json:"hops"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	Warnings   []string   `json:"warnings"`
+}
+type ChainStatus struct {
+	Configured bool       `json:"configured"`
+	Warning    string     `json:"warning,omitempty"`
+	Active     bool       `json:"active"`
+	ProfileID  string     `json:"profile_id,omitempty"`
+	Target     string     `json:"target,omitempty"`
+	Hops       []ChainHop `json:"hops,omitempty"`
+}
+
 type ProxyNode struct {
 	Name        string `json:"name"`
 	Type        string `json:"type"`

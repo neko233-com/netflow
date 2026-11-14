@@ -173,7 +173,7 @@ func (m *Model) chainDialog(c *mygoui.Context, pal Palette) {
 	mygoui.Modal(c, &open, func() {
 		mygoui.Column(c).Width(420).Padding(16).Gap(8).Background(pal.Dialog).Radius(8).Children(func() {
 			mygoui.Text(c, "链式代理").FontSize(18).Bold()
-			mygoui.Text(c, "链式代理会显著降低网速。如果您没有明确的业务需求，或不了解此项配置，请保持关闭").FontSize(14)
+			mygoui.Text(c, "依次选择入口和出口节点；链路只影响目标组的新连接，断开后恢复原节点。应用退出后需要重新连接。链式代理可能降低网速。").FontSize(14)
 			mygoui.Row(c).Gap(8).Children(func() {
 				if filledButton(c, pal, "保持关闭", "chain-keep", false) {
 					m.Chain.Ask = false

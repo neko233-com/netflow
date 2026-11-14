@@ -73,7 +73,7 @@ func TestImportedExtensionsApplyAndInvalidateAgentPreview(t *testing.T) {
 	after := before
 	after.Global = rewrite.Layer{Prepend: []string{"DOMAIN,extension.test,Extra"}}
 	options := a.kernelOptions.Snapshot()
-	_, rules, hashes, err := a.previewSources(catalogSnapshot, catalogHash, &options, before, after, a.core.ProfileID(), true, nil)
+	_, rules, hashes, err := a.previewSources(catalogSnapshot, catalogHash, &options, before, after, a.core.ProfileID(), true, nil, nil)
 	if err != nil || len(rules) == 0 || rules[0] != "DOMAIN,extension.test,Extra" || hashes[filepath.Join(dir, "profiles.json")] != catalogHash {
 		t.Fatalf("preview did not use the captured catalog: %v %v", rules, err)
 	}

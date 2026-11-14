@@ -484,3 +484,53 @@ func TestProviderCommandsUseBridge(t *testing.T) {
 		t.Fatal("invalid kind accepted")
 	}
 }
+
+func TestChainCLIUsesPreviewApplyAndDisconnect(t *testing.T) {
+	dir := t.TempDir()
+	var methods []string
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		methods = append(methods, method)
+		switch method {
+		case "chain-preview":
+			var in agent.ChainPreviewArgs
+			if json.Unmarshal(raw, &in) != nil || in.Target != "Target" || len(in.Hops) != 2 || in.Hops[1].Provider != "sub" {
+				return nil, errors.New("bad preview")
+			}
+			return agent.ChainPreview{ProposalID: "proposal"}, nil
+		case "chain-apply":
+			var in agent.ApplyArgs
+			if json.Unmarshal(raw, &in) != nil || in.ProposalID != "proposal" {
+				return nil, errors.New("bad apply")
+			}
+			return agent.ChainStatus{Configured: true, Active: true}, nil
+		case "chain-status":
+			return agent.ChainStatus{Configured: true, Active: true}, nil
+		case "chain-disconnect":
+			return agent.ActionResult{OK: true}, nil
+		default:
+			return nil, errors.New("unexpected method")
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	cases := []struct {
+		args  []string
+		input string
+	}{{[]string{"chain-preview"}, `{"target":"Target","hops":[{"name":"one","group":"Target"},{"name":"two","provider":"sub","group":"Target"}]}`}, {[]string{"chain-apply", "proposal"}, ""}, {[]string{"chain-status"}, ""}, {[]string{"chain-disconnect"}, ""}}
+	for _, tc := range cases {
+		var out bytes.Buffer
+		args := append([]string{"--config-dir", dir}, tc.args...)
+		if err := run(args, strings.NewReader(tc.input), &out); err != nil {
+			t.Fatalf("%v: %s %v", tc.args, out.String(), err)
+		}
+	}
+	if len(methods) != len(cases) {
+		t.Fatalf("methods: %v", methods)
+	}
+	var out bytes.Buffer
+	if err := run([]string{"--config-dir", dir, "chain-preview"}, strings.NewReader(`{"target":"Target","unknown":1}`), &out); err == nil {
+		t.Fatal("unknown preview field accepted")
+	}
+}

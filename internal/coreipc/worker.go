@@ -56,6 +56,7 @@ type Connections struct {
 type Rules struct{ Items []rules.Item }
 type RuleProviders struct{ Items []rules.Provider }
 type ProxyProviders struct{ Items []core.ProxyProvider }
+type ProxyNodes struct{ Items []core.ProxyNode }
 type LogQuery struct{ After uint64 }
 type LogLine struct {
 	Sequence       uint64
@@ -313,6 +314,10 @@ func (w *Worker) UpdateRuleProvider(in Name, out *Empty) error {
 func (w *Worker) ProxyProviders(_ Empty, out *ProxyProviders) error {
 	out.Items = w.kernel.ProxyProviders()
 	return nil
+}
+func (w *Worker) ProviderMembers(in Name, out *ProxyNodes) (err error) {
+	out.Items, err = w.kernel.ProviderMembers(in.Value)
+	return err
 }
 func (w *Worker) UpdateProxyProvider(in Name, out *Empty) error {
 	return w.kernel.UpdateProxyProvider(in.Value)

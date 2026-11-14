@@ -144,6 +144,17 @@ func (s *switchableEngine) ProxyProviders() []core.ProxyProvider {
 	defer s.mu.RUnlock()
 	return s.active.ProxyProviders()
 }
+func (s *switchableEngine) ProviderMembers(n string) ([]core.ProxyNode, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	provider, ok := s.active.(interface {
+		ProviderMembers(string) ([]core.ProxyNode, error)
+	})
+	if !ok {
+		return nil, errors.New("kernel does not expose provider members")
+	}
+	return provider.ProviderMembers(n)
+}
 func (s *switchableEngine) UpdateProxyProvider(n string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
