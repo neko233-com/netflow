@@ -65,9 +65,9 @@ type Hooks struct {
 	CreateProfileAsync         func(form ProfileForm, done func(error))
 	LoadRewrite                func(scope, profileID string) (rewrite.Layer, error)
 	PreviewRewrite             func(change agent.Change) (agent.Preview, error)
-	PreviewRewriteAsync        func(change agent.Change, done func(agent.Preview, error))
+	PreviewRewriteAsync        func(change agent.Change, done func(agent.Preview, error)) func()
 	RewriteHistory             func() (agent.RewriteHistory, error)
-	PreviewRollbackAsync       func(args agent.RollbackArgs, done func(agent.Preview, error))
+	PreviewRollbackAsync       func(args agent.RollbackArgs, done func(agent.Preview, error)) func()
 	DiscardRewriteProposal     func(id string)
 	ApplyRewrite               func(id string) (agent.ApplyResult, error)
 	SetKernelOption            func(name string, value any) error
@@ -125,6 +125,7 @@ type Model struct {
 	BatchDeleteAsk       bool
 	RuleEditor           RuleEditor
 	ruleEditorSeq        uint64
+	ruleEditorCancel     func()
 	UpdateDialog         bool
 	UpdateResult         update.Result
 	portsDraft           Prefs

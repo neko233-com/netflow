@@ -84,8 +84,15 @@ func TestRuleEditorHistoryAndAsyncPreviewLifecycle(t *testing.T) {
 	var pending func(agent.Preview, error)
 	var rollback agent.RollbackArgs
 	var discarded []string
-	m.Hooks.PreviewRewriteAsync = func(_ agent.Change, done func(agent.Preview, error)) { pending = done }
-	m.Hooks.PreviewRollbackAsync = func(in agent.RollbackArgs, done func(agent.Preview, error)) { rollback, pending = in, done }
+	canceled := 0
+	m.Hooks.PreviewRewriteAsync = func(_ agent.Change, done func(agent.Preview, error)) func() {
+		pending = done
+		return func() { canceled++ }
+	}
+	m.Hooks.PreviewRollbackAsync = func(in agent.RollbackArgs, done func(agent.Preview, error)) func() {
+		rollback, pending = in, done
+		return func() { canceled++ }
+	}
 	m.Hooks.DiscardRewriteProposal = func(id string) { discarded = append(discarded, id) }
 	applied := ""
 	m.Hooks.ApplyRewrite = func(id string) (agent.ApplyResult, error) { applied = id; return agent.ApplyResult{}, nil }
@@ -99,6 +106,9 @@ func TestRuleEditorHistoryAndAsyncPreviewLifecycle(t *testing.T) {
 	}
 	stale := pending
 	m.invalidateRulePreview()
+	if canceled != 1 {
+		t.Fatal("superseded validation was not canceled")
+	}
 	stale(agent.Preview{ProposalID: "stale"}, nil)
 	if len(discarded) != 1 || discarded[0] != "stale" || m.RuleEditor.ProposalID != "" {
 		t.Fatal("stale proposal was not discarded")
@@ -131,6 +141,9 @@ func TestRuleEditorHistoryAndAsyncPreviewLifecycle(t *testing.T) {
 	m.previewRules()
 	late := pending
 	m.openRuleEditor("global", "")
+	if canceled != 2 {
+		t.Fatal("closed dialog validation was not canceled")
+	}
 	late(agent.Preview{ProposalID: "old-dialog"}, nil)
 	if m.RuleEditor.ProposalID != "" || discarded[len(discarded)-1] != "old-dialog" {
 		t.Fatal("closed dialog accepted old preview")

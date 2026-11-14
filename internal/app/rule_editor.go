@@ -12,6 +12,9 @@ func (a *App) loadRewrite(scope, profileID string) (rewrite.Layer, error) {
 	if a.rewrites == nil {
 		return rewrite.Layer{}, errors.New("规则覆写尚未就绪")
 	}
+	if err := a.rewrites.CheckCurrent(); err != nil {
+		return rewrite.Layer{}, err
+	}
 	state := a.rewrites.Snapshot()
 	switch scope {
 	case "global":
@@ -28,18 +31,23 @@ func (a *App) loadRewrite(scope, profileID string) (rewrite.Layer, error) {
 
 // Preparation and final acceptance run on the UI thread; potentially slow
 // external validation runs in the background just as it does for Agent calls.
-func (a *App) previewDraftAsync(draft previewDraft, err error, done func(agent.Preview, error)) {
+func (a *App) previewDraftAsync(draft previewDraft, err error, done func(agent.Preview, error)) func() {
 	if err != nil {
 		done(agent.Preview{}, err)
-		return
+		return func() {}
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		checked, err := validateConfigurations(context.Background(), a.dir, draft.configs)
+		defer cancel()
+		checked, err := validateConfigurations(ctx, a.dir, draft.configs)
 		if err == nil {
 			err = a.verifyDraftSources(draft, checked)
 		}
 		a.runOnMain(func() {
 			var result agent.Preview
+			if err == nil {
+				err = ctx.Err()
+			}
 			if err == nil {
 				result, err = a.finishAgentPreview(draft, checked)
 			}
@@ -49,14 +57,15 @@ func (a *App) previewDraftAsync(draft previewDraft, err error, done func(agent.P
 			}
 		})
 	}()
+	return cancel
 }
 
-func (a *App) previewRewriteAsync(change agent.Change, done func(agent.Preview, error)) {
+func (a *App) previewRewriteAsync(change agent.Change, done func(agent.Preview, error)) func() {
 	draft, err := a.prepareAgentPreview(change)
-	a.previewDraftAsync(draft, err, done)
+	return a.previewDraftAsync(draft, err, done)
 }
 
-func (a *App) previewRollbackAsync(args agent.RollbackArgs, done func(agent.Preview, error)) {
+func (a *App) previewRollbackAsync(args agent.RollbackArgs, done func(agent.Preview, error)) func() {
 	draft, err := a.prepareAgentRollback(args)
-	a.previewDraftAsync(draft, err, done)
+	return a.previewDraftAsync(draft, err, done)
 }

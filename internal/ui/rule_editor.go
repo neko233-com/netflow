@@ -61,17 +61,21 @@ func ruleLines(s string) []string {
 func (m *Model) previewRules() {
 	e := &m.RuleEditor
 	change := agent.Change{Scope: e.Scope, Operation: "set", ProfileID: e.ProfileID, Layer: rewrite.Layer{Prepend: ruleLines(e.Prepend), Append: ruleLines(e.Append), Remove: ruleLines(e.Remove)}}
-	m.startRulePreview(func(done func(agent.Preview, error)) {
+	m.startRulePreview(func(done func(agent.Preview, error)) func() {
 		if m.Hooks.PreviewRewriteAsync != nil {
-			m.Hooks.PreviewRewriteAsync(change, done)
-			return
+			return m.Hooks.PreviewRewriteAsync(change, done)
 		}
 		preview, err := m.Hooks.PreviewRewrite(change)
 		done(preview, err)
+		return func() {}
 	})
 }
 
 func (m *Model) invalidateRulePreview() {
+	if m.ruleEditorCancel != nil {
+		m.ruleEditorCancel()
+		m.ruleEditorCancel = nil
+	}
 	if m.RuleEditor.ProposalID != "" && m.Hooks.DiscardRewriteProposal != nil {
 		m.Hooks.DiscardRewriteProposal(m.RuleEditor.ProposalID)
 	}
@@ -92,26 +96,32 @@ func (m *Model) previewRuleRollback() {
 		}
 		revision := e.History[i].Revision
 		args := agent.RollbackArgs{Revision: &revision, Scope: e.Scope, ProfileID: e.ProfileID}
-		m.startRulePreview(func(done func(agent.Preview, error)) { m.Hooks.PreviewRollbackAsync(args, done) })
+		m.startRulePreview(func(done func(agent.Preview, error)) func() { return m.Hooks.PreviewRollbackAsync(args, done) })
 		return
 	}
 	e.Error = "请选择历史版本"
 }
 
-func (m *Model) startRulePreview(start func(func(agent.Preview, error))) {
+func (m *Model) startRulePreview(start func(func(agent.Preview, error)) func()) {
 	m.invalidateRulePreview()
 	m.RuleEditor.Busy = true
 	seq := m.ruleEditorSeq
-	start(func(preview agent.Preview, err error) {
+	cancel := start(func(preview agent.Preview, err error) {
 		if !m.RuleEditor.Open || seq != m.ruleEditorSeq {
 			if preview.ProposalID != "" && m.Hooks.DiscardRewriteProposal != nil {
 				m.Hooks.DiscardRewriteProposal(preview.ProposalID)
 			}
 			return
 		}
+		m.ruleEditorCancel = nil
 		m.RuleEditor.Busy = false
 		m.finishRulePreview(preview, err)
 	})
+	if seq == m.ruleEditorSeq && m.RuleEditor.Open && m.RuleEditor.Busy {
+		m.ruleEditorCancel = cancel
+	} else if cancel != nil {
+		cancel()
+	}
 }
 
 func (m *Model) finishRulePreview(preview agent.Preview, err error) {
@@ -223,4 +233,7 @@ func (m *Model) ruleEditorDialog(c *mygoui.Context, pal Palette) {
 			})
 		})
 	})
+	if !e.Open {
+		m.invalidateRulePreview()
+	}
 }

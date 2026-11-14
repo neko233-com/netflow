@@ -42,6 +42,19 @@ func TestGUIRulePreviewValidationDoesNotBlockEventLoop(t *testing.T) {
 			<-validationSlots
 		}
 	}()
+	var cancel func()
+	dispatcher.call(func() {
+		cancel = a.previewRewriteAsync(agent.Change{Scope: "global", Operation: "set"}, func(p agent.Preview, err error) { results <- result{p, err} })
+	})
+	dispatcher.call(cancel)
+	select {
+	case got := <-results:
+		if got.err == nil || got.preview.ProposalID != "" {
+			t.Fatal("canceled validation produced a proposal")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled validation did not release its wait")
+	}
 	dispatcher.call(func() {
 		a.previewRewriteAsync(agent.Change{Scope: "global", Operation: "set", Layer: rewrite.Layer{Prepend: []string{"DOMAIN,gui.test,DIRECT"}}}, func(p agent.Preview, err error) { results <- result{p, err} })
 	})
@@ -86,5 +99,23 @@ func TestGUIRulePreviewValidationDoesNotBlockEventLoop(t *testing.T) {
 		})
 	case <-time.After(30 * time.Second):
 		t.Fatal("GUI rollback preview did not finish")
+	}
+}
+
+func TestLoadRewriteRejectsExternalEdits(t *testing.T) {
+	dir := t.TempDir()
+	store, err := rewrite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(rewrite.State{}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent-rules.json"), []byte("external"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := &App{rewrites: store}
+	if _, err := a.loadRewrite("global", ""); err == nil {
+		t.Fatal("stale external rules were shown as current")
 	}
 }
