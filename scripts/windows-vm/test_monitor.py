@@ -11,11 +11,13 @@ import time
 
 source = Path("/opt/netflow/bridge.py")
 tree = ast.parse(source.read_text(encoding="utf-8"), str(source))
-functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {"monitor_command", "detach_setup_media", "desktop_ready", "start_media_from_desktop", "bootstrap_media_agent"}]
-if len(functions) != 5:
+functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {"monitor_command", "detach_setup_media", "desktop_ready", "start_media_from_desktop", "drive_order", "bootstrap_media_agent"}]
+if len(functions) != 6:
     raise RuntimeError("setup-media monitor functions missing")
 scope = {"re": re, "socket": socket, "time": time, "Path": Path}
 exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), "exec"), scope)
+if scope["drive_order"]("F") != "FEGDHIJKLMNOPQRSTUVWXYZ" or scope["drive_order"]("../bad") != "DEFGHIJKLMNOPQRSTUVWXYZ":
+    raise AssertionError("invalid remembered media drive handling")
 
 # Verify desktop recognition and fixed keyboard input without a live guest.
 screen = Path("/tmp/netflow-desktop.ppm")
@@ -78,6 +80,8 @@ with tempfile.TemporaryDirectory(prefix="netflow-bootstrap-test-") as directory:
     scope["bootstrap_media_agent"]()
     if (base / ("a" * 32 + ".json")).exists():
         raise AssertionError("acknowledged media bootstrap was reported as failed")
+    if (base / "last-media-drive").read_text() != "D":
+        raise AssertionError("successful media drive was not remembered")
 
 scope["Path"], scope["socket"], scope["time"] = Path, socket, time
 del scope["print"]

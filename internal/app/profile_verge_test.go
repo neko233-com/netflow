@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,12 +18,7 @@ import (
 )
 
 func TestImportedExtensionsApplyAndInvalidateAgentPreview(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	_ = listener.Close()
+	port := freePort(t)
 	source := t.TempDir()
 	if err := os.Mkdir(filepath.Join(source, "profiles"), 0700); err != nil {
 		t.Fatal(err)
@@ -79,7 +73,7 @@ func TestImportedExtensionsApplyAndInvalidateAgentPreview(t *testing.T) {
 	after := before
 	after.Global = rewrite.Layer{Prepend: []string{"DOMAIN,extension.test,Extra"}}
 	options := a.kernelOptions.Snapshot()
-	_, rules, hashes, err := a.previewSources(catalogSnapshot, catalogHash, &options, before, after, a.core.ProfileID(), true)
+	_, rules, hashes, err := a.previewSources(catalogSnapshot, catalogHash, &options, before, after, a.core.ProfileID(), true, nil)
 	if err != nil || len(rules) == 0 || rules[0] != "DOMAIN,extension.test,Extra" || hashes[filepath.Join(dir, "profiles.json")] != catalogHash {
 		t.Fatalf("preview did not use the captured catalog: %v %v", rules, err)
 	}

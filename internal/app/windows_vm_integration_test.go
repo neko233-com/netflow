@@ -31,7 +31,10 @@ import (
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/coreipc"
 	"github.com/neko233-com/netflow/internal/kernelopts"
+	"github.com/neko233-com/netflow/internal/migration"
+	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/tun"
+	"github.com/neko233-com/netflow/internal/validation"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
@@ -158,14 +161,21 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	}
 	t.Log("MSI installation and installed binary hashes verified")
 	agentExe := filepath.Join(install, "netflow-agent.exe")
-	versionCtx, versionCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	versionCtx, versionCancel := context.WithTimeout(context.Background(), 35*time.Second)
 	versionOutput, versionErr := vmCommand(versionCtx, agentExe, "version").CombinedOutput()
+	versionContextErr := versionCtx.Err()
 	versionCancel()
 	var version struct {
 		Version string `json:"version"`
 	}
 	if versionErr != nil || json.Unmarshal(versionOutput, &version) != nil || version.Version != netflow.Version() {
-		t.Fatalf("installed CLI version differs from test manifest: %s %v", versionOutput, versionErr)
+		for _, channel := range []string{"Application", "Microsoft-Windows-Windows Defender/Operational"} {
+			c, done := context.WithTimeout(context.Background(), 10*time.Second)
+			events, eventErr := vmCommand(c, "wevtutil.exe", "qe", channel, "/q:*[System[(EventID=1000 or EventID=1001 or EventID=1116 or EventID=1117 or EventID=1118 or EventID=1119)]]", "/c:4", "/rd:true", "/f:text").CombinedOutput()
+			done()
+			t.Logf("recent guest %s events: %s (%v)", channel, events, eventErr)
+		}
+		t.Fatalf("installed CLI version differs from test manifest: %s %v, context: %v", versionOutput, versionErr, versionContextErr)
 	}
 	key, err := registry.OpenKey(registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, registry.QUERY_VALUE)
 	if err != nil {
@@ -220,7 +230,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	}
 	migrationTarget := t.TempDir()
 	for _, action := range []string{"migrate-preview", "migrate-import"} {
-		c, done := context.WithTimeout(context.Background(), 30*time.Second)
+		c, done := context.WithTimeout(context.Background(), 40*time.Second)
 		out, e := vmCommand(c, agentExe, "--config-dir", migrationTarget, action, verge).CombinedOutput()
 		done()
 		if e != nil {
@@ -272,7 +282,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if !ok || answer.A.String() != "192.0.2.77" {
 			t.Fatalf("migrated hosts not applied: %v", response.Answer)
 		}
-		commandCtx, commandCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		commandCtx, commandCancel := context.WithTimeout(context.Background(), 40*time.Second)
 		out, err := vmCommand(commandCtx, agentExe, "--config-dir", migrationTarget, "groups").CombinedOutput()
 		commandCancel()
 		if err != nil {
@@ -305,7 +315,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		// The provider belongs to a group added by the imported extension. Its
 		// contents must survive the switch to the privileged TUN worker.
 		callMigration := func(args ...string) ([]byte, error) {
-			c, done := context.WithTimeout(context.Background(), 30*time.Second)
+			c, done := context.WithTimeout(context.Background(), 40*time.Second)
 			defer done()
 			return vmCommand(c, agentExe, append([]string{"--config-dir", migrationTarget}, args...)...).CombinedOutput()
 		}
@@ -334,6 +344,120 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		out, err = callMigration("rules")
 		if err != nil || !strings.Contains(string(out), "blocked") {
 			t.Fatalf("migrated rule provider unavailable in TUN: %s %v", out, err)
+		}
+		preview := func() ([]byte, error) {
+			c, done := context.WithTimeout(context.Background(), 40*time.Second)
+			defer done()
+			cmd := vmCommand(c, agentExe, "--config-dir", migrationTarget, "preview")
+			cmd.Stdin = strings.NewReader(`{"scope":"global","operation":"set","layer":{"prepend":["DOMAIN,agent.netflow-test.example,DIRECT"]}}`)
+			return cmd.CombinedOutput()
+		}
+		out, err = preview()
+		var proposal agent.Preview
+		if err != nil || json.Unmarshal(out, &proposal) != nil || proposal.ProposalID == "" {
+			// Diagnose only synthetic data in this disposable guest. Do not print
+			// subscriptions, provider contents, URLs, or absolute paths.
+			catalog, e := profile.NewStore(migrationTarget).Load()
+			if e == nil && len(catalog.Items) == 1 {
+				item := catalog.Items[0]
+				if archive, pathErr := migration.ArchivePath(migrationTarget, item.Option.VergeArchive); pathErr == nil {
+					rel, relErr := filepath.Rel(migrationTarget, archive)
+					resolved, resolveErr := filepath.EvalSymlinks(migrationTarget)
+					t.Logf("archive path diagnostic: lexicalLocal=%t rootMatchesResolved=%t relativeErr=%v resolveErr=%v", relErr == nil && filepath.IsLocal(rel), strings.EqualFold(filepath.Clean(resolved), filepath.Clean(migrationTarget)), relErr, resolveErr)
+				}
+				body, readErr := os.ReadFile(filepath.Join(migrationTarget, "config.yaml"))
+				if readErr == nil && item.Option.VergeExtensions {
+					body, _, _, readErr = migration.ComposeArchived(migrationTarget, item.Option.VergeArchive, item.Option.VergeUID, body)
+				}
+				if readErr == nil {
+					body, readErr = profile.RemapVergeProviders(body, item.Option.VergeProviderPaths)
+				}
+				if readErr == nil {
+					request, _ := json.Marshal(validation.Request{Directory: migrationTarget, Configs: []validation.Config{{ID: item.UID, Body: body}}})
+					c, done := context.WithTimeout(context.Background(), 25*time.Second)
+					cmd := vmCommand(c, filepath.Join(install, "NetFlow.exe"), "--internal-validate")
+					cmd.Stdin = strings.NewReader(string(request))
+					data, validationErr := cmd.CombinedOutput()
+					done()
+					var diagnostic validation.Result
+					if validationErr == nil && json.Unmarshal(data, &diagnostic) == nil {
+						root, rootErr := os.OpenRoot(migrationTarget)
+						if rootErr == nil {
+							for path, expected := range diagnostic.Sources {
+								actual, hashErr := validation.HashSource(root, migrationTarget, path)
+								if hashErr != nil && !(errors.Is(hashErr, os.ErrNotExist) && expected == ([32]byte{})) || hashErr == nil && actual != expected {
+									t.Logf("validation source mismatch: %s err=%v expectedMissing=%t", filepath.Base(path), hashErr, expected == ([32]byte{}))
+								}
+							}
+							_ = root.Close()
+						}
+					} else {
+						t.Logf("independent validator failed: %v", validationErr)
+					}
+				}
+			}
+			t.Fatalf("TUN offline agent preview failed: %s %v", out, err)
+		}
+		catalog, err := profile.NewStore(migrationTarget).Load()
+		if err != nil || len(catalog.Items) != 1 {
+			t.Fatalf("migration catalog: %v", err)
+		}
+		managed := catalog.Items[0].Option.VergeProviderPaths["./sets/rules.yaml"]
+		if managed == "" {
+			t.Fatal("migrated rule provider path missing")
+		}
+		managedPath := filepath.Join(migrationTarget, filepath.FromSlash(managed))
+		if err := os.WriteFile(managedPath, []byte("payload: ['+.changed.netflow-test.example']\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := callMigration("apply", proposal.ProposalID); err == nil {
+			t.Fatalf("stale provider proposal accepted: %s", out)
+		}
+		if err := os.WriteFile(managedPath, []byte("invalid: true\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := preview(); err == nil {
+			t.Fatalf("invalid rule provider accepted: %s", out)
+		}
+		if err := os.WriteFile(managedPath, []byte("payload: ['+.blocked.netflow-test.example']\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		t.Log("installed agent checked provider contents offline and rejected stale TUN proposal")
+		var large strings.Builder
+		large.WriteString("payload:\n")
+		for i := 0; i < 100000; i++ {
+			fmt.Fprintf(&large, "  - '+.d%d.netflow-test.example'\n", i)
+		}
+		if err := os.WriteFile(managedPath, []byte(large.String()), 0600); err != nil {
+			t.Fatal(err)
+		}
+		type previewResult struct {
+			out []byte
+			err error
+		}
+		previewDone := make(chan previewResult, 1)
+		go func() { out, err := preview(); previewDone <- previewResult{out, err} }()
+		time.Sleep(250 * time.Millisecond)
+		start := time.Now()
+		out, err = callMigration("status")
+		if err != nil || time.Since(start) > 5*time.Second {
+			t.Fatalf("agent status blocked during validation: %s %v", out, err)
+		}
+		select {
+		case result := <-previewDone:
+			if result.err != nil {
+				t.Fatalf("large preview failed: %s %v", result.out, result.err)
+			}
+			t.Log("large preview completed before the responsiveness check")
+		default:
+			result := <-previewDone
+			if result.err != nil {
+				t.Fatalf("large preview failed: %s %v", result.out, result.err)
+			}
+			t.Log("agent status remained responsive during offline validation")
+		}
+		if err := os.WriteFile(managedPath, []byte("payload: ['+.blocked.netflow-test.example']\n"), 0600); err != nil {
+			t.Fatal(err)
 		}
 		if out, err := callMigration("tun", "off"); err != nil {
 			t.Fatalf("migrated TUN off: %s %v", out, err)
@@ -445,9 +569,13 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		}
 	}()
 	call := func(args ...string) ([]byte, error) {
-		c, done := context.WithTimeout(context.Background(), 15*time.Second)
+		c, done := context.WithTimeout(context.Background(), 40*time.Second)
 		defer done()
-		return vmCommand(c, agentExe, append([]string{"--config-dir", dir}, args...)...).CombinedOutput()
+		out, err := vmCommand(c, agentExe, append([]string{"--config-dir", dir}, args...)...).CombinedOutput()
+		if contextErr := c.Err(); contextErr != nil {
+			return out, fmt.Errorf("CLI command timed out: %w", contextErr)
+		}
+		return out, err
 	}
 	status := func() (agent.Status, error) {
 		var s agent.Status
@@ -884,9 +1012,13 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	}
 	defer func() { _ = memoryGUI.Process.Kill(); _ = memoryGUI.Wait() }()
 	memoryCall := func(args ...string) ([]byte, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 		defer cancel()
-		return vmCommand(ctx, agentExe, append([]string{"--config-dir", memoryDir}, args...)...).CombinedOutput()
+		out, err := vmCommand(ctx, agentExe, append([]string{"--config-dir", memoryDir}, args...)...).CombinedOutput()
+		if contextErr := ctx.Err(); contextErr != nil {
+			return out, fmt.Errorf("CLI command timed out: %w", contextErr)
+		}
+		return out, err
 	}
 	memoryStatus := func() (agent.Status, error) {
 		var result agent.Status

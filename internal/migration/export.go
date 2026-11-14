@@ -12,6 +12,7 @@ import (
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/safepath"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -21,11 +22,18 @@ type ExportResult struct {
 }
 
 func managedFile(root, subdir, relative string) (string, error) {
-	base, err := filepath.EvalSymlinks(filepath.Join(root, subdir))
+	info, err := os.Lstat(filepath.Join(root, subdir))
 	if err != nil {
 		return "", err
 	}
-	file, err := filepath.EvalSymlinks(filepath.Join(root, relative))
+	if !info.IsDir() {
+		return "", errors.New("数据目录不能是链接或重解析点")
+	}
+	base, err := safepath.Canonical(filepath.Join(root, subdir))
+	if err != nil {
+		return "", err
+	}
+	file, err := safepath.Canonical(filepath.Join(root, relative))
 	if err != nil {
 		return "", err
 	}
@@ -33,7 +41,7 @@ func managedFile(root, subdir, relative string) (string, error) {
 	if err != nil || rel == "." || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", errors.New("数据文件路径无效")
 	}
-	info, err := os.Stat(file)
+	info, err = os.Stat(file)
 	if err != nil {
 		return "", err
 	}
@@ -45,6 +53,44 @@ func managedFile(root, subdir, relative string) (string, error) {
 		return "", errors.New("数据文件无效或过大")
 	}
 	return file, nil
+}
+
+// readManaged confines the actual read, not just the preliminary path check.
+func readManaged(root, subdir, relative string, limit int64) ([]byte, error) {
+	if !filepath.IsAbs(root) || !filepath.IsLocal(relative) {
+		return nil, errors.New("数据文件路径无效")
+	}
+	rel, err := filepath.Rel(subdir, relative)
+	if err != nil || !filepath.IsLocal(rel) || rel == "." {
+		return nil, errors.New("数据文件路径无效")
+	}
+	parent, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer parent.Close()
+	info, err := parent.Lstat(subdir)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, errors.New("数据目录不能是链接或重解析点")
+	}
+	dir, err := parent.OpenRoot(subdir)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	f, err := dir.Open(rel)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err = f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
+		return nil, errors.New("数据文件无效或过大")
+	}
+	return readBounded(f, limit)
 }
 
 // ExportVerge writes a new Clash Verge-compatible ZIP and never overwrites an
@@ -82,18 +128,14 @@ func ExportVerge(target, destination string) (ExportResult, error) {
 	providerOutput := map[string]providerEntry{}
 	providerConflicts := map[string]bool{}
 	index := vergeIndex{Items: []vergeItem{}}
-	seenArchive := map[string]*Source{}
+	seenArchive := map[string][]byte{}
 	hasScript := false
 	hasUnlinked := false
 	for _, p := range catalog.Items {
 		if p.Type != "remote" && p.Type != "local" {
 			continue
 		}
-		file, err := managedFile(target, "profiles", p.File)
-		if err != nil {
-			return ExportResult{}, err
-		}
-		body, err := os.ReadFile(file)
+		body, err := readManaged(target, "profiles", p.File, maxEntry)
 		if err != nil {
 			return ExportResult{}, err
 		}
@@ -109,14 +151,10 @@ func ExportVerge(target, destination string) (ExportResult, error) {
 				result.Warnings = append(result.Warnings, "部分集合的原始路径不适合写入备份，请在 Verge 中检查")
 				continue
 			}
-			file, e := managedFile(target, "verge-providers", filepath.FromSlash(managed))
+			data, e := readManaged(target, "verge-providers", filepath.FromSlash(managed), maxEntry)
 			if errors.Is(e, os.ErrNotExist) {
 				continue
 			}
-			if e != nil {
-				return ExportResult{}, e
-			}
-			data, e := os.ReadFile(file)
 			if e != nil {
 				return ExportResult{}, e
 			}
@@ -155,17 +193,17 @@ func ExportVerge(target, destination string) (ExportResult, error) {
 		var origin *Source
 		var original vergeItem
 		if p.Option.VergeArchive != "" && p.Option.VergeUID != "" {
-			origin = seenArchive[p.Option.VergeArchive]
-			if origin == nil {
-				archive, err := managedFile(target, "verge-imports", p.Option.VergeArchive)
+			archive := seenArchive[p.Option.VergeArchive]
+			if archive == nil {
+				archive, err = readManaged(target, "verge-imports", p.Option.VergeArchive, maxTotal)
 				if err != nil {
 					return ExportResult{}, err
 				}
-				origin, err = ReadVerge(archive)
-				if err != nil {
-					return ExportResult{}, err
-				}
-				seenArchive[p.Option.VergeArchive] = origin
+				seenArchive[p.Option.VergeArchive] = archive
+			}
+			origin, err = readArchiveExtensionsWithScript(archive, p.Option.VergeUID, true)
+			if err != nil {
+				return ExportResult{}, err
 			}
 			for _, item := range origin.index.Items {
 				if item.UID == p.Option.VergeUID {

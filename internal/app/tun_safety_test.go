@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,13 +14,9 @@ import (
 )
 
 func TestUnavailableTUNCannotBeEnabledBySubscription(t *testing.T) {
+	var err error
 	dir := t.TempDir()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
+	port := freePort(t)
 	base := []byte(fmt.Sprintf("mixed-port: %d\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\nipv6: false\ndns:\n  enable: false\ntun:\n  enable: true\n  auto-route: true\nrules:\n  - MATCH,DIRECT\n", port))
 	path := filepath.Join(dir, "config.yaml")
 	if err = os.WriteFile(path, base, 0600); err != nil {

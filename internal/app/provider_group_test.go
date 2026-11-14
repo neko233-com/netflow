@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,13 +14,9 @@ import (
 )
 
 func TestProviderNodesAppearInApplicationModel(t *testing.T) {
+	var err error
 	dir := t.TempDir()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
+	port := freePort(t)
 	config := fmt.Sprintf(`mixed-port: %d
 port: 0
 socks-port: 0

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/neko233-com/netflow/internal/profile"
+	"github.com/neko233-com/netflow/internal/safepath"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -120,7 +121,7 @@ func ReadVerge(source string) (*Source, error) {
 	files := map[string][]byte{}
 	originDir := ""
 	if st.IsDir() {
-		root, err := filepath.EvalSymlinks(source)
+		root, err := safepath.Canonical(source)
 		if err != nil {
 			return nil, err
 		}

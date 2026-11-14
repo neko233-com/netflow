@@ -330,12 +330,28 @@ func TestReloadWhenStopped(t *testing.T) {
 
 func freePort(t *testing.T) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	var held []net.PacketConn
+	defer func() {
+		for _, socket := range held {
+			_ = socket.Close()
+		}
+	}()
+	for i := 0; i < 1024; i++ {
+		udp, err := net.ListenPacket("udp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := udp.LocalAddr().(*net.UDPAddr).Port
+		tcp, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+		if err == nil {
+			_ = tcp.Close()
+			_ = udp.Close()
+			return port
+		}
+		held = append(held, udp)
 	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
+	t.Fatal("could not reserve a TCP and UDP port")
+	return 0
 }
 
 func waitListen(addr string) error {

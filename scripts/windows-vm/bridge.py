@@ -74,6 +74,13 @@ def start_media_from_desktop(conn, drive):
         time.sleep(.1)
     monitor_command(conn, "sendkey ret 100")
 
+def drive_order(previous):
+    letters = "DEFGHIJKLMNOPQRSTUVWXYZ"
+    if len(previous) == 1 and previous in letters:
+        index = letters.index(previous)
+        return "".join(sorted(letters, key=lambda drive: (abs(letters.index(drive) - index), letters.index(drive))))
+    return letters
+
 def bootstrap_media_agent():
     # Fresh installations complete their first-logon setup and reboot first.
     if not (Path("/storage/windows.boot").exists() or Path("/storage/windows.system").exists()):
@@ -83,9 +90,14 @@ def bootstrap_media_agent():
         # before trying the non-elevated test agent on a fresh installation.
         if media_started.wait(90):
             return
+    last_drive = RESULTS / "last-media-drive"
+    try:
+        previous = last_drive.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        previous = ""
     while not media_started.is_set():
         completed = True
-        for drive in "DEFGHIJKLMNOPQRSTUVWXYZ":
+        for drive in drive_order(previous):
             if media_started.is_set():
                 return
             try:
@@ -107,6 +119,12 @@ def bootstrap_media_agent():
                 completed = False
                 break
             if media_started.wait(10):
+                try:
+                    tmp = RESULTS / (RUN_ID + ".drive.tmp")
+                    tmp.write_text(drive, encoding="ascii")
+                    os.replace(tmp, last_drive)
+                except OSError as err:
+                    print("Windows guest: could not remember media drive: " + str(err), flush=True)
                 return
         if completed and not media_started.is_set():
             # Do not loop indefinitely or report success when Windows refuses

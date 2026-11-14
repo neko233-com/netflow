@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -15,13 +16,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/metacubex/mihomo/hub/executor"
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/conn"
+	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/tun"
+	"github.com/neko233-com/netflow/internal/validation"
 )
 
 type agentProposal struct {
@@ -54,30 +56,59 @@ func (a *App) agentStatus() (agent.Status, error) {
 	return out, nil
 }
 
+type previewDraft struct {
+	change         agent.Change
+	state          rewrite.State
+	revision       uint64
+	active, target string
+	status         core.Status
+	tunSetting     bool
+	options        *kernelopts.Options
+	before, after  []string
+	hashes         map[string][32]byte
+	warnings       []string
+	configs        []validation.Config
+}
+
 func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
+	draft, err := a.prepareAgentPreview(change)
+	if err != nil {
+		return agent.Preview{}, err
+	}
+	checked, err := validateConfigurations(context.Background(), a.dir, draft.configs)
+	if err != nil {
+		return agent.Preview{}, err
+	}
+	if err := a.verifyDraftSources(draft, checked); err != nil {
+		return agent.Preview{}, err
+	}
+	return a.finishAgentPreview(draft, checked)
+}
+
+func (a *App) prepareAgentPreview(change agent.Change) (previewDraft, error) {
 	if a.rewrites == nil || a.core == nil || a.profiles == nil {
-		return agent.Preview{}, errors.New("agent service is not ready")
+		return previewDraft{}, errors.New("agent service is not ready")
 	}
 	status := a.core.Status()
 	if !status.Running {
-		return agent.Preview{}, errors.New("core is not running")
+		return previewDraft{}, errors.New("core is not running")
 	}
 	if a.tunBusy {
-		return agent.Preview{}, errors.New("TUN transition in progress; preview again after it completes")
+		return previewDraft{}, errors.New("TUN transition in progress; preview again after it completes")
 	}
 	if change.Operation != "set" && change.Operation != "clear" {
-		return agent.Preview{}, errors.New("operation must be set or clear")
+		return previewDraft{}, errors.New("operation must be set or clear")
 	}
 	if change.Scope != "global" && change.Scope != "profile" && change.Scope != "connection" {
-		return agent.Preview{}, errors.New("scope must be global, profile, or connection")
+		return previewDraft{}, errors.New("scope must be global, profile, or connection")
 	}
 	if err := change.Layer.Validate(); err != nil {
-		return agent.Preview{}, err
+		return previewDraft{}, err
 	}
 	active := a.core.ProfileID()
 	catalog, catalogHash, err := a.profiles.LoadSnapshot()
 	if err != nil {
-		return agent.Preview{}, err
+		return previewDraft{}, err
 	}
 	state := a.rewrites.Snapshot()
 	revision := state.Revision
@@ -100,7 +131,7 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 			}
 		}
 		if !found {
-			return agent.Preview{}, errors.New("profile not found")
+			return previewDraft{}, errors.New("profile not found")
 		}
 		if state.Profiles == nil {
 			state.Profiles = make(map[string]rewrite.Layer)
@@ -115,7 +146,7 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 		}
 	case "connection":
 		if change.ConnectionID == "" {
-			return agent.Preview{}, errors.New("connection_id is required")
+			return previewDraft{}, errors.New("connection_id is required")
 		}
 		var kept []rewrite.Connection
 		for _, item := range state.Connections {
@@ -126,7 +157,7 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 		state.Connections = kept
 		if change.Operation == "set" {
 			if change.TTLSeconds < 1 || change.TTLSeconds > 86400 {
-				return agent.Preview{}, errors.New("ttl_seconds must be between 1 and 86400")
+				return previewDraft{}, errors.New("ttl_seconds must be between 1 and 86400")
 			}
 			var match *conn.Item
 			items, _, _ := a.core.Connections()
@@ -137,11 +168,11 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 				}
 			}
 			if match == nil {
-				return agent.Preview{}, errors.New("active connection not found")
+				return previewDraft{}, errors.New("active connection not found")
 			}
 			rule, err := connectionRule(*match, change.Policy)
 			if err != nil {
-				return agent.Preview{}, err
+				return previewDraft{}, err
 			}
 			state.Connections = append(state.Connections, rewrite.Connection{ID: change.ConnectionID, ProfileID: active, Rule: rule, ExpiresAt: time.Now().UTC().Add(time.Duration(change.TTLSeconds) * time.Second)})
 			warnings = append(warnings, "Rules affect new connections sharing the destination, port, network and source IP; other matching connections can also be affected.", "Existing sockets are not rerouted. Closing the selected connection is optional and does not guarantee reconnection.")
@@ -151,7 +182,7 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 		warnings = append(warnings, "The core is not in rule mode, so rule changes will not control routing until rule mode is selected.")
 	}
 	if err := state.Validate(); err != nil {
-		return agent.Preview{}, err
+		return previewDraft{}, err
 	}
 	current := a.rewrites.Snapshot()
 	var options *kernelopts.Options
@@ -159,12 +190,35 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 		value := a.kernelOptions.Snapshot()
 		options = &value
 	}
-	before, after, hashes, err := a.previewSources(catalog, catalogHash, options, current, state, target, change.Scope == "global")
+	var configs []validation.Config
+	before, after, hashes, err := a.previewSources(catalog, catalogHash, options, current, state, target, change.Scope == "global", &configs)
 	if err != nil {
-		return agent.Preview{}, err
+		return previewDraft{}, err
 	}
+	return previewDraft{change: change, state: state, revision: revision, active: active, target: target, status: status, tunSetting: a.settings.TUN, options: options, before: before, after: after, hashes: hashes, warnings: warnings, configs: configs}, nil
+}
+
+func (a *App) verifyDraftSources(draft previewDraft, checked validation.Result) error {
+	for path, hash := range checked.Sources {
+		if previous, ok := draft.hashes[path]; ok && previous != hash {
+			return errors.New("source changed during validation")
+		}
+		draft.hashes[path] = hash
+	}
+	return a.checkAgentSources(draft.hashes)
+}
+
+func (a *App) finishAgentPreview(draft previewDraft, checked validation.Result) (agent.Preview, error) {
+	status := a.core.Status()
+	if !status.Running || a.tunBusy || a.core.ProfileID() != draft.active || a.rewrites.Snapshot().Revision != draft.revision || status.TUN != draft.status.TUN || status.Mode != draft.status.Mode || a.settings.TUN != draft.tunSetting {
+		return agent.Preview{}, errors.New("configuration or network state changed; preview again")
+	}
+	if (a.kernelOptions == nil) != (draft.options == nil) || (draft.options != nil && !reflect.DeepEqual(a.kernelOptions.Snapshot(), *draft.options)) {
+		return agent.Preview{}, errors.New("kernel options changed; preview again")
+	}
+	draft.warnings = append(draft.warnings, checked.Warnings...)
 	var token [24]byte
-	if _, err = rand.Read(token[:]); err != nil {
+	if _, err := rand.Read(token[:]); err != nil {
 		return agent.Preview{}, err
 	}
 	id := hex.EncodeToString(token[:])
@@ -172,6 +226,11 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 		a.agentProposals = make(map[string]agentProposal)
 	}
 	now := time.Now()
+	for _, c := range draft.state.Connections {
+		if !c.ExpiresAt.After(now) {
+			return agent.Preview{}, errors.New("connection rule expired during validation; preview again")
+		}
+	}
 	for k, p := range a.agentProposals {
 		if !p.expires.After(now) {
 			delete(a.agentProposals, k)
@@ -181,20 +240,21 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 		return agent.Preview{}, errors.New("too many pending proposals")
 	}
 	expires := now.Add(2 * time.Minute)
-	for _, c := range state.Connections {
+	for _, c := range draft.state.Connections {
 		if c.ExpiresAt.After(now) && c.ExpiresAt.Before(expires) {
 			expires = c.ExpiresAt
 		}
 	}
-	a.agentProposals[id] = agentProposal{change: change, state: state, revision: revision, activeProfile: active, sources: hashes, expires: expires, tunEnabled: status.TUN, tunSetting: a.settings.TUN, mode: status.Mode, options: options}
-	return agent.Preview{ProposalID: id, Revision: revision, ActiveProfile: active, TargetProfile: target, RulesBefore: before, RulesAfter: after, Warnings: warnings, ExpiresAt: expires}, nil
+	a.agentProposals[id] = agentProposal{change: draft.change, state: draft.state, revision: draft.revision, activeProfile: draft.active, sources: draft.hashes, expires: expires, tunEnabled: status.TUN, tunSetting: draft.tunSetting, mode: status.Mode, options: draft.options}
+	return agent.Preview{ProposalID: id, Revision: draft.revision, ActiveProfile: draft.active, TargetProfile: draft.target, RulesBefore: draft.before, RulesAfter: draft.after, Warnings: draft.warnings, ExpiresAt: expires}, nil
 }
 
 // previewSources validates the whole effective config for the selected profile.
 // A global change is also checked against every installed subscription.
-func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options *kernelopts.Options, before, after rewrite.State, target string, all bool) ([]string, []string, map[string][32]byte, error) {
+func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options *kernelopts.Options, before, after rewrite.State, target string, all bool, outConfigs *[]validation.Config) ([]string, []string, map[string][32]byte, error) {
 	active := a.core.ProfileID()
 	sources := map[string]string{active: filepath.Join(a.dir, "config.yaml")}
+	relativeProfiles := map[string]string{}
 	for _, item := range catalog.Items {
 		if item.UID == active {
 			continue
@@ -205,9 +265,11 @@ func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options
 				return nil, nil, nil, err
 			}
 			sources[item.UID] = file
+			relativeProfiles[item.UID] = item.File
 		}
 	}
 	var beforeRules, afterRules []string
+	var configs []validation.Config
 	foundTarget := false
 	hashes := make(map[string][32]byte, len(sources))
 	catalogPath := filepath.Join(a.dir, "profiles.json")
@@ -223,7 +285,13 @@ func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options
 		}
 	}
 	for id, path := range sources {
-		base, err := os.ReadFile(path)
+		var base []byte
+		var err error
+		if rel, ok := relativeProfiles[id]; ok {
+			base, path, err = readProfileFile(a.dir, rel)
+		} else {
+			base, err = os.ReadFile(path)
+		}
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -242,10 +310,6 @@ func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options
 				return nil, nil, nil, errors.New("Verge 存档在预览期间发生变化，请重试")
 			}
 			hashes[archivePath] = archiveHash
-		}
-		providerHashes, err := a.vergeProviderHashes(id, catalog)
-		if err != nil {
-			return nil, nil, nil, err
 		}
 		base, err = a.applyProfileTUN(base)
 		if err != nil {
@@ -269,19 +333,7 @@ func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options
 				return nil, nil, nil, err
 			}
 		}
-		if _, err = executor.ParseWithBytes(effective); err != nil {
-			return nil, nil, nil, fmt.Errorf("profile %q: %w", id, err)
-		}
-		afterHashes, err := a.vergeProviderHashes(id, catalog)
-		if err != nil || !reflect.DeepEqual(providerHashes, afterHashes) {
-			return nil, nil, nil, errors.New("集合文件在预览期间发生变化，请重试")
-		}
-		for path, hash := range providerHashes {
-			if previous, ok := hashes[path]; ok && previous != hash {
-				return nil, nil, nil, errors.New("集合文件在预览期间发生变化，请重试")
-			}
-			hashes[path] = hash
-		}
+		configs = append(configs, validation.Config{ID: id, Body: effective})
 		if id == target {
 			beforeRules, afterRules, foundTarget = oldRules, newRules, true
 		}
@@ -289,7 +341,46 @@ func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options
 	if !foundTarget {
 		return nil, nil, nil, errors.New("target configuration is unavailable")
 	}
+	if outConfigs != nil {
+		*outConfigs = configs
+	}
 	return beforeRules, afterRules, hashes, nil
+}
+
+func (a *App) checkAgentSources(sources map[string][32]byte) error {
+	root, err := os.OpenRoot(a.dir)
+	if err != nil {
+		return errors.New("source configuration changed; preview again")
+	}
+	defer root.Close()
+	for path, expected := range sources {
+		actual, err := validation.HashSource(root, a.dir, path)
+		if errors.Is(err, os.ErrNotExist) && expected == ([32]byte{}) {
+			continue
+		}
+		if err != nil || actual != expected {
+			kind := "configuration"
+			rel, _ := filepath.Rel(a.dir, path)
+			switch {
+			case strings.HasPrefix(filepath.ToSlash(rel), "verge-providers/"):
+				kind = "imported provider"
+			case strings.HasPrefix(filepath.ToSlash(rel), "verge-imports/"):
+				kind = "import archive"
+			case strings.HasPrefix(filepath.ToSlash(rel), "profiles/"):
+				kind = "profile"
+			case strings.EqualFold(filepath.Ext(path), ".mmdb"), strings.EqualFold(filepath.Ext(path), ".dat"), strings.EqualFold(filepath.Ext(path), ".db"):
+				kind = "geodata"
+			}
+			reason := "content changed"
+			if errors.Is(err, os.ErrNotExist) {
+				reason = "missing"
+			} else if err != nil {
+				reason = "unreadable"
+			}
+			return fmt.Errorf("source configuration changed (%s: %s); preview again", kind, reason)
+		}
+	}
+	return nil
 }
 
 func (a *App) agentApply(id string) (agent.ApplyResult, error) {
@@ -312,14 +403,8 @@ func (a *App) agentApply(id string) (agent.ApplyResult, error) {
 	if (a.kernelOptions == nil) != (p.options == nil) || (p.options != nil && !reflect.DeepEqual(a.kernelOptions.Snapshot(), *p.options)) {
 		return agent.ApplyResult{}, errors.New("kernel options changed; preview again")
 	}
-	for path, expected := range p.sources {
-		data, err := os.ReadFile(path)
-		if errors.Is(err, os.ErrNotExist) && expected == ([32]byte{}) {
-			continue
-		}
-		if err != nil || sha256.Sum256(data) != expected {
-			return agent.ApplyResult{}, errors.New("source configuration changed; preview again")
-		}
+	if err := a.checkAgentSources(p.sources); err != nil {
+		return agent.ApplyResult{}, err
 	}
 	if p.change.Scope == "connection" && p.change.Operation == "set" {
 		items, _, _ := a.core.Connections()

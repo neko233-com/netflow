@@ -16,6 +16,7 @@ import (
 
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/safepath"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -32,8 +33,8 @@ func randomID() (string, error) {
 	}
 	return "v" + hex.EncodeToString(b[:]), nil
 }
-func writeNew(path string, body []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+func writeNew(root *os.Root, path string, body []byte) error {
+	f, err := root.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
 	}
@@ -45,7 +46,7 @@ func writeNew(path string, body []byte) error {
 		err = closeErr
 	}
 	if err != nil {
-		_ = os.Remove(path)
+		_ = root.Remove(path)
 	}
 	return err
 }
@@ -94,7 +95,7 @@ func (s *Source) ValidateTarget(target string) error {
 		probe := filepath.Clean(target)
 		var suffix []string
 		for {
-			if resolved, err := filepath.EvalSymlinks(probe); err == nil {
+			if resolved, err := safepath.Canonical(probe); err == nil {
 				for i := len(suffix) - 1; i >= 0; i-- {
 					resolved = filepath.Join(resolved, suffix[i])
 				}
@@ -122,8 +123,8 @@ func (s *Source) ValidateTarget(target string) error {
 
 func safeTargetDir(target, name string) error {
 	path := filepath.Join(target, name)
-	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("目标子目录不能是符号链接")
+	if info, err := os.Lstat(path); err == nil && !info.IsDir() {
+		return errors.New("目标子目录必须是普通目录，不能是链接或重解析点")
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -175,7 +176,7 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 				_ = root.Remove(filepath.FromSlash(providerDir))
 			}
 			for _, p := range created {
-				_ = os.Remove(p)
+				_ = root.Remove(p)
 			}
 		}
 	}()
@@ -214,11 +215,10 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 		providerPaths[raw] = rel
 	}
 	archiveRel := filepath.Join("verge-imports", archiveID+".zip")
-	archivePath := filepath.Join(target, archiveRel)
-	if err = s.writeSourceArchive(archivePath); err != nil {
+	if err = s.writeSourceArchive(root, archiveRel); err != nil {
 		return ImportResult{}, err
 	}
-	created = append(created, archivePath)
+	created = append(created, archiveRel)
 	mapped := map[string]string{}
 	var result ImportResult
 	result.Warnings = append(result.Warnings, s.Preview().Warnings...)
@@ -236,11 +236,10 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 			return ImportResult{}, e
 		}
 		rel := filepath.Join("profiles", id+".yaml")
-		full := filepath.Join(target, rel)
-		if err = writeNew(full, body); err != nil {
+		if err = writeNew(root, rel, body); err != nil {
 			return ImportResult{}, err
 		}
-		created = append(created, full)
+		created = append(created, rel)
 		mapped[v.UID] = id
 		item := profile.CatalogItem{UID: id, Type: v.Type, Name: v.Name, Description: v.Desc, URL: v.URL, Home: v.Home, File: rel, Option: profile.CatalogOption{UpdateInterval: v.Option.UpdateInterval, AllowAutoUpdate: v.Option.AllowAutoUpdate, UseSystemProxy: v.Option.WithProxy, UseClashProxy: v.Option.SelfProxy, UserAgent: v.Option.UserAgent, TimeoutSeconds: v.Option.Timeout, VergeArchive: archiveRel, VergeUID: v.UID}}
 		for _, ref := range s.profileProviders[v.UID] {
@@ -347,8 +346,8 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 	return result, nil
 }
 
-func (s *Source) writeSourceArchive(path string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+func (s *Source) writeSourceArchive(root *os.Root, path string) error {
+	f, err := root.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
 	}
@@ -415,7 +414,7 @@ func (s *Source) writeSourceArchive(path string) error {
 		err = e
 	}
 	if err != nil {
-		_ = os.Remove(path)
+		_ = root.Remove(path)
 	}
 	return err
 }

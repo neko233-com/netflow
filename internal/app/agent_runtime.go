@@ -36,6 +36,47 @@ func (a *App) stopAgent() {
 }
 
 func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMessage) (any, error) {
+	if method == "preview" {
+		var change agent.Change
+		if err := decodeStrict(args, &change); err != nil {
+			return nil, err
+		}
+		var draft previewDraft
+		var prepareErr error
+		executed := false
+		mygo.RunOnMain(func() {
+			executed = true
+			if prepareErr = ctx.Err(); prepareErr == nil {
+				draft, prepareErr = a.prepareAgentPreview(change)
+			}
+		})
+		if !executed {
+			return nil, errors.New("desktop application is shutting down")
+		}
+		if prepareErr != nil {
+			return nil, prepareErr
+		}
+		checked, err := validateConfigurations(ctx, a.dir, draft.configs)
+		if err != nil {
+			return nil, err
+		}
+		if err := a.verifyDraftSources(draft, checked); err != nil {
+			return nil, err
+		}
+		var result agent.Preview
+		var finishErr error
+		executed = false
+		mygo.RunOnMain(func() {
+			executed = true
+			if finishErr = ctx.Err(); finishErr == nil {
+				result, finishErr = a.finishAgentPreview(draft, checked)
+			}
+		})
+		if !executed {
+			return nil, errors.New("desktop application is shutting down")
+		}
+		return result, finishErr
+	}
 	var value any
 	var callErr error
 	executed := false

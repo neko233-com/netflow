@@ -3,7 +3,6 @@ package app
 import (
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,13 +16,9 @@ import (
 )
 
 func TestImportTransactionPreservesCurrentAndRollsBackFirstActivation(t *testing.T) {
+	var err error
 	dir := t.TempDir()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	_ = listener.Close()
+	port := freePort(t)
 	base := []byte(fmt.Sprintf("mixed-port: %d\nport: 0\nsocks-port: 0\nmode: direct\nlog-level: error\nipv6: false\ndns:\n  enable: false\nrules:\n  - MATCH,DIRECT\n", port))
 	path := filepath.Join(dir, "config.yaml")
 	if err = os.WriteFile(path, base, 0600); err != nil {
@@ -82,12 +77,7 @@ func TestImportTransactionPreservesCurrentAndRollsBackFirstActivation(t *testing
 	if calls != 0 || string(after) != string(current) || a.core.Status().Mode != "rule" {
 		t.Fatal("importing inactive profile reset active mode or reloaded core")
 	}
-	other, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherPort := other.Addr().(*net.TCPAddr).Port
-	_ = other.Close()
+	otherPort := freePort(t)
 	otherConfig := []byte(fmt.Sprintf("mixed-port: %d\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\nipv6: false\ndns:\n  enable: false\nrules:\n  - MATCH,DIRECT\n", otherPort))
 	otherFile := filepath.Join(dir, "other.yaml")
 	if err = os.WriteFile(otherFile, otherConfig, 0600); err != nil {

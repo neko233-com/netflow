@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,12 +18,7 @@ import (
 )
 
 func TestVergeProviderImportRunsAndInvalidatesAgentPreview(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
+	port := freePort(t)
 	source := t.TempDir()
 	for _, dir := range []string{"profiles", "sets"} {
 		if err := os.Mkdir(filepath.Join(source, dir), 0700); err != nil {

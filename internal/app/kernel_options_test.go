@@ -20,13 +20,9 @@ import (
 )
 
 func TestKernelOptionsApplyPersistAndRollbackOccupiedPort(t *testing.T) {
+	var err error
 	dir := t.TempDir()
-	reserve, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := reserve.Addr().(*net.TCPAddr).Port
-	_ = reserve.Close()
+	port := freePort(t)
 	base := []byte(fmt.Sprintf("mixed-port: %d\nport: 0\nsocks-port: 0\nallow-lan: false\nipv6: false\nmode: rule\nlog-level: error\ndns:\n  enable: false\nrules:\n  - MATCH,DIRECT\n", port))
 	path := filepath.Join(dir, "config.yaml")
 	if err = os.WriteFile(path, base, 0600); err != nil {

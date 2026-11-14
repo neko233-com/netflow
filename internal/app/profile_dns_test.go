@@ -35,12 +35,7 @@ func TestProfileDNSIsAppliedAndAgentPreviewExpiresOnChange(t *testing.T) {
 	})}
 	go func() { _ = server.ActivateAndServe() }()
 	defer server.Shutdown()
-	mixed, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	mixedPort := mixed.Addr().(*net.TCPAddr).Port
-	_ = mixed.Close()
+	mixedPort := freePort(t)
 	dnsSocket, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

@@ -67,21 +67,12 @@ func ArchivePath(root, relative string) (string, error) {
 // private archive. The archive and subscription files are never modified.
 func ComposeArchived(root, relative, uid string, body []byte) ([]byte, string, [32]byte, error) {
 	var empty [32]byte
-	archive, err := ArchivePath(root, relative)
-	if err != nil {
+	if _, err := ArchivePath(root, relative); err != nil {
 		return nil, "", empty, err
 	}
-	f, err := os.Open(archive)
+	data, err := readManaged(root, "verge-imports", relative, maxTotal)
 	if err != nil {
 		return nil, "", empty, err
-	}
-	data, readErr := readBounded(f, maxTotal)
-	closeErr := f.Close()
-	if readErr != nil {
-		return nil, "", empty, readErr
-	}
-	if closeErr != nil {
-		return nil, "", empty, closeErr
 	}
 	hash := sha256.Sum256(data)
 	source, err := readArchiveExtensions(data, uid)
@@ -93,12 +84,16 @@ func ComposeArchived(root, relative, uid string, body []byte) ([]byte, string, [
 		return nil, "", empty, err
 	}
 	result, err := profile.ComposeVergeExtensions(body, ext)
-	return result, archive, hash, err
+	return result, filepath.Join(root, relative), hash, err
 }
 
 // Only the index and referenced extensions are decompressed during a reload;
 // the potentially large original subscription archive remains untouched.
 func readArchiveExtensions(archive []byte, uid string) (*Source, error) {
+	return readArchiveExtensionsWithScript(archive, uid, false)
+}
+
+func readArchiveExtensionsWithScript(archive []byte, uid string, includeScript bool) (*Source, error) {
 	zr, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
 	if err != nil {
 		return nil, err
@@ -175,6 +170,9 @@ func readArchiveExtensions(archive []byte, uid string) (*Source, error) {
 	}
 	item := index.Items[i]
 	wanted := []string{"Merge", item.Option.Merge, item.Option.Proxies, item.Option.Groups}
+	if includeScript {
+		wanted = append(wanted, item.Option.Script)
+	}
 	if item.Option.Proxies == "" {
 		wanted = append(wanted, "Proxies")
 	}

@@ -3,7 +3,6 @@ package app
 import (
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -20,12 +19,7 @@ import (
 
 func TestAgentApplyValidatesPersistsAndRollsBack(t *testing.T) {
 	dir := t.TempDir()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	_ = listener.Close()
+	port := freePort(t)
 	path := filepath.Join(dir, "config.yaml")
 	base := []byte(fmt.Sprintf("mixed-port: %d\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\nipv6: false\ndns:\n  enable: false\ntun:\n  enable: false\nrules:\n  - MATCH,DIRECT\n", port))
 	if err := os.WriteFile(path, base, 0600); err != nil {
