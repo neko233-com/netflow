@@ -1,13 +1,52 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/profile"
+	"github.com/neko233-com/netflow/internal/rewrite"
 )
+
+type profileStatusEngine struct{ diagnosticsTestEngine }
+
+func (profileStatusEngine) ProfileID() string { return "p1" }
+
+func TestLegacyDefaultProfileNamesDoNotExposeURLCredentials(t *testing.T) {
+	dir := t.TempDir()
+	a := newProfileHarness(dir)
+	raw := "https://user:synthetic-password@example.invalid?token=synthetic-token"
+	legacy := "user:synthetic-password@example.invalid?token=synthetic-token"
+	if err := a.profiles.Save(profile.File{Current: "p1", Items: []profile.CatalogItem{{UID: "p1", Name: legacy, URL: raw}}}); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	a.rewrites, err = rewrite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.core = profileStatusEngine{}
+	list, err := a.agentProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := a.agentStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal([]any{list, status})
+	if strings.Contains(string(data), "synthetic-") || list.Profiles[0].Name != "example.invalid" || status.Profiles[0].Name != "example.invalid" {
+		t.Fatal("legacy URL credentials appeared in Agent output")
+	}
+	a.loadProfiles()
+	if len(a.model.Profiles) != 1 || a.model.Profiles[0].Name != "example.invalid" {
+		t.Fatal("legacy URL credentials appeared as GUI profile name")
+	}
+}
 
 func TestProfileJobLimitsDeduplicationAndSecretRedaction(t *testing.T) {
 	a := &App{}

@@ -108,7 +108,7 @@ GUI 或无界面实例运行时，`profiles` 可列出订阅；`import-profile` 
 & $agent delete-profile '<非当前订阅 ID>'
 ```
 
-导入和更新是后台任务，均通过 `profile-job-status` 查询；订阅 ID 在导入成功后返回。导入失败可能已部分写入，重试前应先检查订阅列表；删除也可能部分完成，当前订阅不能删除。同一订阅的并发 Agent 更新会合并，GUI 与 Agent 不会同时更新同一订阅。默认不自动更新；JSON 可指定 `auto_update`、`update_interval_minutes`、`timeout_seconds`、`user_agent` 和 `use_core_proxy`，要求内核代理时不可用会失败，不回退到直连。任务错误和列表不包含订阅 URL 字段，但自定义订阅名称可能包含用户自行填写的敏感信息。完成的任务最多保留十分钟，容量不足时可能提前清理，程序退出后任务记录丢失。对应 MCP 工具为 `netflow_profiles`、`netflow_import_profile`、`netflow_update_profile`、`netflow_profile_job_status` 和 `netflow_delete_profile`。
+导入和更新是后台任务，均通过 `profile-job-status` 查询；订阅 ID 在导入成功后返回。导入时名称、描述与下载选项和目录条目一起提交；无法确认回滚时，失败任务可能返回需要检查的订阅 ID。删除共享文件的订阅时保留其他订阅仍引用的文件；文件删除失败时尝试恢复目录。异常终止或外部并发修改仍可能留下部分状态，应检查后再重试；当前订阅不能删除。同一订阅的并发 Agent 更新会合并，GUI 与 Agent 不会同时更新同一订阅。默认不自动更新；JSON 可指定 `auto_update`、`update_interval_minutes`、`timeout_seconds`、`user_agent` 和 `use_core_proxy`，要求内核代理时不可用会失败，不回退到直连。任务错误和列表不包含订阅 URL 字段，默认名称不包含 URL 凭据或查询参数；自定义名称仍可能包含用户自行填写的敏感信息。完成的任务最多保留十分钟，容量不足时可能提前清理，程序退出后任务记录丢失。对应 MCP 工具为 `netflow_profiles`、`netflow_import_profile`、`netflow_update_profile`、`netflow_profile_job_status` 和 `netflow_delete_profile`。
 
 `providers` 列出当前代理与规则集合；`update-provider <proxy|rule> <名称>` 发起后台更新，返回 `job_id`，再用 `provider-job-status <job_id>` 查询 `pending`、`succeeded` 或 `failed`。对应 MCP 工具为 `netflow_providers`、`netflow_update_provider` 和 `netflow_provider_job_status`。重复提交同一订阅中仍在进行的同一更新会返回同一个任务；任务启动前如果活动订阅已切换，会失败而不会更新另一个订阅。完成的任务最多保留十分钟，容量不足时较旧的完成任务可能提前清理；程序退出后任务记录不保留。任务错误不会暴露订阅 URL 或凭据。
 

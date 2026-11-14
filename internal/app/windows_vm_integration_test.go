@@ -321,7 +321,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	}
 	var downloads atomic.Int32
 	subscription := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/subscription" {
+		if r.URL.Path != "/subscription" && r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
@@ -372,6 +372,84 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if payload, err := call("delete-profile", profileJob.ProfileID); err != nil {
 		t.Fatalf("headless profile delete failed: %s %v", payload, err)
 	}
+	// A URL with userinfo and a query but no path previously leaked its
+	// credentials when the default profile name was derived from raw text.
+	address := strings.Replace(subscription.URL, "http://", "http://synthetic-user:synthetic-password@", 1) + "?token=synthetic-secret"
+	defaultArgs, _ := json.Marshal(agent.ProfileImportArgs{URL: address})
+	requestCtx, requestDone := context.WithTimeout(context.Background(), 30*time.Second)
+	request := vmCommand(requestCtx, agentExe, "--config-dir", dir, "import-profile")
+	request.Stdin = strings.NewReader(string(defaultArgs))
+	payload, err = request.CombinedOutput()
+	requestDone()
+	var defaultJob agent.ProfileJob
+	if err != nil || json.Unmarshal(payload, &defaultJob) != nil || strings.Contains(string(payload), "synthetic-") {
+		t.Fatalf("default-name import failed or leaked: %v", err)
+	}
+	defaultJob = waitJob(defaultJob)
+	if defaultJob.State != "succeeded" || defaultJob.ProfileID == "" {
+		t.Fatalf("default-name import failed: %+v", defaultJob)
+	}
+	payload, err = call("profiles")
+	if err != nil || strings.Contains(string(payload), "synthetic-") {
+		t.Fatal("Agent exposed URL credentials in a default profile name")
+	}
+	profileStore := profile.NewStore(dir)
+	sharedCatalog, err := profileStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sharedItem profile.CatalogItem
+	for _, item := range sharedCatalog.Items {
+		if item.UID == defaultJob.ProfileID {
+			sharedItem = item
+			break
+		}
+	}
+	if sharedItem.UID == "" {
+		t.Fatal("imported profile missing")
+	}
+	sharedItem.UID, sharedItem.Name = "shared-test-fixture", "shared-test-fixture"
+	sharedCatalog.Items = append(sharedCatalog.Items, sharedItem)
+	if err := profileStore.Save(sharedCatalog); err != nil {
+		t.Fatal(err)
+	}
+	if payload, err := call("delete-profile", defaultJob.ProfileID); err != nil {
+		t.Fatalf("shared profile delete failed: %s %v", payload, err)
+	}
+	sharedPath := filepath.Join(dir, sharedItem.File)
+	if _, err := os.Stat(sharedPath); err != nil {
+		t.Fatal("deleting a shared profile removed another entry's file")
+	}
+	sharedUTF16, err := windows.UTF16PtrFromString(sharedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := windows.CreateFile(sharedUTF16, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, deleteErr := call("delete-profile", sharedItem.UID)
+	_ = windows.CloseHandle(locked)
+	if deleteErr == nil {
+		t.Fatal("delete unexpectedly succeeded while file removal was blocked")
+	}
+	sharedCatalog, err = profileStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundShared := false
+	for _, item := range sharedCatalog.Items {
+		if item.UID == sharedItem.UID {
+			foundShared = true
+		}
+	}
+	if !foundShared {
+		t.Fatal("failed deletion did not restore the catalog entry")
+	}
+	if payload, err := call("delete-profile", sharedItem.UID); err != nil {
+		t.Fatalf("retrying profile delete failed: %s %v", payload, err)
+	}
+	t.Log("installed Agent preserved shared profile data and restored catalog after a blocked file deletion")
 	failedJob := importProfile("/missing")
 	encodedJob, _ := json.Marshal(failedJob)
 	if failedJob.State != "failed" || strings.Contains(string(encodedJob), "synthetic-secret") || strings.Contains(string(encodedJob), subscription.URL) {
@@ -390,7 +468,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatalf("enable schedule: %s %v", payload, err)
 	}
 	// Advance the due time without waiting an hour; the actual installed
-	// scheduler still executes its normal one-minute timer in the guest.
+	// scheduler still executes its normal timer in the guest.
 	schedule.NextRun = time.Now().UTC().Add(-time.Minute)
 	encodedSchedule, err := json.Marshal(schedule)
 	if err != nil {
@@ -435,8 +513,8 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatalf("live backup did not complete: %+v", backupJob)
 	}
 	configArgs, _ := json.Marshal(agent.WebDAVConfigArgs{URL: webdavServer.URL + "/collection/?token=synthetic-webdav-token", User: "vm-user", Password: "synthetic-webdav-secret"})
-	requestCtx, requestDone := context.WithTimeout(context.Background(), 30*time.Second)
-	request := vmCommand(requestCtx, agentExe, "--config-dir", dir, "webdav-save")
+	requestCtx, requestDone = context.WithTimeout(context.Background(), 30*time.Second)
+	request = vmCommand(requestCtx, agentExe, "--config-dir", dir, "webdav-save")
 	request.Stdin = strings.NewReader(string(configArgs))
 	payload, err = request.CombinedOutput()
 	requestDone()

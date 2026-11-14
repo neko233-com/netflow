@@ -2,6 +2,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -373,7 +374,7 @@ func (a *App) loadProfiles() {
 	a.model.CurrentProfile = file.Current
 	for _, it := range file.Items {
 		item := ui.ProfileItem{
-			UID: it.UID, Name: it.Name, Description: it.Description, URL: it.URL, Type: it.Type,
+			UID: it.UID, Name: profile.SafeDisplayName(it), Description: it.Description, URL: it.URL, Type: it.Type,
 			Home: it.Home, Updated: it.Updated, Used: it.Used, Total: it.Total, Expire: it.Expire,
 			Option: ui.ProfileOption{
 				UpdateInterval: it.Option.UpdateInterval, UseSystemProxy: it.Option.UseSystemProxy,
@@ -1067,7 +1068,7 @@ func (a *App) UseProfile(uid string) error {
 	if a == nil || a.profiles == nil {
 		return errors.New("订阅存储不可用")
 	}
-	catalog, err := a.profiles.Load()
+	catalog, snapshot, err := a.profiles.LoadForUpdate()
 	if err != nil {
 		return err
 	}
@@ -1130,7 +1131,12 @@ func (a *App) UseProfile(uid string) error {
 			return rollback(err)
 		}
 	}
-	if err := a.profiles.SetCurrent(uid); err != nil {
+	latest, _, err := readProfileFile(a.dir, rel)
+	if err != nil || !bytes.Equal(latest, body) {
+		return rollback(errors.New("订阅文件在切换期间发生变化"))
+	}
+	catalog.Current = uid
+	if err := a.profiles.SaveIfUnchanged(catalog, snapshot); err != nil {
 		return rollback(err)
 	}
 	a.loadProfiles()
@@ -1344,21 +1350,40 @@ func (a *App) ImportURL(raw string) error {
 }
 
 func (a *App) importURLData(raw string, body []byte, headers http.Header) error {
+	_, err := a.importURLDataConfigured(raw, body, headers, nil)
+	return err
+}
+
+func (a *App) importURLDataConfigured(raw string, body []byte, headers http.Header, metadata *profile.RemoteMetadata) (string, error) {
 	if a.profiles == nil {
 		a.profiles = profile.NewStore(a.dir)
 	}
 	if err := validateProfile(body); err != nil {
-		return err
+		return "", err
 	}
-	before, err := a.profiles.Load()
+	item, first, err := a.profiles.ImportRemoteConfigured(raw, func(string) ([]byte, error) { return body, nil }, headers, metadata)
 	if err != nil {
-		return err
+		return "", err
 	}
-	item, err := a.profiles.ImportRemoteWithHeaders(raw, func(string) ([]byte, error) { return body, nil }, headers)
-	if err != nil {
-		return err
+	previous := "existing"
+	if first {
+		previous = ""
 	}
-	return a.finishProfileImport(before.Current, item.UID)
+	if err := a.finishProfileImport(previous, item.UID); err != nil {
+		// If rollback fails or the catalog cannot be read, return the possible
+		// identifier so automation can inspect it before retrying.
+		catalog, loadErr := a.profiles.Load()
+		if loadErr != nil {
+			return item.UID, err
+		}
+		for _, existing := range catalog.Items {
+			if existing.UID == item.UID {
+				return item.UID, err
+			}
+		}
+		return "", err
+	}
+	return item.UID, nil
 }
 
 func (a *App) ImportLocal(path string) error {
@@ -1380,15 +1405,15 @@ func (a *App) ImportLocal(path string) error {
 	if err := validateProfile(body); err != nil {
 		return err
 	}
-	before, err := a.profiles.Load()
+	item, first, err := a.profiles.ImportLocalWithState(path, body)
 	if err != nil {
 		return err
 	}
-	item, err := a.profiles.ImportLocal(path, body)
-	if err != nil {
-		return err
+	previous := "existing"
+	if first {
+		previous = ""
 	}
-	return a.finishProfileImport(before.Current, item.UID)
+	return a.finishProfileImport(previous, item.UID)
 }
 
 func (a *App) finishProfileImport(previous, uid string) error {

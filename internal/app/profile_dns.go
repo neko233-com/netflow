@@ -56,7 +56,7 @@ func (a *App) setProfileDNS(id string, enabled bool, text string) error {
 	if a.profiles == nil || a.core == nil || !a.core.Status().Running || a.core.ProfileID() != id {
 		return errors.New("当前订阅或内核不可用")
 	}
-	catalog, err := a.profiles.Load()
+	catalog, snapshot, err := a.profiles.LoadForUpdate()
 	if err != nil {
 		return err
 	}
@@ -82,16 +82,14 @@ func (a *App) setProfileDNS(id string, enabled bool, text string) error {
 	if err := a.validateEffectiveProfileWithDNS(body, id, &dnsOverride{enabled: enabled, text: text, merge: merge, hosts: option.DNSVergeHosts}); err != nil {
 		return err
 	}
-	old := catalog
-	old.Items = append([]profile.CatalogItem(nil), catalog.Items...)
 	catalog.Items[index].Option.DNSEnabled = enabled
 	catalog.Items[index].Option.DNSOverride = text
 	catalog.Items[index].Option.DNSVergeMerge = merge
-	if err := a.profiles.Save(catalog); err != nil {
+	if err := a.profiles.SaveIfUnchanged(catalog, snapshot); err != nil {
 		return err
 	}
 	if err := a.core.Reload(); err != nil {
-		restore := a.profiles.Save(old)
+		restore := a.profiles.RestoreSnapshotIfUnchanged(catalog, snapshot)
 		if restore == nil {
 			restore = a.core.Reload()
 		}

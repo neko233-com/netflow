@@ -136,8 +136,8 @@ func (a *App) createProfileAsync(form ui.ProfileForm, done func(error)) {
 	a.createProfileWithResult(form, func(_ string, err error) { done(err) })
 }
 
-// createProfileWithResult reports the new identifier even when saving its
-// metadata fails after import, so automation can avoid accidental duplicates.
+// createProfileWithResult commits metadata with the new catalog entry and
+// reports a possible identifier if activation rollback cannot be confirmed.
 func (a *App) createProfileWithResult(form ui.ProfileForm, done func(string, error)) {
 	raw := strings.TrimSpace(form.URL)
 	if form.Timeout < 1 || form.Timeout > 300 || form.Interval < 1 || form.Interval > 43200 {
@@ -145,7 +145,12 @@ func (a *App) createProfileWithResult(form ui.ProfileForm, done func(string, err
 		return
 	}
 	options := profile.CatalogOption{UserAgent: strings.TrimSpace(form.UA), TimeoutSeconds: form.Timeout,
-		UseClashProxy: form.Clash, UseSystemProxy: form.SysProxy, AcceptInvalid: form.Insecure}
+		UpdateInterval: form.Interval, AllowAutoUpdate: form.Auto, UseClashProxy: form.Clash, UseSystemProxy: form.SysProxy, AcceptInvalid: form.Insecure}
+	metadata := profile.RemoteMetadata{Name: form.Name, Description: form.Desc, Option: options}
+	if err := profile.ValidateRemoteMetadata(raw, metadata); err != nil {
+		done("", err)
+		return
+	}
 	client, err := a.subscriptionClient(options, false)
 	if err != nil {
 		done("", err)
@@ -157,28 +162,7 @@ func (a *App) createProfileWithResult(form ui.ProfileForm, done func(string, err
 		a.runOnMain(func() {
 			uid := ""
 			if err == nil {
-				err = a.importURLData(raw, result.body, result.headers)
-				if err == nil {
-					catalog, readErr := a.profiles.Load()
-					if readErr != nil {
-						err = readErr
-					} else if len(catalog.Items) == 0 {
-						err = fmt.Errorf("新订阅未出现在目录中")
-					} else {
-						item := catalog.Items[len(catalog.Items)-1]
-						uid = item.UID
-						name := strings.TrimSpace(form.Name)
-						if name == "" {
-							name = item.Name
-						}
-						form.UID = item.UID
-						form.Name = name
-						form.Type = "remote"
-						if saveErr := a.saveProfileMetadata(form); saveErr != nil {
-							err = fmt.Errorf("订阅已导入，但名称或描述保存失败: %w", saveErr)
-						}
-					}
-				}
+				uid, err = a.importURLDataConfigured(raw, result.body, result.headers, &metadata)
 			}
 			done(uid, err)
 			if a.win != nil {

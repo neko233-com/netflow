@@ -58,7 +58,7 @@ func (a *App) autoUpdateOne(now time.Time) {
 			continue
 		}
 		a.model.ProfileBusy = true
-		uid, name := item.UID, item.Name
+		uid, name := item.UID, profile.SafeDisplayName(item)
 		a.updateProfileAsync(uid, func(err error) {
 			a.model.ProfileBusy = false
 			if err != nil {

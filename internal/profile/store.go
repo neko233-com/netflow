@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,13 +124,73 @@ func (s *Store) Save(f File) error {
 	return safepath.WriteFile(s.dir, "profiles.json", b)
 }
 
+// LoadForUpdate retains the exact catalog bytes for a subsequent conditional
+// commit. A nil snapshot represents a catalog that does not yet exist.
+func (s *Store) LoadForUpdate() (File, []byte, error) {
+	f, expectedHash, err := s.LoadSnapshot()
+	if err != nil {
+		return File{}, nil, err
+	}
+	b, err := safepath.ReadFile(s.dir, "profiles.json")
+	if errors.Is(err, os.ErrNotExist) {
+		if expectedHash != ([32]byte{}) {
+			return File{}, nil, safepath.ErrChanged
+		}
+		return f, nil, nil
+	}
+	if err != nil {
+		return File{}, nil, err
+	}
+	if sha256.Sum256(b) != expectedHash {
+		return File{}, nil, safepath.ErrChanged
+	}
+	return f, b, nil
+}
+
+func encodeCatalog(f File) ([]byte, error) {
+	b, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(b, '\n'), nil
+}
+
+// SaveIfUnchanged fails if an external writer changed or replaced the catalog
+// after LoadForUpdate; it does not overwrite that writer's changes.
+func (s *Store) SaveIfUnchanged(f File, expected []byte) error {
+	if s == nil || s.dir == "" {
+		return errors.New("profile store has no directory")
+	}
+	if err := os.MkdirAll(s.dir, 0700); err != nil {
+		return err
+	}
+	b, err := encodeCatalog(f)
+	if err != nil {
+		return err
+	}
+	return safepath.CompareAndWrite(s.dir, "profiles.json", expected, b)
+}
+
+// RestoreSnapshotIfUnchanged restores the exact previous catalog after a
+// failed operation, without replacing any intervening external edit.
+func (s *Store) RestoreSnapshotIfUnchanged(written File, previous []byte) error {
+	if s == nil || s.dir == "" || previous == nil {
+		return errors.New("profile snapshot unavailable")
+	}
+	b, err := encodeCatalog(written)
+	if err != nil {
+		return err
+	}
+	return safepath.CompareAndWrite(s.dir, "profiles.json", b, previous)
+}
+
 func (s *Store) UpdateMetadata(uid, name, description string, options *CatalogOption) error {
 	name = strings.TrimSpace(name)
 	description = strings.TrimSpace(description)
 	if name == "" || len(name) > 256 || len(description) > 2048 {
 		return errors.New("名称不能为空且不能超过 256 字节，描述不能超过 2048 字节")
 	}
-	f, err := s.Load()
+	f, snapshot, err := s.LoadForUpdate()
 	if err != nil {
 		return err
 	}
@@ -152,7 +213,7 @@ func (s *Store) UpdateMetadata(uid, name, description string, options *CatalogOp
 			}
 			f.Items[i].Name = name
 			f.Items[i].Description = description
-			return s.Save(f)
+			return s.SaveIfUnchanged(f, snapshot)
 		}
 	}
 	return errors.New("订阅不存在")
@@ -163,7 +224,7 @@ func (s *Store) SetCurrent(uid string) error {
 	if uid == "" {
 		return errors.New("profile is empty")
 	}
-	f, err := s.Load()
+	f, snapshot, err := s.LoadForUpdate()
 	if err != nil {
 		return err
 	}
@@ -178,13 +239,13 @@ func (s *Store) SetCurrent(uid string) error {
 		return errors.New("profile " + uid + " not found")
 	}
 	f.Current = uid
-	return s.Save(f)
+	return s.SaveIfUnchanged(f, snapshot)
 }
 
 // Delete removes an inactive profile from the catalog and its managed file.
 // Active profiles must be switched first so the running kernel stays coherent.
 func (s *Store) Delete(uid string) error {
-	f, err := s.Load()
+	f, snapshot, err := s.LoadForUpdate()
 	if err != nil {
 		return err
 	}
@@ -205,34 +266,122 @@ func (s *Store) Delete(uid string) error {
 	if err := validateManagedProfilePath(rel); err != nil {
 		return err
 	}
-	removal, err := safepath.PrepareRemoval(s.dir, rel)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	// A catalog imported from another application can contain multiple entries
+	// for the same file. Never unlink data still referenced by another entry.
+	shared, err := s.profileFileShared(f.Items, idx)
+	if err != nil {
 		return err
+	}
+	var removal *safepath.Removal
+	if !shared {
+		removal, err = safepath.PrepareRemoval(s.dir, rel)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	if removal != nil {
 		defer removal.Close()
 	}
 	f.Items = append(f.Items[:idx], f.Items[idx+1:]...)
-	if err := s.Save(f); err != nil {
+	if err := s.SaveIfUnchanged(f, snapshot); err != nil {
 		return err
 	}
 	if removal != nil {
-		return removal.Remove()
+		if err := removal.Remove(); err != nil {
+			written, encodeErr := encodeCatalog(f)
+			if encodeErr != nil {
+				return errors.Join(err, encodeErr)
+			}
+			if restoreErr := safepath.CompareAndWrite(s.dir, "profiles.json", written, snapshot); restoreErr != nil {
+				return errors.Join(err, errors.New("订阅文件删除失败，目录回滚也失败"), restoreErr)
+			}
+			return err
+		}
 	}
 	return nil
+}
+
+func (s *Store) profileFileShared(items []CatalogItem, index int) (bool, error) {
+	if len(items) < 2 {
+		return false, nil
+	}
+	file := items[index].File
+	for i, item := range items {
+		if i != index && strings.EqualFold(filepath.Clean(item.File), filepath.Clean(file)) {
+			return true, nil
+		}
+	}
+	target, err := safepath.OpenRead(s.dir, file)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer target.Close()
+	targetInfo, err := target.Stat()
+	if err != nil {
+		return false, err
+	}
+	for i, item := range items {
+		if i == index || item.File == "" {
+			continue
+		}
+		if err := validateManagedProfilePath(item.File); err != nil {
+			return false, err
+		}
+		other, err := safepath.OpenRead(s.dir, item.File)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		info, statErr := other.Stat()
+		closeErr := other.Close()
+		if statErr != nil {
+			return false, statErr
+		}
+		if closeErr != nil {
+			return false, closeErr
+		}
+		if os.SameFile(targetInfo, info) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // DiscardFirstImport rolls back a failed first activation, without touching
 // an existing catalog or any file outside the managed profiles directory.
 func (s *Store) DiscardFirstImport(uid string) error {
-	f, err := s.Load()
+	f, snapshot, err := s.LoadForUpdate()
 	if err != nil {
 		return err
 	}
-	if len(f.Items) != 1 || f.Current != uid || f.Items[0].UID != uid {
+	if f.Current != uid {
 		return errors.New("订阅目录已变化，无法自动回滚导入")
 	}
-	rel := f.Items[0].File
+	index := -1
+	for i, item := range f.Items {
+		if item.UID == uid {
+			if index >= 0 {
+				return errors.New("订阅目录已变化，无法自动回滚导入")
+			}
+			index = i
+		}
+	}
+	if index < 0 {
+		return errors.New("订阅目录已变化，无法自动回滚导入")
+	}
+	shared, err := s.profileFileShared(f.Items, index)
+	if err != nil {
+		return err
+	}
+	if shared {
+		return errors.New("订阅文件仍被其他订阅引用，无法自动回滚导入")
+	}
+	rel := f.Items[index].File
 	if err := validateManagedProfilePath(rel); err != nil {
 		return err
 	}
@@ -243,11 +392,22 @@ func (s *Store) DiscardFirstImport(uid string) error {
 	if removal != nil {
 		defer removal.Close()
 	}
-	if err = s.Save(File{}); err != nil {
+	f.Current = ""
+	f.Items = append(f.Items[:index], f.Items[index+1:]...)
+	if err = s.SaveIfUnchanged(f, snapshot); err != nil {
 		return err
 	}
 	if removal != nil {
-		return removal.Remove()
+		if err := removal.Remove(); err != nil {
+			written, encodeErr := encodeCatalog(f)
+			if encodeErr != nil {
+				return errors.Join(err, encodeErr)
+			}
+			if restoreErr := safepath.CompareAndWrite(s.dir, "profiles.json", written, snapshot); restoreErr != nil {
+				return errors.Join(err, errors.New("订阅文件删除失败，目录回滚也失败"), restoreErr)
+			}
+			return err
+		}
 	}
 	return nil
 }
@@ -269,7 +429,7 @@ func (s *Store) RecordSelected(uid, group, node string) error {
 	if group == "" || node == "" {
 		return errors.New("selection is empty")
 	}
-	f, err := s.Load()
+	f, snapshot, err := s.LoadForUpdate()
 	if err != nil {
 		return err
 	}
@@ -294,7 +454,7 @@ func (s *Store) RecordSelected(uid, group, node string) error {
 	if !found {
 		return nil
 	}
-	return s.Save(f)
+	return s.SaveIfUnchanged(f, snapshot)
 }
 
 // ErrInvalidURL is returned when a subscription link is not http(s).
@@ -306,9 +466,8 @@ func ValidURL(raw string) bool {
 	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
 		return false
 	}
-	rest := strings.TrimPrefix(strings.TrimPrefix(raw, "https://"), "http://")
-	host, _, _ := strings.Cut(rest, "/")
-	return host != "" && !strings.Contains(host, " ")
+	u, err := url.Parse(raw)
+	return err == nil && u.Hostname() != "" && u.Opaque == ""
 }
 
 // ImportRemote fetches url, stores the body, and appends a remote item.
@@ -319,25 +478,59 @@ func (s *Store) ImportRemote(raw string, fetch func(string) ([]byte, error)) (Ca
 
 // ImportRemoteWithHeaders stores response traffic metadata with the profile.
 func (s *Store) ImportRemoteWithHeaders(raw string, fetch func(string) ([]byte, error), headers http.Header) (CatalogItem, error) {
+	item, _, err := s.ImportRemoteConfigured(raw, fetch, headers, nil)
+	return item, err
+}
+
+// RemoteMetadata is committed with a new remote profile in the same catalog
+// write. An empty name uses the subscription host.
+type RemoteMetadata struct {
+	Name        string
+	Description string
+	Option      CatalogOption
+}
+
+func ValidateRemoteMetadata(raw string, metadata RemoteMetadata) error {
+	name := strings.TrimSpace(metadata.Name)
+	if name == "" {
+		name = hostOf(raw)
+	}
+	description := strings.TrimSpace(metadata.Description)
+	if name == "" || len(name) > 256 || len(description) > 2048 || strings.ContainsAny(name, "\r\n\x00") || strings.ContainsRune(description, '\x00') {
+		return errors.New("名称或描述无效")
+	}
+	o := metadata.Option
+	if o.UpdateInterval < 1 || o.UpdateInterval > 43200 || o.TimeoutSeconds < 1 || o.TimeoutSeconds > 300 || len(o.UserAgent) > 512 || strings.ContainsAny(o.UserAgent, "\r\n\x00") {
+		return errors.New("订阅下载选项无效")
+	}
+	return nil
+}
+
+func (s *Store) ImportRemoteConfigured(raw string, fetch func(string) ([]byte, error), headers http.Header, metadata *RemoteMetadata) (CatalogItem, bool, error) {
 	raw = strings.TrimSpace(raw)
 	if !ValidURL(raw) {
-		return CatalogItem{}, ErrInvalidURL
+		return CatalogItem{}, false, ErrInvalidURL
 	}
 	if fetch == nil {
-		return CatalogItem{}, errors.New("no fetcher")
+		return CatalogItem{}, false, errors.New("no fetcher")
+	}
+	if metadata != nil {
+		if err := ValidateRemoteMetadata(raw, *metadata); err != nil {
+			return CatalogItem{}, false, err
+		}
 	}
 	body, err := fetch(raw)
 	if err != nil {
-		return CatalogItem{}, err
+		return CatalogItem{}, false, err
 	}
-	f, err := s.Load()
+	f, snapshot, err := s.LoadForUpdate()
 	if err != nil {
-		return CatalogItem{}, err
+		return CatalogItem{}, false, err
 	}
 	name := hostOf(raw)
 	uid, rel, created, err := s.createProfileFile(f.Items, body)
 	if err != nil {
-		return CatalogItem{}, err
+		return CatalogItem{}, false, err
 	}
 	defer created.Close()
 	item := CatalogItem{
@@ -349,25 +542,39 @@ func (s *Store) ImportRemoteWithHeaders(raw string, fetch func(string) ([]byte, 
 		File:    rel,
 		Option:  CatalogOption{UpdateInterval: 1440, AllowAutoUpdate: true, TimeoutSeconds: 60},
 	}
+	if metadata != nil {
+		if name := strings.TrimSpace(metadata.Name); name != "" {
+			item.Name = name
+		}
+		item.Description = strings.TrimSpace(metadata.Description)
+		item.Option = metadata.Option
+		item.Option.UserAgent = strings.TrimSpace(item.Option.UserAgent)
+	}
 	ApplySubscriptionUserInfo(&item, headers)
 	f.Items = append(f.Items, item)
-	if f.Current == "" {
+	first := f.Current == ""
+	if first {
 		f.Current = uid
 	}
-	if err := s.Save(f); err != nil {
-		return CatalogItem{}, errors.Join(err, created.Remove())
+	if err := s.SaveIfUnchanged(f, snapshot); err != nil {
+		return CatalogItem{}, false, errors.Join(err, created.Remove())
 	}
-	return item, nil
+	return item, first, nil
 }
 
 // ImportLocal stores a YAML file dropped on the window.
 func (s *Store) ImportLocal(filename string, body []byte) (CatalogItem, error) {
+	item, _, err := s.ImportLocalWithState(filename, body)
+	return item, err
+}
+
+func (s *Store) ImportLocalWithState(filename string, body []byte) (CatalogItem, bool, error) {
 	if !strings.HasSuffix(strings.ToLower(filename), ".yaml") && !strings.HasSuffix(strings.ToLower(filename), ".yml") {
-		return CatalogItem{}, errors.New("仅支持 YAML 文件")
+		return CatalogItem{}, false, errors.New("仅支持 YAML 文件")
 	}
-	f, err := s.Load()
+	f, snapshot, err := s.LoadForUpdate()
 	if err != nil {
-		return CatalogItem{}, err
+		return CatalogItem{}, false, err
 	}
 	name := filename
 	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
@@ -378,18 +585,19 @@ func (s *Store) ImportLocal(filename string, body []byte) (CatalogItem, error) {
 	}
 	uid, rel, created, err := s.createProfileFile(f.Items, body)
 	if err != nil {
-		return CatalogItem{}, err
+		return CatalogItem{}, false, err
 	}
 	defer created.Close()
 	item := CatalogItem{UID: uid, Name: name, Type: "local", File: rel, Updated: time.Now().UTC().Truncate(time.Second)}
 	f.Items = append(f.Items, item)
-	if f.Current == "" {
+	first := f.Current == ""
+	if first {
 		f.Current = uid
 	}
-	if err := s.Save(f); err != nil {
-		return CatalogItem{}, errors.Join(err, created.Remove())
+	if err := s.SaveIfUnchanged(f, snapshot); err != nil {
+		return CatalogItem{}, false, errors.Join(err, created.Remove())
 	}
-	return item, nil
+	return item, first, nil
 }
 
 func (s *Store) createProfileFile(items []CatalogItem, body []byte) (string, string, *safepath.Created, error) {
@@ -418,12 +626,26 @@ func (s *Store) createProfileFile(items []CatalogItem, body []byte) (string, str
 }
 
 func hostOf(raw string) string {
-	rest := strings.TrimPrefix(strings.TrimPrefix(raw, "https://"), "http://")
-	host, _, _ := strings.Cut(rest, "/")
-	if host == "" {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
 		return "订阅"
 	}
-	return host
+	return u.Host
+}
+
+// SafeDisplayName hides credentials or query parameters accidentally included
+// by older versions when deriving a default name from a subscription URL.
+// Explicit names are preserved, even when users put sensitive data in them.
+func SafeDisplayName(item CatalogItem) string {
+	if item.URL == "" {
+		return item.Name
+	}
+	rest := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(item.URL), "https://"), "http://")
+	legacy, _, _ := strings.Cut(rest, "/")
+	if item.Name == legacy {
+		return hostOf(item.URL)
+	}
+	return item.Name
 }
 
 func itoa(n int) string {

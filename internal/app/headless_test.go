@@ -16,6 +16,7 @@ import (
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appdir"
 	"github.com/neko233-com/netflow/internal/core"
+	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/sysproxy"
 	"github.com/neko233-com/netflow/internal/tun"
@@ -229,6 +230,12 @@ func TestHeadlessAgentManagesSubscriptions(t *testing.T) {
 	first := importOne("first", url)
 	if first.State != "succeeded" || first.ProfileID == "" {
 		t.Fatalf("first import: %+v", first)
+	}
+	var imported profile.File
+	var catalogErr error
+	a.runOnMain(func() { imported, catalogErr = a.profiles.Load() })
+	if catalogErr != nil || len(imported.Items) != 1 || imported.Items[0].UID != first.ProfileID || imported.Items[0].Name != "first" || imported.Items[0].Option.AllowAutoUpdate {
+		t.Fatal("imported profile metadata was not committed with the new entry")
 	}
 	var list agent.ProfileList
 	if err := client.Call(context.Background(), "profiles", nil, &list); err != nil || len(list.Profiles) != 1 || !list.Profiles[0].Active {

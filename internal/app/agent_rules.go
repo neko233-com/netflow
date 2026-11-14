@@ -55,7 +55,7 @@ func (a *App) agentStatus() (agent.Status, error) {
 		out.ProviderCacheWarning = source.CacheWarning()
 	}
 	for _, p := range catalog.Items {
-		out.Profiles = append(out.Profiles, agent.Profile{ID: p.UID, Name: p.Name, Active: p.UID == out.ActiveProfile})
+		out.Profiles = append(out.Profiles, agent.Profile{ID: p.UID, Name: profile.SafeDisplayName(p), Active: p.UID == out.ActiveProfile})
 	}
 	return out, nil
 }

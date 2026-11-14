@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/neko233-com/netflow/internal/profile"
+	"github.com/neko233-com/netflow/internal/safepath"
 )
 
 func TestUpdateRemoteProfile(t *testing.T) {
@@ -75,5 +77,55 @@ func TestUpdateRemoteProfile(t *testing.T) {
 	after, err = os.ReadFile(file)
 	if err != nil || string(after) != string(got) {
 		t.Fatalf("failed update changed subscription: %q %v", after, err)
+	}
+}
+
+func TestProfileUpdatePreservesConcurrentCatalogChangeAndRollsBackFiles(t *testing.T) {
+	dir := t.TempDir()
+	a := newProfileHarness(dir)
+	initial := []byte("mode: rule\nrules: ['MATCH,DIRECT']\n")
+	if err := a.importURLData("https://example.invalid/sub", initial, nil); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := a.profiles.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, rel, address := catalog.Current, catalog.Items[0].File, catalog.Items[0].URL
+	oldProfile, err := os.ReadFile(filepath.Join(dir, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldConfig, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := false
+	engine := &switchTestEngine{running: true, dir: dir}
+	engine.onReload = func() {
+		if changed {
+			return
+		}
+		changed = true
+		f, loadErr := a.profiles.Load()
+		if loadErr != nil {
+			t.Error(loadErr)
+			return
+		}
+		f.Items[0].Description = "external change"
+		if saveErr := a.profiles.Save(f); saveErr != nil {
+			t.Error(saveErr)
+		}
+	}
+	a.core = engine
+	err = a.updateProfileData(uid, address, []byte("mode: direct\nrules: ['MATCH,DIRECT']\n"), nil)
+	if !errors.Is(err, safepath.ErrChanged) {
+		t.Fatalf("expected external catalog conflict, got %v", err)
+	}
+	actual, loadErr := a.profiles.Load()
+	profileBody, readErr := os.ReadFile(filepath.Join(dir, rel))
+	configBody, configErr := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if loadErr != nil || actual.Items[0].Description != "external change" || readErr != nil || string(profileBody) != string(oldProfile) || configErr != nil || string(configBody) != string(oldConfig) {
+		t.Fatal("concurrent catalog or old configuration was not preserved")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/ui"
 )
 
@@ -30,7 +31,7 @@ func (a *App) agentProfiles() (agent.ProfileList, error) {
 		return result, errors.New("profile catalog could not be read")
 	}
 	for _, item := range catalog.Items {
-		result.Profiles = append(result.Profiles, agent.Profile{ID: item.UID, Name: item.Name, Active: item.UID == catalog.Current})
+		result.Profiles = append(result.Profiles, agent.Profile{ID: item.UID, Name: profile.SafeDisplayName(item), Active: item.UID == catalog.Current})
 	}
 	return result, nil
 }

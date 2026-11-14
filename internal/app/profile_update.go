@@ -54,7 +54,7 @@ func (a *App) profileItem(uid string) (profile.CatalogItem, error) {
 }
 
 func (a *App) updateProfileData(uid, expectedURL string, body []byte, headers http.Header) error {
-	f, err := a.profiles.Load()
+	f, snapshot, err := a.profiles.LoadForUpdate()
 	if err != nil {
 		return err
 	}
@@ -128,7 +128,7 @@ func (a *App) updateProfileData(uid, expectedURL string, body []byte, headers ht
 	}
 	f.Items[index].Updated = time.Now().UTC().Truncate(time.Second)
 	profile.ApplySubscriptionUserInfo(&f.Items[index], headers)
-	if err = a.profiles.Save(f); err != nil {
+	if err = a.profiles.SaveIfUnchanged(f, snapshot); err != nil {
 		return rollback(err)
 	}
 	a.loadProfiles()
