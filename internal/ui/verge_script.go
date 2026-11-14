@@ -10,11 +10,13 @@ import (
 
 // VergeScriptDialog is deliberately read-only; there is no apply action.
 type VergeScriptDialog struct {
-	Open, Global, Profile, Busy                           bool
+	Open, Global, Profile, Busy, ConfigMode               bool
 	ProfileID, PreviewID, Error, Summary, PageText, Stage string
 	Page                                                  agent.PreviewRulesResult
+	ConfigPage                                            agent.VergeScriptConfigPage
 	Warnings                                              []string
 	PreviousOffsets                                       []int
+	PreviousConfigOffsets                                 []int
 }
 
 func vergeScriptWarning(s string) string {
@@ -25,8 +27,8 @@ func vergeScriptWarning(s string) string {
 		return "脚本使用固定时间和确定性随机值，结果可能与 Clash Verge 不同。"
 	case "Agent-managed rules are applied after Verge scripts. Existing connections are not rerouted.":
 		return "Agent 规则在脚本后应用；已建立的连接不会重新路由。"
-	case "Only top-level field names and rule lists are shown; inspect DNS, nodes and controller settings separately.":
-		return "这里只显示顶层字段名和规则；请单独检查 DNS、节点和控制接口设置。"
+	case "The summary shows field names and rules only. Explicitly inspect the full configuration; it may contain credentials.":
+		return "摘要只显示字段名和规则；请单独查看完整配置，其中可能包含凭据。"
 	case "This preview also includes archived Verge data extensions that are currently disabled.":
 		return "预览还包含当前未启用的 Verge 数据扩展。"
 	case "This profile is inactive.":
@@ -59,7 +61,8 @@ func (m *Model) clearVergeScriptPreview() {
 	e := &m.VergeScriptPreview
 	e.PreviewID, e.Error, e.Summary, e.PageText = "", "", "", ""
 	e.Page = agent.PreviewRulesResult{}
-	e.Warnings, e.PreviousOffsets, e.Busy = nil, nil, false
+	e.ConfigPage = agent.VergeScriptConfigPage{}
+	e.Warnings, e.PreviousOffsets, e.PreviousConfigOffsets, e.Busy, e.ConfigMode = nil, nil, nil, false, false
 }
 
 func (m *Model) startVergeScriptPreview() {
@@ -143,6 +146,45 @@ func (m *Model) previousVergeScriptRules() {
 	}
 }
 
+func (m *Model) pageVergeScriptConfig(stage string, offset int) bool {
+	e := &m.VergeScriptPreview
+	if e.PreviewID == "" || m.Hooks.VergeScriptPreviewConfig == nil {
+		return false
+	}
+	page, err := m.Hooks.VergeScriptPreviewConfig(agent.VergeScriptConfigArgs{PreviewID: e.PreviewID, Stage: stage, Offset: offset, Limit: 4096})
+	if err != nil {
+		e.Error = err.Error()
+		return false
+	}
+	if !e.ConfigMode || stage != e.Stage || offset == 0 {
+		e.PreviousConfigOffsets = nil
+	}
+	e.ConfigMode, e.Stage, e.ConfigPage, e.PageText, e.Error = true, stage, page, page.Text, ""
+	return true
+}
+
+func (m *Model) nextVergeScriptConfig() {
+	e := &m.VergeScriptPreview
+	if e.ConfigPage.NextOffset >= e.ConfigPage.Total {
+		return
+	}
+	offset, next := e.ConfigPage.Offset, e.ConfigPage.NextOffset
+	if m.pageVergeScriptConfig(e.Stage, next) {
+		e.PreviousConfigOffsets = append(e.PreviousConfigOffsets, offset)
+	}
+}
+func (m *Model) previousVergeScriptConfig() {
+	e := &m.VergeScriptPreview
+	if len(e.PreviousConfigOffsets) == 0 {
+		return
+	}
+	last := len(e.PreviousConfigOffsets) - 1
+	offset := e.PreviousConfigOffsets[last]
+	if m.pageVergeScriptConfig(e.Stage, offset) && offset != 0 {
+		e.PreviousConfigOffsets = e.PreviousConfigOffsets[:last]
+	}
+}
+
 func (m *Model) vergeScriptDialog(c *mygoui.Context, pal Palette) {
 	e := &m.VergeScriptPreview
 	if !e.Open {
@@ -189,24 +231,59 @@ func (m *Model) vergeScriptDialog(c *mygoui.Context, pal Palette) {
 							mygoui.Text(c, warning).FillWidth().FontSize(12).TextColor(pal.Warning)
 						}
 						mygoui.Row(c).Gap(8).Children(func() {
-							if filledButton(c, pal, "变更前", "verge-before", false) {
-								m.pageVergeScriptRules("before", 0)
+							if filledButton(c, pal, "规则", "verge-show-rules", false) {
+								if m.pageVergeScriptRules("after", 0) {
+									e.ConfigMode = false
+									e.ConfigPage = agent.VergeScriptConfigPage{}
+									e.PreviousConfigOffsets = nil
+								}
 							}
-							if filledButton(c, pal, "变更后", "verge-after", false) {
-								m.pageVergeScriptRules("after", 0)
-							}
-							if len(e.PreviousOffsets) > 0 && filledButton(c, pal, "上一页", "verge-prev", false) {
-								m.previousVergeScriptRules()
-							}
-							if e.Page.NextOffset < e.Page.Total && filledButton(c, pal, "下一页", "verge-next", false) {
-								m.nextVergeScriptRules()
+							if m.Hooks.VergeScriptPreviewConfig != nil && filledButton(c, pal, "查看完整配置", "verge-show-config", false) {
+								m.pageVergeScriptConfig("after", 0)
 							}
 						})
-						start := e.Page.Offset
-						if e.Page.NextOffset > start {
-							start++
+						if e.ConfigMode {
+							mygoui.Text(c, "完整配置可能包含订阅凭据，请注意周围环境。").FillWidth().FontSize(12).TextColor(pal.Warning)
 						}
-						mygoui.Text(c, fmt.Sprintf("规则 %d–%d / %d", start, e.Page.NextOffset, e.Page.Total)).FontSize(12)
+						mygoui.Row(c).Gap(8).Children(func() {
+							if filledButton(c, pal, "变更前", "verge-before", false) {
+								if e.ConfigMode {
+									m.pageVergeScriptConfig("before", 0)
+								} else {
+									m.pageVergeScriptRules("before", 0)
+								}
+							}
+							if filledButton(c, pal, "变更后", "verge-after", false) {
+								if e.ConfigMode {
+									m.pageVergeScriptConfig("after", 0)
+								} else {
+									m.pageVergeScriptRules("after", 0)
+								}
+							}
+							if ((!e.ConfigMode && len(e.PreviousOffsets) > 0) || (e.ConfigMode && len(e.PreviousConfigOffsets) > 0)) && filledButton(c, pal, "上一页", "verge-prev", false) {
+								if e.ConfigMode {
+									m.previousVergeScriptConfig()
+								} else {
+									m.previousVergeScriptRules()
+								}
+							}
+							if ((!e.ConfigMode && e.Page.NextOffset < e.Page.Total) || (e.ConfigMode && e.ConfigPage.NextOffset < e.ConfigPage.Total)) && filledButton(c, pal, "下一页", "verge-next", false) {
+								if e.ConfigMode {
+									m.nextVergeScriptConfig()
+								} else {
+									m.nextVergeScriptRules()
+								}
+							}
+						})
+						if e.ConfigMode {
+							mygoui.Text(c, fmt.Sprintf("字节 %d–%d / %d", e.ConfigPage.Offset, e.ConfigPage.NextOffset, e.ConfigPage.Total)).FontSize(12)
+						} else {
+							start := e.Page.Offset
+							if e.Page.NextOffset > start {
+								start++
+							}
+							mygoui.Text(c, fmt.Sprintf("规则 %d–%d / %d", start, e.Page.NextOffset, e.Page.Total)).FontSize(12)
+						}
 						mygoui.TextArea(c, &e.PageText).FillWidth().Height(160).ReadOnly(true).Label("verge-script-rules")
 					}
 				})

@@ -1203,6 +1203,7 @@ func (a *App) bindHooks() {
 		DiscardRewriteProposal:    func(id string) { delete(a.agentProposals, id) },
 		PreviewVergeScriptAsync:   a.previewVergeScriptAsync,
 		VergeScriptPreviewRules:   a.vergeScriptPreviewRules,
+		VergeScriptPreviewConfig:  a.vergeScriptPreviewConfig,
 		DiscardVergeScriptPreview: func(id string) { delete(a.agentScriptPreviews, id) },
 		ApplyRewrite:              a.agentApply,
 		SaveProfileMetadata:       a.saveProfileMetadata,

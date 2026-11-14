@@ -551,6 +551,12 @@ func TestVergeScriptCLIPreviewAndPaging(t *testing.T) {
 				return nil, errors.New("bad page")
 			}
 			return agent.PreviewRulesResult{Rules: []string{"MATCH,DIRECT"}}, nil
+		case "verge-script-preview-config":
+			var in agent.VergeScriptConfigArgs
+			if json.Unmarshal(raw, &in) != nil || in.PreviewID != "p" || in.Offset != 4 {
+				return nil, errors.New("bad config page")
+			}
+			return agent.VergeScriptConfigPage{Text: "private fixture"}, nil
 		case "verge-script-preview-cancel":
 			return agent.ActionResult{OK: true}, nil
 		default:
@@ -567,6 +573,7 @@ func TestVergeScriptCLIPreviewAndPaging(t *testing.T) {
 	}{
 		{[]string{"verge-script-preview"}, `{"profile_id":"sub","global":true,"profile":true}`},
 		{[]string{"verge-script-preview-rules", "p", "after", "2", "1"}, ""},
+		{[]string{"verge-script-preview-config", "p", "after", "4", "8"}, ""},
 		{[]string{"verge-script-preview-cancel", "p"}, ""},
 	} {
 		var out bytes.Buffer

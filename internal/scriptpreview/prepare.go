@@ -25,6 +25,7 @@ var (
 // kept private; callers may explicitly expose individual paginated rules.
 type Prepared struct {
 	Candidate               Candidate
+	Baseline                []byte
 	Effective               []byte
 	EffectiveSHA256         [32]byte
 	Changes                 TopLevelChanges
@@ -110,7 +111,7 @@ func Prepare(ctx context.Context, in PrepareInput) (Prepared, error) {
 	if err := ctx.Err(); err != nil {
 		return empty, err
 	}
-	return Prepared{Candidate: candidate, Effective: effective, EffectiveSHA256: hash, Changes: changes, BeforeRules: before, AfterRules: after, Validation: checked}, nil
+	return Prepared{Candidate: candidate, Baseline: append([]byte(nil), in.Baseline...), Effective: effective, EffectiveSHA256: hash, Changes: changes, BeforeRules: before, AfterRules: after, Validation: checked}, nil
 }
 
 func cleanError(ctx context.Context, fallback error) error {

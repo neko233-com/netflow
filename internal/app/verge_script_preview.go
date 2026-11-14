@@ -19,6 +19,7 @@ import (
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/safepath"
+	"github.com/neko233-com/netflow/internal/scriptapproval"
 	"github.com/neko233-com/netflow/internal/scriptpreview"
 	"github.com/neko233-com/netflow/internal/tun"
 	"github.com/neko233-com/netflow/internal/validation"
@@ -41,9 +42,10 @@ type vergeScriptDraft struct {
 }
 
 type vergeScriptPreviewPages struct {
-	before, after []string
-	bytes         int
-	expires       time.Time
+	before, after             []string
+	beforeConfig, afterConfig []byte
+	bytes                     int
+	expires                   time.Time
 }
 
 func (a *App) previewVergeScriptAsync(in agent.VergeScriptPreviewArgs, done func(agent.VergeScriptPreview, error)) func() {
@@ -91,6 +93,7 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 	if err != nil {
 		return result, err
 	}
+	bytes += len(p.Baseline) + len(p.Effective)
 	used := 0
 	for _, preview := range a.agentScriptPreviews {
 		used += preview.bytes
@@ -120,12 +123,12 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 	if a.agentScriptPreviews == nil {
 		a.agentScriptPreviews = map[string]vergeScriptPreviewPages{}
 	}
-	a.agentScriptPreviews[id] = vergeScriptPreviewPages{before: p.BeforeRules, after: p.AfterRules, bytes: bytes, expires: expires}
+	a.agentScriptPreviews[id] = vergeScriptPreviewPages{before: p.BeforeRules, after: p.AfterRules, beforeConfig: p.Baseline, afterConfig: p.Effective, bytes: bytes, expires: expires}
 	warnings := []string{
 		"Read-only preview: scripts are not enabled and this preview cannot be applied.",
 		"Scripts use a fixed preview time and deterministic random values; behavior can differ from Clash Verge.",
 		"Agent-managed rules are applied after Verge scripts. Existing connections are not rerouted.",
-		"Only top-level field names and rule lists are shown; inspect DNS, nodes and controller settings separately.",
+		"The summary shows field names and rules only. Explicitly inspect the full configuration; it may contain credentials.",
 	}
 	if !d.item.Option.VergeExtensions {
 		warnings = append(warnings, "This preview also includes archived Verge data extensions that are currently disabled.")
@@ -151,6 +154,30 @@ func (a *App) vergeScriptPreviewRules(in agent.PreviewRulesArgs) (agent.PreviewR
 	default:
 		return agent.PreviewRulesResult{}, errors.New("stage must be before or after")
 	}
+}
+
+// vergeScriptPreviewConfig is only called for an explicit request. The result
+// contains raw private configuration and must never be written to logs.
+func (a *App) vergeScriptPreviewConfig(in agent.VergeScriptConfigArgs) (agent.VergeScriptConfigPage, error) {
+	p, ok := a.agentScriptPreviews[in.PreviewID]
+	if !ok || !p.expires.After(time.Now()) {
+		delete(a.agentScriptPreviews, in.PreviewID)
+		return agent.VergeScriptConfigPage{}, errors.New("script preview missing or expired")
+	}
+	var body []byte
+	switch in.Stage {
+	case "before":
+		body = p.beforeConfig
+	case "after":
+		body = p.afterConfig
+	default:
+		return agent.VergeScriptConfigPage{}, errors.New("stage must be before or after")
+	}
+	page, err := scriptpreview.PaginateConfig(body, in.Offset, in.Limit)
+	if err != nil {
+		return agent.VergeScriptConfigPage{}, err
+	}
+	return agent.VergeScriptConfigPage{Offset: page.Offset, NextOffset: page.NextOffset, Total: page.Total, Text: page.Text}, nil
 }
 
 // captureVergeScriptDraft must be called on the app event loop. Expensive
@@ -292,13 +319,35 @@ func (a *App) checkVergeScriptDraft(d vergeScriptDraft) error {
 // profile, without persisting or applying a script selection.
 func (a *App) prepareVergeScript(ctx context.Context, d vergeScriptDraft, selection migration.ScriptSelection) (scriptpreview.Prepared, error) {
 	var empty scriptpreview.Prepared
-	baseline, archivePath, archiveHash, err := migration.ComposeArchived(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, d.base)
+	var managed, baseline []byte
+	var err error
+	if d.item.Option.VergeScriptApproval != nil {
+		var resolved scriptapproval.Resolved
+		resolved, err = scriptapproval.ResolveSnapshot(ctx, a.dir, *d.item.Option.VergeScriptApproval, d.base, d.item.Name, d.item.Option.VergeArchive, d.item.Option.VergeUID)
+		if err == nil {
+			managed = resolved.Managed
+			baseline, err = profile.RestoreVergeManagedFields(ctx, resolved.Body, managed)
+		}
+		for path, hash := range resolved.Sources {
+			if previous, ok := d.hashes[path]; ok && previous != hash {
+				return empty, scriptpreview.ErrSourcesChanged
+			}
+			d.hashes[path] = hash
+		}
+	} else {
+		var archivePath string
+		var archiveHash [32]byte
+		managed, archivePath, archiveHash, err = migration.ComposeArchived(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, d.base)
+		if err == nil {
+			d.hashes[archivePath] = archiveHash
+		}
+		baseline = managed
+		if !d.item.Option.VergeExtensions {
+			baseline = d.base
+		}
+	}
 	if err != nil {
 		return empty, scriptpreview.ErrCandidate
-	}
-	d.hashes[archivePath] = archiveHash
-	if !d.item.Option.VergeExtensions {
-		baseline = d.base
 	}
 	baseline, err = d.finalize(baseline)
 	if err != nil {
@@ -309,7 +358,13 @@ func (a *App) prepareVergeScript(ctx context.Context, d vergeScriptDraft, select
 	}
 	return scriptpreview.Prepare(ctx, scriptpreview.PrepareInput{
 		Root: a.dir, Archive: d.item.Option.VergeArchive, UID: d.item.Option.VergeUID, ProfileName: d.item.Name, Base: d.base, Baseline: baseline, Selection: selection, Clock: d.clock,
-		Finalize: func(_ context.Context, body []byte) ([]byte, error) { return d.finalize(body) },
+		Finalize: func(ctx context.Context, body []byte) ([]byte, error) {
+			body, err := profile.RestoreVergeManagedFields(ctx, body, managed)
+			if err != nil {
+				return nil, err
+			}
+			return d.finalize(body)
+		},
 		Validate: func(ctx context.Context, body []byte) (validation.Result, error) {
 			return validateConfigurations(ctx, a.dir, []validation.Config{{ID: d.target, Body: body}})
 		},

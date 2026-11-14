@@ -32,6 +32,11 @@ func NewMCP(client Client) *mcp.Server {
 		err := client.Call(ctx, "verge-script-preview-rules", in, &out)
 		return nil, out, err
 	})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_verge_script_preview_config", Description: "Explicitly reveal a UTF-8 byte page of the full before or after configuration for a script preview. The returned text can include subscription credentials and other private data. Follow next_offset until total.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in VergeScriptConfigArgs) (*mcp.CallToolResult, VergeScriptConfigPage, error) {
+		var out VergeScriptConfigPage
+		err := client.Call(ctx, "verge-script-preview-config", in, &out)
+		return nil, out, err
+	})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_cancel_verge_script_preview", Description: "Discard a read-only Verge script preview and its stored rules. Pass the preview_id as proposal_id."}, func(ctx context.Context, _ *mcp.CallToolRequest, in ApplyArgs) (*mcp.CallToolResult, ActionResult, error) {
 		var out ActionResult
 		err := client.Call(ctx, "verge-script-preview-cancel", in, &out)

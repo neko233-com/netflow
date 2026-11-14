@@ -77,6 +77,7 @@ type Hooks struct {
 	DiscardRewriteProposal     func(id string)
 	PreviewVergeScriptAsync    func(agent.VergeScriptPreviewArgs, func(agent.VergeScriptPreview, error)) func()
 	VergeScriptPreviewRules    func(agent.PreviewRulesArgs) (agent.PreviewRulesResult, error)
+	VergeScriptPreviewConfig   func(agent.VergeScriptConfigArgs) (agent.VergeScriptConfigPage, error)
 	DiscardVergeScriptPreview  func(string)
 	ApplyRewrite               func(id string) (agent.ApplyResult, error)
 	SetKernelOption            func(name string, value any) error

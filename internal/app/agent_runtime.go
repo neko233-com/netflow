@@ -213,6 +213,11 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 
 func (a *App) agentCommand(method string, args json.RawMessage) (value any, callErr error) {
 	switch method {
+	case "verge-script-preview-config":
+		var input agent.VergeScriptConfigArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.vergeScriptPreviewConfig(input)
+		}
 	case "verge-script-preview-rules":
 		var input agent.PreviewRulesArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {

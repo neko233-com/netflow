@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/neko233-com/netflow/internal/agent"
@@ -15,6 +16,8 @@ import (
 	"github.com/neko233-com/netflow/internal/appdir"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/migration"
+	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/scriptapproval"
 	"github.com/neko233-com/netflow/internal/scriptpreview"
 	"github.com/neko233-com/netflow/internal/sysproxy"
 	"github.com/neko233-com/netflow/internal/tun"
@@ -30,7 +33,7 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 		"profiles/p1.yaml":    fmt.Sprintf("mixed-port: %d\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\ntun: {enable: false}\nrules: ['MATCH,DIRECT']\n", freePort(t)),
 		"profiles/m1.yaml":    "profile: {store-selected: true}\n",
 		"profiles/p2.yaml":    "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\ntun: {enable: false}\nrules: ['MATCH,DIRECT']\n",
-		"profiles/global.js":  `function main(c){c.rules.unshift("DOMAIN,global.test,DIRECT");return c}`,
+		"profiles/global.js":  `function main(c){c.rules.unshift("DOMAIN,global.test,DIRECT");c.tun.enable=true;c["mixed-port"]=1;c.mode="global";c["external-controller"]="0.0.0.0:9090";return c}`,
 		"profiles/profile.js": `function main(c){c.rules.unshift("DOMAIN,profile.test,DIRECT");return c}`,
 		"profiles/bad.js":     `function main(c){c.rules.unshift("DOMAIN,invalid.test,MissingPolicy");return c}`,
 	}
@@ -71,6 +74,9 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	if len(prepared.AfterRules) != 3 || prepared.AfterRules[0] != "DOMAIN,profile.test,DIRECT" || prepared.AfterRules[1] != "DOMAIN,global.test,DIRECT" {
 		t.Fatalf("script rules not composed: %v", prepared.AfterRules)
 	}
+	if bytes.Contains(prepared.Effective, []byte("0.0.0.0:9090")) || a.core.Status().TUN {
+		t.Fatal("script modified protected control fields")
+	}
 	after, err := a.core.EffectiveConfig()
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("preview changed active core")
@@ -86,6 +92,11 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	}
 	if _, err := a.agentApply(preview.PreviewID); err == nil {
 		t.Fatal("read-only preview accepted as an apply proposal")
+	}
+	configArgs, _ := json.Marshal(agent.VergeScriptConfigArgs{PreviewID: preview.PreviewID, Stage: "after"})
+	value, err = a.dispatchAgent(context.Background(), "verge-script-preview-config", configArgs)
+	if err != nil || !strings.Contains(value.(agent.VergeScriptConfigPage).Text, "DOMAIN,profile.test,DIRECT") || strings.Contains(value.(agent.VergeScriptConfigPage).Text, "0.0.0.0:9090") {
+		t.Fatal("explicit config preview incorrect", err)
 	}
 	pageArgs, _ := json.Marshal(agent.PreviewRulesArgs{ProposalID: preview.PreviewID, Stage: "after", Offset: 1, Limit: 1})
 	value, err = a.dispatchAgent(context.Background(), "verge-script-preview-rules", pageArgs)
@@ -133,6 +144,75 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	}
 	if _, err := a.prepareVergeScript(context.Background(), badDraft, migration.ScriptSelection{Profile: true}); !errors.Is(err, scriptpreview.ErrValidation) {
 		t.Fatalf("invalid script output accepted or not validated: %v", err)
+	}
+	// Exercise the persisted-output runtime building block. There is no public
+	// script apply operation until the transaction and rollback paths are ready.
+	approval, err := scriptapproval.Store(context.Background(), dir, prepared.Candidate, draft.base, draft.item.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, snapshot, err := a.profiles.LoadForUpdate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range catalog.Items {
+		if catalog.Items[i].UID == draft.target {
+			catalog.Items[i].Option.VergeScriptApproval = &approval
+			catalog.Items[i].Option.VergeExtensions = true
+		}
+	}
+	if err := a.profiles.SaveIfUnchanged(catalog, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.core.Reload(); err != nil {
+		t.Fatal("cached script reload failed", err)
+	}
+	active, err := a.core.EffectiveConfig()
+	if err != nil || !bytes.Contains(active, []byte("DOMAIN,profile.test,DIRECT")) {
+		t.Fatal("approved output not used", err)
+	}
+	if bytes.Contains(active, []byte("0.0.0.0:9090")) || a.core.Status().TUN || a.core.Status().Mode == "global" {
+		t.Fatal("cached script modified protected runtime controls")
+	}
+	if err := a.core.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.core.Start(dir); err != nil {
+		t.Fatal("restart with cached script failed", err)
+	}
+	active, err = a.core.EffectiveConfig()
+	if err != nil || !bytes.Contains(active, []byte("DOMAIN,profile.test,DIRECT")) {
+		t.Fatal("script output was not restored on restart", err)
+	}
+	proposal, err := a.agentPreview(agent.Change{Scope: "global", Operation: "set", Layer: rewrite.Layer{Prepend: []string{"DOMAIN,agent.test,DIRECT"}}})
+	if err != nil || len(proposal.RulesAfter) == 0 || proposal.RulesAfter[0] != "DOMAIN,agent.test,DIRECT" {
+		t.Fatal("Agent rule did not override script", err)
+	}
+	resolved, err := scriptapproval.ResolveSnapshot(context.Background(), dir, approval, draft.base, draft.item.Name, draft.item.Option.VergeArchive, draft.item.Option.VergeUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cache string
+	for path := range resolved.Sources {
+		if strings.Contains(path, "verge-script-outputs") {
+			cache = path
+		}
+	}
+	if cache == "" {
+		t.Fatal("cache was not bound as a preview source")
+	}
+	if err := os.WriteFile(cache, []byte("tampered"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.agentApply(proposal.ProposalID); err == nil {
+		t.Fatal("changed cache accepted by Agent apply")
+	}
+	if err := a.core.Reload(); err == nil {
+		t.Fatal("changed cached output was loaded")
+	}
+	stillActive, err := a.core.EffectiveConfig()
+	if err != nil || !bytes.Equal(active, stillActive) {
+		t.Fatal("failed reload changed running core", err)
 	}
 	a.tunBusy = true
 	if err := a.checkVergeScriptDraft(draft); err != scriptpreview.ErrSourcesChanged {

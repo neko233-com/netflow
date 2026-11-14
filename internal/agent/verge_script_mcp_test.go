@@ -25,6 +25,12 @@ func TestVergeScriptMCPPreviewAndPaging(t *testing.T) {
 				return nil, errors.New("bad page")
 			}
 			return PreviewRulesResult{Rules: []string{"MATCH,DIRECT"}}, nil
+		case "verge-script-preview-config":
+			var in VergeScriptConfigArgs
+			if json.Unmarshal(raw, &in) != nil || in.PreviewID != "p" || in.Stage != "after" {
+				return nil, errors.New("bad config page")
+			}
+			return VergeScriptConfigPage{Text: "private fixture"}, nil
 		case "verge-script-preview-cancel":
 			return ActionResult{OK: true}, nil
 		default:
@@ -52,6 +58,7 @@ func TestVergeScriptMCPPreviewAndPaging(t *testing.T) {
 	for _, call := range []*mcp.CallToolParams{
 		{Name: "netflow_preview_verge_script", Arguments: map[string]any{"profile_id": "sub", "global": true, "profile": true}},
 		{Name: "netflow_verge_script_preview_rules", Arguments: map[string]any{"proposal_id": "p", "stage": "after"}},
+		{Name: "netflow_verge_script_preview_config", Arguments: map[string]any{"preview_id": "p", "stage": "after"}},
 		{Name: "netflow_cancel_verge_script_preview", Arguments: map[string]any{"proposal_id": "p"}},
 	} {
 		result, err := cs.CallTool(ctx, call)

@@ -337,6 +337,20 @@ type VergeScriptPreview struct {
 	ExpiresAt          time.Time          `json:"expires_at"`
 }
 
+// VergeScriptConfigArgs explicitly requests private configuration values.
+type VergeScriptConfigArgs struct {
+	PreviewID string `json:"preview_id" jsonschema:"unexpired script preview id"`
+	Stage     string `json:"stage" jsonschema:"before or after"`
+	Offset    int    `json:"offset,omitempty" jsonschema:"UTF-8 byte offset returned by the previous page"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"maximum UTF-8 bytes per page, default and maximum 65536"`
+}
+type VergeScriptConfigPage struct {
+	Offset     int    `json:"offset"`
+	NextOffset int    `json:"next_offset"`
+	Total      int    `json:"total"`
+	Text       string `json:"text"`
+}
+
 type ApplyArgs struct {
 	ProposalID string `json:"proposal_id" jsonschema:"proposal id returned by preview"`
 }

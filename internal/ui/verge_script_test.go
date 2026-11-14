@@ -84,3 +84,39 @@ func TestVergeScriptPreviewBackTracksShortPages(t *testing.T) {
 		t.Fatal("did not return to first page")
 	}
 }
+
+func TestVergeScriptConfigRevealsOnlyOnExplicitRequestAndPages(t *testing.T) {
+	m := NewModel(HomeState{})
+	m.VergeScriptPreview = VergeScriptDialog{Open: true, PreviewID: "id", Stage: "after"}
+	requests := 0
+	m.Hooks.VergeScriptPreviewConfig = func(in agent.VergeScriptConfigArgs) (agent.VergeScriptConfigPage, error) {
+		requests++
+		switch in.Offset {
+		case 0:
+			return agent.VergeScriptConfigPage{Offset: 0, NextOffset: 4, Total: 8, Text: "part"}, nil
+		case 4:
+			return agent.VergeScriptConfigPage{Offset: 4, NextOffset: 8, Total: 8, Text: "secret"}, nil
+		default:
+			t.Fatal("unexpected offset")
+			return agent.VergeScriptConfigPage{}, nil
+		}
+	}
+	if requests != 0 || m.VergeScriptPreview.ConfigMode {
+		t.Fatal("configuration revealed without request")
+	}
+	if !m.pageVergeScriptConfig("after", 0) || m.VergeScriptPreview.PageText != "part" {
+		t.Fatal("first config page missing")
+	}
+	m.nextVergeScriptConfig()
+	if m.VergeScriptPreview.PageText != "secret" {
+		t.Fatal("second config page missing")
+	}
+	m.previousVergeScriptConfig()
+	if m.VergeScriptPreview.PageText != "part" {
+		t.Fatal("previous config page missing")
+	}
+	m.clearVergeScriptPreview()
+	if m.VergeScriptPreview.PageText != "" || m.VergeScriptPreview.ConfigPage.Text != "" {
+		t.Fatal("private config retained after closing preview")
+	}
+}
