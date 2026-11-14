@@ -37,4 +37,4 @@ claude mcp add --scope project --transport stdio netflow -- "$agent" mcp
 
 Agent 操作规则时，先调用 `netflow_preview_rewrite` 或 `netflow_preview_rollback` 检查范围、规则和警告，再明确调用 `netflow_apply_rewrite`；过期或状态变化后的提案需要重新预览。连接级匹配器影响之后符合条件的连接，不会重新路由已有连接。可用 `netflow_rewrite_history` 查看可回滚版本。Agent 状态与预览可能包含连接元数据或用户规则；发送给模型的内容由所选客户端及其服务处理。
 
-本机已用 Codex CLI 0.118.0 的临时命令行配置验证 `mcp get` 能识别安装版路径；该版本遇到本机原有的 `service_tier = "default"` 时需要使用兼容设置才能加载配置。Claude Code 2.1.117 已在独立临时项目中注册安装版并通过 `claude mcp get` 的连接检查，未改写用户或其他项目配置。MCP 的初始化、工具列表和实际调用另由 NetFlow 的 Windows 冒烟测试覆盖；这些检查不代表所有客户端版本均已验证。
+本机已用 Codex 桌面应用附带的 CLI `0.169.0-alpha.11.1` 通过临时命令行配置验证 `mcp get` 能识别安装版路径。机器上另有独立安装的 Codex CLI `0.118.0`，该旧版本遇到本机原有的 `service_tier = "default"` 时需要兼容设置才能加载配置；桌面应用附带版本可以读取该配置。Claude Code 2.1.117 已在独立临时项目中注册安装版并通过 `claude mcp get` 的连接检查，未改写用户或其他项目配置。MCP 的初始化、工具列表和实际调用另由 NetFlow 的 Windows 冒烟测试覆盖；这些检查不代表所有客户端版本均已验证。
