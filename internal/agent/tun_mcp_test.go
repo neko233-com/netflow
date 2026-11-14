@@ -12,6 +12,20 @@ import (
 func TestMCPRequestsTUN(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := Start(dir, func(_ context.Context, method string, args json.RawMessage) (any, error) {
+		if method == "provider-page" {
+			var in ProviderPageArgs
+			if json.Unmarshal(args, &in) != nil || in.Kind != "proxy" || in.Offset != 2 || in.Limit != 3 {
+				t.Error("incorrect provider page request")
+			}
+			return ProviderPageResult{Kind: "proxy", Total: 2, Offset: 2, NextOffset: 2}, nil
+		}
+		if method == "group-nodes" {
+			var in GroupNodesArgs
+			if json.Unmarshal(args, &in) != nil || in.Group != "test" || in.Offset != 2 || in.Limit != 3 {
+				t.Error("incorrect group page request")
+			}
+			return GroupNodesResult{Group: "test", Total: 2, Offset: 2, NextOffset: 2}, nil
+		}
 		if method == "connections" {
 			var in ConnectionsArgs
 			if json.Unmarshal(args, &in) != nil || in.Offset != 2 || in.Limit != 3 {
@@ -126,6 +140,8 @@ func TestMCPRequestsTUN(t *testing.T) {
 		t.Fatalf("MCP version %q does not match the application version %q", got, netflow.Version())
 	}
 	for _, call := range []*mcp.CallToolParams{
+		{Name: "netflow_provider_page", Arguments: map[string]any{"kind": "proxy", "offset": 2, "limit": 3}},
+		{Name: "netflow_proxy_group_nodes", Arguments: map[string]any{"group": "test", "offset": 2, "limit": 3}},
 		{Name: "netflow_connections", Arguments: map[string]any{"offset": 2, "limit": 3}},
 		{Name: "netflow_tun_autostart", Arguments: map[string]any{}},
 		{Name: "netflow_set_tun_autostart", Arguments: map[string]any{"enabled": true}},

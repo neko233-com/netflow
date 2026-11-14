@@ -68,10 +68,14 @@ func previewRulePage(rules []string, offset, limit int) (agent.PreviewRulesResul
 		if len(encoded)+2 > maxPreviewPageBytes {
 			return agent.PreviewRulesResult{}, errors.New("one rule exceeds the preview page size limit")
 		}
-		if encodedBytes+len(encoded)+1 > maxPreviewPageBytes {
+		extra := len(encoded)
+		if len(out.Rules) > 0 {
+			extra++
+		}
+		if encodedBytes+extra > maxPreviewPageBytes {
 			break
 		}
-		encodedBytes += len(encoded) + 1
+		encodedBytes += extra
 		out.Rules = append(out.Rules, item)
 		out.NextOffset++
 	}
@@ -150,8 +154,14 @@ func (a *App) agentStatus() (agent.Status, error) {
 	if source, ok := a.core.(interface{ CacheWarning() string }); ok {
 		out.ProviderCacheWarning = source.CacheWarning()
 	}
-	for _, p := range catalog.Items {
-		out.Profiles = append(out.Profiles, agent.Profile{ID: p.UID, Name: profile.SafeDisplayName(p), Active: p.UID == out.ActiveProfile})
+	profilePage, profileErr := profilePage(catalog, out.ActiveProfile, agent.PageArgs{})
+	out.ProfilesTotal = len(catalog.Items)
+	out.ProfilesTruncated = profileErr != nil || profilePage.NextOffset < len(catalog.Items)
+	if profileErr != nil {
+		out.Profiles = []agent.Profile{}
+		out.ProfilesWarning = "A profile is too large to display; inspect it in the application."
+	} else {
+		out.Profiles = profilePage.Profiles
 	}
 	return out, nil
 }

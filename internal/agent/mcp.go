@@ -119,16 +119,22 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "apply", args, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "netflow_proxy_groups", Description: "List live proxy groups, selected nodes, and resolved members without subscription credentials.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, GroupsResult, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_proxy_groups", Description: "Page live proxy groups with a bounded first page of members. Use next_offset; groups may change after reload.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in PageArgs) (*mcp.CallToolResult, GroupsResult, error) {
 			var out GroupsResult
-			err := client.Call(ctx, "groups", nil, &out)
+			err := client.Call(ctx, "groups", in, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "netflow_profiles", Description: "List profile IDs, user-controlled names and the active profile without a subscription URL field.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, ProfileList, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_proxy_group_nodes", Description: "Page live members of a named proxy group. Use next_offset; membership can change between requests.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in GroupNodesArgs) (*mcp.CallToolResult, GroupNodesResult, error) {
+			var out GroupNodesResult
+			err := client.Call(ctx, "group-nodes", in, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_profiles", Description: "Page profile IDs, user-controlled names and active state without subscription URLs. Use next_offset; the catalog can change.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in PageArgs) (*mcp.CallToolResult, ProfileList, error) {
 			var out ProfileList
-			err := client.Call(ctx, "profiles", nil, &out)
+			err := client.Call(ctx, "profiles", in, &out)
 			return nil, out, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_profile_settings", Description: "Read user-provided profile metadata and download options without the subscription URL. Names, descriptions and user agents can themselves contain sensitive text.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
@@ -239,10 +245,16 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "delete-profile", args, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "netflow_providers", Description: "List active proxy and rule providers without their URLs or local paths.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_providers", Description: "List a bounded first page of proxy and rule providers without URLs or paths; use netflow_provider_page to continue.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, ProviderList, error) {
 			var out ProviderList
 			err := client.Call(ctx, "providers", nil, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_provider_page", Description: "Page proxy or rule provider summaries. Use next_offset; provider lists can change after reload.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in ProviderPageArgs) (*mcp.CallToolResult, ProviderPageResult, error) {
+			var out ProviderPageResult
+			err := client.Call(ctx, "provider-page", in, &out)
 			return nil, out, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_update_provider", Description: "Start an asynchronous update for a named proxy or rule provider in the active profile. Poll netflow_provider_job_status using the returned job_id. A profile change before the job starts causes it to fail."},

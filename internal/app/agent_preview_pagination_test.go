@@ -40,6 +40,10 @@ func TestPreviewRulePaginationBoundsAndExpiry(t *testing.T) {
 	if _, err := previewRulePage([]string{strings.Repeat("<", maxPreviewPageBytes)}, 0, 1); err == nil {
 		t.Fatal("oversized single rule accepted")
 	}
+	exact, err := previewRulePage([]string{strings.Repeat("x", maxPreviewPageBytes-4)}, 0, 1)
+	if err != nil || exact.NextOffset != 1 {
+		t.Fatalf("exact byte boundary did not advance: %d %v", exact.NextOffset, err)
+	}
 	large := make([]string, 17000)
 	largeRule := strings.Repeat("x", 4000)
 	for i := range large {

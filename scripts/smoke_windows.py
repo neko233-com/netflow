@@ -153,6 +153,15 @@ def main():
         groups = call("groups")["groups"]
         if not any(g["name"] == "SmokeGroup" and len(g["nodes"]) == 2 for g in groups):
             raise RuntimeError("agent did not list real proxy group members")
+        nodes = call("group-nodes", "SmokeGroup", "0", "1")
+        if nodes["total"] != 2 or nodes["next_offset"] != 1 or len(nodes["nodes"]) != 1:
+            raise RuntimeError("agent did not page proxy group members")
+        provider_page = call("provider-page", "proxy", "0", "1")
+        if provider_page["next_offset"] > provider_page["total"]:
+            raise RuntimeError("agent provider page is invalid")
+        profile_page = call("profiles", "0", "1")
+        if profile_page["next_offset"] > profile_page["total"]:
+            raise RuntimeError("agent profile page is invalid")
         rule_page = call("rules", "0", "1")
         if rule_page["total"] < 1 or rule_page["next_offset"] != 1:
             raise RuntimeError("agent did not list active rules")
@@ -335,14 +344,20 @@ def main():
             mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n"); mcp.stdin.flush()
             response = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
             names = {item["name"] for item in response["result"]["tools"]}
-            expected = {"netflow_status", "netflow_connections", "netflow_diagnostics", "netflow_kernel_options", "netflow_set_kernel_option", "netflow_shutdown_headless", "netflow_set_tun", "netflow_tun_autostart", "netflow_set_tun_autostart", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_preview_rules", "netflow_cancel_preview", "netflow_apply_rewrite", "netflow_rewrite_history", "netflow_preview_rollback", "netflow_clear_rewrite_history", "netflow_proxy_groups", "netflow_rules",
+            expected = {"netflow_status", "netflow_connections", "netflow_diagnostics", "netflow_kernel_options", "netflow_set_kernel_option", "netflow_shutdown_headless", "netflow_set_tun", "netflow_tun_autostart", "netflow_set_tun_autostart", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_preview_rules", "netflow_cancel_preview", "netflow_apply_rewrite", "netflow_rewrite_history", "netflow_preview_rollback", "netflow_clear_rewrite_history", "netflow_proxy_groups", "netflow_proxy_group_nodes", "netflow_rules",
                         "netflow_profiles", "netflow_profile_settings", "netflow_update_profile_settings", "netflow_replace_profile_url", "netflow_import_profile", "netflow_update_profile", "netflow_profile_job_status", "netflow_delete_profile",
                         "netflow_backup_create", "netflow_backup_job_status", "netflow_restore_backup", "netflow_backup_schedule", "netflow_backup_schedule_set", "netflow_webdav_config", "netflow_webdav_save", "netflow_webdav_clear", "netflow_webdav_list", "netflow_webdav_upload", "netflow_webdav_restore",
-                        "netflow_providers", "netflow_update_provider", "netflow_provider_job_status",
+                        "netflow_providers", "netflow_provider_page", "netflow_update_provider", "netflow_provider_job_status",
                         "netflow_select_proxy", "netflow_set_mode", "netflow_use_profile", "netflow_close_connection",
                         "netflow_migration_preview", "netflow_migration_import", "netflow_migration_export"}
             if names != expected:
                 raise RuntimeError(f"unexpected MCP tools: {names}")
+            response = rpc({"jsonrpc":"2.0", "id":18, "method":"tools/call", "params":{"name":"netflow_provider_page", "arguments":{"kind":"proxy","offset":0,"limit":1}}})
+            if response.get("result", {}).get("isError") or "next_offset" not in response.get("result", {}).get("structuredContent", {}):
+                raise RuntimeError(f"MCP provider page failed: {response}")
+            response = rpc({"jsonrpc":"2.0", "id":17, "method":"tools/call", "params":{"name":"netflow_proxy_group_nodes", "arguments":{"group":"SmokeGroup","offset":1,"limit":1}}})
+            if response.get("result", {}).get("isError") or response.get("result", {}).get("structuredContent", {}).get("next_offset") != 2:
+                raise RuntimeError(f"MCP group member page failed: {response}")
             response = rpc({"jsonrpc":"2.0", "id":16, "method":"tools/call", "params":{"name":"netflow_connections", "arguments":{"offset":0,"limit":1}}})
             if response.get("result", {}).get("isError") or "next_offset" not in response.get("result", {}).get("structuredContent", {}):
                 raise RuntimeError(f"MCP connection page failed: {response}")

@@ -320,6 +320,18 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if output, err := call("connections", "0", "1"); err != nil || json.Unmarshal(output, &connectionPage) != nil || connectionPage.NextOffset > connectionPage.Total {
 		t.Fatalf("installed headless connection page failed: %s %v", output, err)
 	}
+	var profilesPage agent.ProfileList
+	if output, err := call("profiles", "0", "1"); err != nil || json.Unmarshal(output, &profilesPage) != nil || profilesPage.Total < 1 || profilesPage.NextOffset != 1 {
+		t.Fatalf("installed headless profile page failed: %s %v", output, err)
+	}
+	var nodesPage agent.GroupNodesResult
+	if output, err := call("group-nodes", "Select", "0", "1"); err != nil || json.Unmarshal(output, &nodesPage) != nil || nodesPage.Total < 1 || nodesPage.NextOffset != 1 {
+		t.Fatalf("installed headless group node page failed: %s %v", output, err)
+	}
+	var providersPage agent.ProviderPageResult
+	if output, err := call("provider-page", "proxy", "0", "1"); err != nil || json.Unmarshal(output, &providersPage) != nil || providersPage.Total < 1 || providersPage.NextOffset != 1 {
+		t.Fatalf("installed headless provider page failed: %s %v", output, err)
+	}
 	{
 		settingsPath := filepath.Join(dir, "settings.json")
 		original, err := os.ReadFile(settingsPath)

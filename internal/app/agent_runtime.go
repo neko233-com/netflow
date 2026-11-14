@@ -201,11 +201,19 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 			}
 		}
 	case "groups":
-		value, callErr = a.agentGroups()
-	case "profiles":
-		var input agent.Empty
+		var input agent.PageArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {
-			value, callErr = a.agentProfiles()
+			value, callErr = a.agentGroupsPage(input)
+		}
+	case "group-nodes":
+		var input agent.GroupNodesArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentGroupNodes(input)
+		}
+	case "profiles":
+		var input agent.PageArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentProfilesPage(input)
 		}
 	case "profile-settings":
 		var input agent.ProfileArgs
@@ -361,7 +369,12 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 	case "providers":
 		var input agent.Empty
 		if callErr = decodeStrict(args, &input); callErr == nil {
-			value, callErr = a.agentProviders()
+			value, callErr = a.agentProviderPreview()
+		}
+	case "provider-page":
+		var input agent.ProviderPageArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentProviderPage(input)
 		}
 	case "update-provider":
 		var input agent.ProviderUpdateArgs

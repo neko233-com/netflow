@@ -22,6 +22,22 @@ type profileJobRecord struct {
 }
 
 func (a *App) agentProfiles() (agent.ProfileList, error) {
+	return a.agentProfilesPage(agent.PageArgs{})
+}
+
+func profilePage(catalog profile.File, active string, in agent.PageArgs) (agent.ProfileList, error) {
+	items := make([]agent.Profile, 0, len(catalog.Items))
+	for _, item := range catalog.Items {
+		items = append(items, agent.Profile{ID: item.UID, Name: profile.SafeDisplayName(item), Active: item.UID == active})
+	}
+	page, offset, next, err := boundedAgentPage(items, in.Offset, in.Limit, maxAgentPageBytes)
+	if err != nil {
+		return agent.ProfileList{}, err
+	}
+	return agent.ProfileList{Profiles: page, Total: len(items), Offset: offset, NextOffset: next}, nil
+}
+
+func (a *App) agentProfilesPage(in agent.PageArgs) (agent.ProfileList, error) {
 	result := agent.ProfileList{Profiles: []agent.Profile{}}
 	if a.profiles == nil {
 		return result, errors.New("profile store is unavailable")
@@ -30,10 +46,7 @@ func (a *App) agentProfiles() (agent.ProfileList, error) {
 	if err != nil {
 		return result, errors.New("profile catalog could not be read")
 	}
-	for _, item := range catalog.Items {
-		result.Profiles = append(result.Profiles, agent.Profile{ID: item.UID, Name: profile.SafeDisplayName(item), Active: item.UID == catalog.Current})
-	}
-	return result, nil
+	return profilePage(catalog, catalog.Current, in)
 }
 
 func (a *App) agentProfileSettings(id string) (agent.ProfileSettings, error) {

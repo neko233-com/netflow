@@ -42,7 +42,15 @@ type KernelOptionArgs struct {
 }
 
 type ProfileList struct {
-	Profiles []Profile `json:"profiles"`
+	Profiles   []Profile `json:"profiles"`
+	Total      int       `json:"total"`
+	Offset     int       `json:"offset"`
+	NextOffset int       `json:"next_offset"`
+}
+
+type PageArgs struct {
+	Offset int `json:"offset,omitempty" jsonschema:"zero-based offset in the current list"`
+	Limit  int `json:"limit,omitempty" jsonschema:"maximum items, 1 to 500; default 100"`
 }
 
 type ProfileImportArgs struct {
@@ -196,6 +204,9 @@ type Status struct {
 	ActiveProfile        string        `json:"active_profile,omitempty"`
 	Revision             uint64        `json:"revision"`
 	Profiles             []Profile     `json:"profiles"`
+	ProfilesTotal        int           `json:"profiles_total"`
+	ProfilesTruncated    bool          `json:"profiles_truncated"`
+	ProfilesWarning      string        `json:"profiles_warning,omitempty"`
 	Connections          []conn.Item   `json:"connections"`
 	ConnectionsTotal     int           `json:"connections_total"`
 	ConnectionsTruncated bool          `json:"connections_truncated"`
@@ -311,13 +322,32 @@ type ProxyNode struct {
 	UDP  bool   `json:"udp"`
 }
 type ProxyGroup struct {
-	Name    string      `json:"name"`
-	Type    string      `json:"type"`
-	Current string      `json:"current"`
-	Nodes   []ProxyNode `json:"nodes"`
+	Name           string      `json:"name"`
+	Type           string      `json:"type"`
+	Current        string      `json:"current"`
+	Nodes          []ProxyNode `json:"nodes"`
+	NodesTotal     int         `json:"nodes_total"`
+	NodesTruncated bool        `json:"nodes_truncated"`
+	NodesWarning   string      `json:"nodes_warning,omitempty"`
 }
 type GroupsResult struct {
-	Groups []ProxyGroup `json:"groups"`
+	Groups     []ProxyGroup `json:"groups"`
+	Total      int          `json:"total"`
+	Offset     int          `json:"offset"`
+	NextOffset int          `json:"next_offset"`
+}
+
+type GroupNodesArgs struct {
+	Group  string `json:"group" jsonschema:"proxy group name"`
+	Offset int    `json:"offset,omitempty" jsonschema:"zero-based member offset"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"maximum members, 1 to 500; default 100"`
+}
+type GroupNodesResult struct {
+	Group      string      `json:"group"`
+	Total      int         `json:"total"`
+	Offset     int         `json:"offset"`
+	NextOffset int         `json:"next_offset"`
+	Nodes      []ProxyNode `json:"nodes"`
 }
 type SelectArgs struct {
 	Group string `json:"group" jsonschema:"proxy group name"`
@@ -386,8 +416,25 @@ type ProviderInfo struct {
 	Count    int    `json:"count"`
 }
 type ProviderList struct {
-	Proxy []ProviderInfo `json:"proxy"`
-	Rule  []ProviderInfo `json:"rule"`
+	Proxy           []ProviderInfo `json:"proxy"`
+	Rule            []ProviderInfo `json:"rule"`
+	ProxyTotal      int            `json:"proxy_total"`
+	ProxyNextOffset int            `json:"proxy_next_offset"`
+	RuleTotal       int            `json:"rule_total"`
+	RuleNextOffset  int            `json:"rule_next_offset"`
+}
+
+type ProviderPageArgs struct {
+	Kind   string `json:"kind" jsonschema:"proxy or rule"`
+	Offset int    `json:"offset,omitempty" jsonschema:"zero-based offset"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"maximum providers, 1 to 500; default 100"`
+}
+type ProviderPageResult struct {
+	Kind       string         `json:"kind"`
+	Total      int            `json:"total"`
+	Offset     int            `json:"offset"`
+	NextOffset int            `json:"next_offset"`
+	Providers  []ProviderInfo `json:"providers"`
 }
 type ProviderUpdateArgs struct {
 	Kind string `json:"kind" jsonschema:"proxy or rule"`

@@ -13,6 +13,27 @@ import (
 	"github.com/neko233-com/netflow/internal/rules"
 )
 
+func TestProviderPagesPreserveFullUpdateLookup(t *testing.T) {
+	engine := &switchTestEngine{running: true, id: "profile-1"}
+	for i := 0; i < 250; i++ {
+		engine.proxyProviders = append(engine.proxyProviders, core.ProxyProvider{Name: fmt.Sprintf("p-%03d", i), Vehicle: "HTTP"})
+	}
+	a := &App{core: newSwitchableEngine(engine)}
+	preview, err := a.agentProviderPreview()
+	if err != nil || preview.ProxyTotal != 250 || preview.ProxyNextOffset != 100 || len(preview.Proxy) != 100 {
+		t.Fatalf("provider preview: %+v %v", preview, err)
+	}
+	page, err := a.agentProviderPage(agent.ProviderPageArgs{Kind: "proxy", Offset: 100, Limit: 150})
+	if err != nil || page.Total != 250 || page.NextOffset != 250 || page.Providers[0].Name != "p-100" {
+		t.Fatalf("provider page: %+v %v", page, err)
+	}
+	started := false
+	_, err = a.beginProviderJob(agent.ProviderUpdateArgs{Kind: "proxy", Name: "p-249"}, time.Now(), func(_, _ string, done func(error)) { started = true; done(nil) })
+	if err != nil || !started {
+		t.Fatalf("update could not find provider after first page: %v", err)
+	}
+}
+
 func TestProviderJobsDeduplicateReportAndExpire(t *testing.T) {
 	engine := &switchTestEngine{running: true, id: "profile-1", proxyProviders: []core.ProxyProvider{{Name: "nodes", Vehicle: "HTTP", Count: 3}}, ruleProviders: []rules.Provider{{Name: "sites", Vehicle: "HTTP", Behavior: "Domain", Count: 2}}}
 	a := &App{core: newSwitchableEngine(engine)}

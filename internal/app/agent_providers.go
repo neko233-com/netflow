@@ -32,7 +32,44 @@ func (a *App) agentProviders() (agent.ProviderList, error) {
 	for _, p := range a.core.RuleProviders() {
 		result.Rule = append(result.Rule, agent.ProviderInfo{Name: p.Name, Vehicle: p.Vehicle, Behavior: p.Behavior, Count: p.Count})
 	}
+	result.ProxyTotal, result.ProxyNextOffset = len(result.Proxy), len(result.Proxy)
+	result.RuleTotal, result.RuleNextOffset = len(result.Rule), len(result.Rule)
 	return result, nil
+}
+
+func (a *App) agentProviderPreview() (agent.ProviderList, error) {
+	all, err := a.agentProviders()
+	if err != nil {
+		return agent.ProviderList{}, err
+	}
+	proxy, _, proxyNext, err := boundedAgentPage(all.Proxy, 0, 100, maxAgentPageBytes/2)
+	if err != nil {
+		return agent.ProviderList{}, err
+	}
+	rule, _, ruleNext, err := boundedAgentPage(all.Rule, 0, 100, maxAgentPageBytes/2)
+	if err != nil {
+		return agent.ProviderList{}, err
+	}
+	return agent.ProviderList{Proxy: proxy, Rule: rule, ProxyTotal: len(all.Proxy), ProxyNextOffset: proxyNext, RuleTotal: len(all.Rule), RuleNextOffset: ruleNext}, nil
+}
+
+func (a *App) agentProviderPage(in agent.ProviderPageArgs) (agent.ProviderPageResult, error) {
+	if in.Kind != "proxy" && in.Kind != "rule" {
+		return agent.ProviderPageResult{}, errors.New("provider kind must be proxy or rule")
+	}
+	all, err := a.agentProviders()
+	if err != nil {
+		return agent.ProviderPageResult{}, err
+	}
+	items := all.Proxy
+	if in.Kind == "rule" {
+		items = all.Rule
+	}
+	page, offset, next, err := boundedAgentPage(items, in.Offset, in.Limit, maxAgentPageBytes)
+	if err != nil {
+		return agent.ProviderPageResult{}, err
+	}
+	return agent.ProviderPageResult{Kind: in.Kind, Total: len(items), Offset: offset, NextOffset: next, Providers: page}, nil
 }
 
 func (a *App) pruneProviderJobs(now time.Time) {

@@ -117,6 +117,10 @@ CLI 还提供 `version`、`diagnostics`、`groups`、`rules [偏移 [数量]]`�
 
 `status` 最多返回前 100 条活动连接，并提供 `connections_total`、`connections_truncated`；需要更多时用 `connections [偏移 [数量]]` 或 MCP `netflow_connections`。连接按 ID 排序，每次请求都是新的实时快照，连接增减会使偏移变化，不保证跨页固定视图。`connections` 和 `rules` 每页默认 100 项、最多 500 项，并受编码后 256 KiB 上限约束；按返回的 `next_offset` 继续，直到等于 `total`，规则列表在重载时也可能变化。单条数据超过大小上限时分页返回错误；如果状态的首条连接过大，状态保留其他字段并显示 `connections_warning`。
 
+`status` 中的订阅列表同样最多显示首批，`profiles_total` 与 `profiles_truncated` 标识总数和截断；使用 `profiles [偏移 [数量]]` 或 MCP `netflow_profiles` 翻页。`groups [偏移 [数量]]` / MCP `netflow_proxy_groups` 分页返回代理组及每组首批节点；节点较多时根据 `nodes_total`、`nodes_truncated` 使用 `group-nodes <组名> [偏移 [数量]]` 或 MCP `netflow_proxy_group_nodes` 继续查看。各列表按 `next_offset` 翻页，默认 100、最多 500 条，并有编码大小限制；配置重载或订阅变化会改变实时列表。
+
+`providers` / MCP `netflow_providers` 分别显示代理和规则集合首批及其总数、下一偏移；其余项目可通过 `provider-page proxy|rule [偏移 [数量]]` 或 MCP `netflow_provider_page` 查看。分页不会限制按名称更新集合的能力。
+
 GUI 和无界面模式都可通过 `kernel-options` 查看显式内核覆写及运行中内核报告的生效值，并通过 `kernel-option <名称> <值>` 修改：`allow-lan`、`ipv6`、`unified-delay` 接受 `true` 或 `false`；`log-level`、`tun-stack` 接受对应内核值；`mixed-port`、`socks-port`、`http-port` 接受端口数字。值为 `inherit` 时删除对应覆写并跟随订阅；`overrides` 中未列出的字段表示继承，`effective` 不包含 TUN 协议栈且内核停止时省略。对应 MCP 工具为 `netflow_kernel_options` 和 `netflow_set_kernel_option`，后者使用 `name`、相应的 `bool_value` / `string_value` / `port_value`，或 `inherit: true`。修改前校验，失败时尝试恢复原设置；修改可能重载内核、中断连接或改变监听范围。虚拟网卡切换中会拒绝修改；若选项文件被外部修改，会保留该文件并要求检查后重启。
 
 ```powershell
