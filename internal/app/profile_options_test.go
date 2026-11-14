@@ -52,6 +52,38 @@ func TestSubscriptionDirectAndRedirectPolicy(t *testing.T) {
 	}
 }
 
+func TestSubscriptionRedirectDoesNotForwardSecrets(t *testing.T) {
+	headers := make(chan [2]string, 1)
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers <- [2]string{r.Header.Get("Referer"), r.Header.Get("Authorization")}
+		_, _ = w.Write([]byte("rules: ['MATCH,DIRECT']"))
+	}))
+	defer destination.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusFound)
+	}))
+	defer origin.Close()
+	address, err := url.Parse(origin.URL + "/sub?token=synthetic-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address.User = url.UserPassword("synthetic-user", "synthetic-password")
+	client := newSubscriptionClient("", 3*time.Second, false)
+	defer client.CloseIdleConnections()
+	// Even a caller-supplied redirect hook must not reintroduce secrets.
+	client.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
+		req.Header.Set("Referer", address.String())
+		req.Header.Set("Authorization", "synthetic-secret")
+		return nil
+	}
+	if _, err := fetchProfileResponse(address.String(), client, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-headers; got != ([2]string{}) {
+		t.Fatalf("redirect forwarded sensitive headers: %q", got)
+	}
+}
+
 func TestSubscriptionClientHonorsTLSUserAgentTimeoutAndProxyPolicy(t *testing.T) {
 	var received atomic.Bool
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

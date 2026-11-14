@@ -326,10 +326,14 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatalf("headless process has %d visible windows", windows)
 	}
 	var downloads atomic.Int32
+	redirectHeaders := make(chan [2]string, 1)
 	subscription := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/subscription" && r.URL.Path != "/" {
+		if r.URL.Path != "/subscription" && r.URL.Path != "/" && r.URL.Path != "/redirect-target" {
 			http.NotFound(w, r)
 			return
+		}
+		if r.URL.Path == "/redirect-target" {
+			redirectHeaders <- [2]string{r.Header.Get("Referer"), r.Header.Get("Authorization")}
 		}
 		downloads.Add(1)
 		_, _ = io.WriteString(w, "mixed-port: 0\nport: 0\nsocks-port: 0\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n")
@@ -365,6 +369,37 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatalf("HTTPS subscription redirect reached HTTP server: %+v", redirectJob)
 	}
 	t.Log("installed headless Agent refused an HTTPS subscription downgrade")
+	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, subscription.URL+"/redirect-target", http.StatusFound)
+	}))
+	defer redirectServer.Close()
+	redirectAddress := strings.Replace(redirectServer.URL, "http://", "http://synthetic-user:synthetic-password@", 1) + "/sub?token=synthetic-secret"
+	forwardArgs, _ := json.Marshal(agent.ProfileImportArgs{URL: redirectAddress, Name: "redirect-privacy"})
+	forwardCtx, forwardCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	forwardCommand := vmCommand(forwardCtx, agentExe, "--config-dir", dir, "import-profile")
+	forwardCommand.Stdin = strings.NewReader(string(forwardArgs))
+	forwardOutput, forwardErr := forwardCommand.CombinedOutput()
+	forwardCancel()
+	var forwardJob agent.ProfileJob
+	if forwardErr != nil || json.Unmarshal(forwardOutput, &forwardJob) != nil {
+		t.Fatalf("redirect privacy import did not start: %v", forwardErr)
+	}
+	forwardJob = waitJob(forwardJob)
+	if forwardJob.State != "succeeded" {
+		t.Fatalf("redirect privacy import failed: %+v", forwardJob)
+	}
+	select {
+	case headers := <-redirectHeaders:
+		if headers != ([2]string{}) {
+			t.Fatal("subscription credentials were forwarded to redirect target")
+		}
+	default:
+		t.Fatal("subscription redirect target was not reached")
+	}
+	if output, err := call("delete-profile", forwardJob.ProfileID); err != nil {
+		t.Fatalf("delete redirect privacy profile: %s %v", output, err)
+	}
+	t.Log("installed headless Agent did not forward subscription credentials to a different origin")
 	importProfile := func(path string) agent.ProfileJob {
 		t.Helper()
 		body, _ := json.Marshal(agent.ProfileImportArgs{URL: subscription.URL + path + "?token=synthetic-secret", Name: "headless-test"})
@@ -383,12 +418,13 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if profileJob.State != "succeeded" || profileJob.ProfileID == "" {
 		t.Fatalf("headless profile import: %+v", profileJob)
 	}
+	beforeUpdate := downloads.Load()
 	payload, err := call("update-profile", profileJob.ProfileID)
 	var updateJob agent.ProfileJob
 	if err != nil || json.Unmarshal(payload, &updateJob) != nil {
 		t.Fatalf("headless profile update request failed: %s %v", payload, err)
 	}
-	if updateJob = waitJob(updateJob); updateJob.State != "succeeded" || downloads.Load() < 2 {
+	if updateJob = waitJob(updateJob); updateJob.State != "succeeded" || downloads.Load() <= beforeUpdate {
 		t.Fatalf("headless profile update: %+v", updateJob)
 	}
 	if payload, err := call("delete-profile", profileJob.ProfileID); err != nil {

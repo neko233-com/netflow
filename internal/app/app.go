@@ -1579,9 +1579,11 @@ func fetchProfileResponse(raw string, client *http.Client, userAgent string) (su
 			return err
 		}
 		if previousCheck != nil {
-			return previousCheck(req, via)
+			if err := previousCheck(req, via); err != nil {
+				return err
+			}
 		}
-		return nil
+		return profile.CheckSubscriptionRedirect(req, via)
 	}
 	resp, err := requestClient.Do(req)
 	if err != nil {

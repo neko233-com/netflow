@@ -28,8 +28,8 @@ const DefaultTimeoutSeconds = 20
 // MaxSubscriptionBytes bounds both memory and the persisted remote profile.
 const MaxSubscriptionBytes = 8 << 20
 
-// CheckSubscriptionRedirect permits ordinary HTTP(S) redirects but never
-// sends an HTTPS subscription request, including its credentials, over HTTP.
+// CheckSubscriptionRedirect permits ordinary HTTP(S) redirects without
+// forwarding the previous subscription URL or cross-origin credentials.
 func CheckSubscriptionRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return errors.New("too many subscription redirects")
@@ -39,6 +39,14 @@ func CheckSubscriptionRedirect(req *http.Request, via []*http.Request) error {
 	}
 	if len(via) > 0 && via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
 		return errors.New("subscription redirect from HTTPS to HTTP refused")
+	}
+	// Subscription URLs commonly contain bearer tokens in their query. The
+	// default Referer header would disclose the complete URL to the next host.
+	req.Header.Del("Referer")
+	if len(via) > 0 && (!strings.EqualFold(via[0].URL.Scheme, req.URL.Scheme) || !strings.EqualFold(via[0].URL.Host, req.URL.Host)) {
+		for _, name := range []string{"Authorization", "Proxy-Authorization", "Cookie"} {
+			req.Header.Del(name)
+		}
 	}
 	return nil
 }
@@ -156,6 +164,9 @@ func ImportHTTP(ctx context.Context, rawURL string, opt ImportOption, profilesDi
 	transport, err := transportFor(kind, trip)
 	if err != nil {
 		return Item{}, err
+	}
+	if trip == nil {
+		defer transport.(*http.Transport).CloseIdleConnections()
 	}
 
 	timeout := DefaultTimeoutSeconds

@@ -42,6 +42,25 @@ func TestImportHTTPBoundsBodyAndRejectsDowngrade(t *testing.T) {
 	}
 }
 
+func TestImportHTTPDoesNotSendSubscriptionURLAsReferer(t *testing.T) {
+	referer := make(chan string, 1)
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		referer <- r.Header.Get("Referer")
+		_, _ = w.Write([]byte("proxies: []\n"))
+	}))
+	defer destination.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL, http.StatusFound)
+	}))
+	defer origin.Close()
+	if _, err := ImportHTTP(context.Background(), origin.URL+"/sub?token=synthetic-secret", ImportOption{}, t.TempDir(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-referer; got != "" {
+		t.Fatalf("subscription URL leaked in Referer: %q", got)
+	}
+}
+
 func TestImportHTTPUserAgentAndMethod(t *testing.T) {
 	var gotUA, gotMethod string
 	item := importOK(t, "proxies: []\n", nil, ImportOption{}, func(w http.ResponseWriter, r *http.Request) {
