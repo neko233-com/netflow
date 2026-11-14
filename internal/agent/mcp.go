@@ -228,6 +228,12 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "backup-schedule-set", args, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_backup_on_change", Description: "Explicitly enable or disable backups on configuration changes for an existing local schedule. Enabling creates an initial unencrypted snapshot; scans occur while running, with periodic content reconciliation. The 30 archive limit applies."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args BackupOnChangeArgs) (*mcp.CallToolResult, BackupSchedule, error) {
+			var out BackupSchedule
+			err := client.Call(ctx, "backup-on-change", args, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_backup_create", Description: "Create an unencrypted local backup while NetFlow is running. It contains subscription credentials, excludes volatile caches and logs, and fails if configuration changes during capture. Poll netflow_backup_job_status."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args BackupArgs) (*mcp.CallToolResult, BackupJob, error) {
 			var out BackupJob

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -23,42 +24,98 @@ const scheduleLimit = 30
 
 // Schedule configuration is deliberately excluded from backups: restoring a
 // snapshot must never silently resume writing to the original destination.
-func (a *App) loadBackupSchedule() (agent.BackupSchedule, error) {
-	data, err := safepath.ReadFileLimit(a.dir, scheduleFile, 32<<10)
-	if errors.Is(err, os.ErrNotExist) {
-		return agent.BackupSchedule{}, nil
-	}
-	if err != nil {
-		return agent.BackupSchedule{}, err
-	}
-	var s agent.BackupSchedule
-	if err := json.Unmarshal(data, &s); err != nil {
-		return agent.BackupSchedule{}, errors.New("invalid backup schedule")
-	}
-	if s.Enabled && (!validArchivePath(s.Directory) || s.IntervalHours < 1 || s.IntervalHours > 168 || s.NextRun.IsZero()) {
-		return agent.BackupSchedule{}, errors.New("invalid backup schedule")
-	}
-	return s, nil
+type backupScheduleState struct {
+	agent.BackupSchedule
+	Baseline string `json:"baseline,omitempty"`
 }
 
-func (a *App) saveBackupSchedule(s agent.BackupSchedule) error {
-	data, err := json.Marshal(s)
+func (a *App) readBackupSchedule() (backupScheduleState, []byte, error) {
+	data, err := safepath.ReadFileLimit(a.dir, scheduleFile, 32<<10)
+	if errors.Is(err, os.ErrNotExist) {
+		return backupScheduleState{}, nil, nil
+	}
+	if err != nil {
+		return backupScheduleState{}, nil, err
+	}
+	var state backupScheduleState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return backupScheduleState{}, nil, errors.New("invalid backup schedule")
+	}
+	s := state.BackupSchedule
+	if s.Enabled && (!validArchivePath(s.Directory) || s.IntervalHours < 1 || s.IntervalHours > 168 || s.NextRun.IsZero()) {
+		return backupScheduleState{}, nil, errors.New("invalid backup schedule")
+	}
+	if state.Baseline != "" {
+		digest, err := hex.DecodeString(state.Baseline)
+		if err != nil || len(digest) != 32 {
+			return backupScheduleState{}, nil, errors.New("invalid backup baseline")
+		}
+	}
+	return state, data, nil
+}
+func (a *App) loadBackupSchedule() (agent.BackupSchedule, error) {
+	state, _, err := a.readBackupSchedule()
+	return state.BackupSchedule, err
+}
+func (a *App) writeBackupState(state backupScheduleState, expected []byte) error {
+	data, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
-	return safepath.WriteFile(a.dir, scheduleFile, data)
+	return safepath.CompareAndWrite(a.dir, scheduleFile, expected, data)
+}
+func (a *App) resetBackupMonitor() {
+	if a.backupScanCancel != nil {
+		a.backupScanCancel()
+	}
+	a.backupInventory, a.backupReconcile, a.backupChangeDue = "", time.Time{}, time.Time{}
+	a.backupRetry, a.backupCheckAfter, a.backupScheduleError = time.Time{}, time.Time{}, ""
+}
+func (a *App) setBackupOnChange(enabled bool) (agent.BackupSchedule, error) {
+	state, raw, err := a.readBackupSchedule()
+	if err != nil {
+		return agent.BackupSchedule{}, err
+	}
+	if !state.Enabled {
+		return agent.BackupSchedule{}, errors.New("enable a backup schedule first")
+	}
+	if state.OnChange == enabled {
+		return state.BackupSchedule, nil
+	}
+	state.OnChange, state.Baseline = enabled, ""
+	if err := a.writeBackupState(state, raw); err != nil {
+		return agent.BackupSchedule{}, err
+	}
+	if !enabled && a.backupAutoJob && a.backupCancel != nil {
+		a.backupCancel()
+	}
+	a.resetBackupMonitor()
+	if a.model != nil {
+		a.model.BackupSchedule = state.BackupSchedule
+	}
+	return state.BackupSchedule, nil
 }
 
 func (a *App) setBackupSchedule(enabled bool, directory string, hours int, now time.Time) (agent.BackupSchedule, error) {
 	if !enabled {
 		s := agent.BackupSchedule{}
-		if err := a.saveBackupSchedule(s); err != nil {
+		raw, err := safepath.ReadFileLimit(a.dir, scheduleFile, 32<<10)
+		if errors.Is(err, os.ErrNotExist) {
+			raw, err = nil, nil
+		}
+		if err != nil {
+			return s, err
+		}
+		if err := a.writeBackupState(backupScheduleState{}, raw); err != nil {
 			return s, err
 		}
 		if a.model != nil {
 			a.model.BackupSchedule = s
 		}
-		a.backupRetry, a.backupCheckAfter, a.backupScheduleError = time.Time{}, time.Time{}, ""
+		if a.backupAutoJob && a.backupCancel != nil {
+			a.backupCancel()
+		}
+		a.resetBackupMonitor()
 		return s, nil
 	}
 	if !validArchivePath(directory) || hours < 1 || hours > 168 {
@@ -81,14 +138,32 @@ func (a *App) setBackupSchedule(enabled bool, directory string, hours int, now t
 		return agent.BackupSchedule{}, errors.New("backup directory must be outside the configuration")
 	}
 	s := agent.BackupSchedule{Enabled: true, Directory: directory, IntervalHours: hours, NextRun: now.UTC().Add(time.Duration(hours) * time.Hour)}
-	if err := a.saveBackupSchedule(s); err != nil {
+	old, raw, readErr := a.readBackupSchedule()
+	if readErr != nil {
+		raw, readErr = safepath.ReadFileLimit(a.dir, scheduleFile, 32<<10)
+		if errors.Is(readErr, os.ErrNotExist) {
+			raw, readErr = nil, nil
+		}
+		if readErr != nil {
+			return agent.BackupSchedule{}, readErr
+		}
+	}
+	state := backupScheduleState{BackupSchedule: s}
+	if old.Enabled && old.Directory == directory {
+		state.OnChange, state.Baseline = old.OnChange, old.Baseline
+	}
+	s = state.BackupSchedule
+	if err := a.writeBackupState(state, raw); err != nil {
 		return agent.BackupSchedule{}, err
 	}
 	if a.model != nil {
 		a.model.BackupSchedule = s
 		a.model.BackupHours = fmt.Sprint(hours)
 	}
-	a.backupRetry, a.backupCheckAfter, a.backupScheduleError = time.Time{}, time.Time{}, ""
+	if a.backupAutoJob && a.backupCancel != nil {
+		a.backupCancel()
+	}
+	a.resetBackupMonitor()
 	return s, nil
 }
 
@@ -131,35 +206,100 @@ func scheduledDestination(ctx context.Context, directory string, now time.Time) 
 	return filepath.Join(directory, "netflow-auto-"+now.UTC().Format("20060102-150405")+"-"+hex.EncodeToString(nonce[:])+".zip"), nil
 }
 
-func (a *App) autoBackupOne(now time.Time) {
-	if a.backupBusy || a.tunBusy || now.Before(a.backupRetry) || now.Before(a.backupCheckAfter) {
+// Inventory is a cheap hint; periodic content reconciliation detects edits
+// that preserve file size and timestamps. Both run away from the UI thread.
+func (a *App) startBackupScan(state backupScheduleState, raw []byte, now time.Time) {
+	if a.backupScanBusy {
 		return
 	}
-	s, err := a.loadBackupSchedule()
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan struct{})
+	a.backupScanBusy, a.backupScanCancel, a.backupScanDone = true, cancel, finished
+	previous, full := a.backupInventory, !now.Before(a.backupReconcile)
+	dir := a.dir
+	go func() {
+		inventory, err := backup.RunningInventory(ctx, dir)
+		var fingerprint string
+		checked := err == nil && (full || previous == "" || previous != inventory)
+		if checked {
+			fingerprint, err = backup.RunningFingerprint(ctx, dir)
+		}
+		canceled := ctx.Err() != nil
+		cancel()
+		close(finished)
+		a.runOnMain(func() {
+			a.backupScanBusy, a.backupScanCancel, a.backupScanDone = false, nil, nil
+			if canceled {
+				return
+			}
+			current, currentRaw, loadErr := a.readBackupSchedule()
+			if loadErr != nil || !bytes.Equal(raw, currentRaw) || !current.Enabled || !current.OnChange {
+				return
+			}
+			if err != nil {
+				a.backupScheduleError = "automatic backup scan failed; check configuration activity"
+				a.backupRetry = time.Now().Add(autoRetryDelay)
+				return
+			}
+			a.backupInventory = inventory
+			if checked {
+				a.backupReconcile = time.Now().Add(10 * time.Minute)
+				if fingerprint != state.Baseline {
+					if a.backupChangeDue.IsZero() {
+						a.backupChangeDue = time.Now().Add(10 * time.Second)
+					}
+					a.backupCheckAfter = a.backupChangeDue
+				} else {
+					a.backupChangeDue = time.Time{}
+				}
+			}
+		})
+	}()
+}
+
+func (a *App) autoBackupOne(now time.Time) {
+	if a.backupBusy || a.backupScanBusy || a.tunBusy || now.Before(a.backupRetry) || now.Before(a.backupCheckAfter) {
+		return
+	}
+	state, raw, err := a.readBackupSchedule()
 	if err != nil {
 		a.backupRetry, a.backupScheduleError = now.Add(autoRetryDelay), "cannot read automatic backup schedule"
 		return
 	}
+	s := state.BackupSchedule
 	if !s.Enabled {
 		a.backupCheckAfter = now.Add(time.Minute)
 		return
 	}
-	if now.Before(s.NextRun) {
+	due := !now.Before(s.NextRun) || (s.OnChange && (state.Baseline == "" || (!a.backupChangeDue.IsZero() && !now.Before(a.backupChangeDue))))
+	if !due {
 		a.backupCheckAfter = s.NextRun
-		if limit := now.Add(time.Minute); a.backupCheckAfter.After(limit) {
+		interval := time.Minute
+		if s.OnChange {
+			interval = 30 * time.Second
+		}
+		if limit := now.Add(interval); a.backupCheckAfter.After(limit) {
 			a.backupCheckAfter = limit
+		}
+		if s.OnChange {
+			a.startBackupScan(state, raw, now)
 		}
 		return
 	}
 	dir := a.dir
+	var fingerprint string
 	_, err = a.beginArchiveJob("scheduled", now, func(jobErr error) {
-		current, loadErr := a.loadBackupSchedule()
-		if loadErr != nil || current != s {
-			return // The user changed or disabled this schedule in the meantime.
+		a.backupAutoJob = false
+		current, currentRaw, loadErr := a.readBackupSchedule()
+		if loadErr != nil || !bytes.Equal(raw, currentRaw) {
+			return
 		}
 		if jobErr == nil {
 			current.NextRun = time.Now().UTC().Add(time.Duration(current.IntervalHours) * time.Hour)
-			jobErr = a.saveBackupSchedule(current)
+			if current.OnChange {
+				current.Baseline = fingerprint
+			}
+			jobErr = a.writeBackupState(current, raw)
 		}
 		if jobErr != nil {
 			a.backupRetry = time.Now().Add(autoRetryDelay)
@@ -169,7 +309,11 @@ func (a *App) autoBackupOne(now time.Time) {
 			}
 		} else {
 			a.backupScheduleError = ""
+			a.backupChangeDue = time.Time{}
+			a.backupInventory = "" // Reconcile edits that occurred after archive capture.
+			a.backupCheckAfter = time.Time{}
 			if a.model != nil {
+				a.model.BackupSchedule = current.BackupSchedule
 				a.model.Notice = "自动备份已创建"
 			}
 		}
@@ -178,7 +322,13 @@ func (a *App) autoBackupOne(now time.Time) {
 		if err != nil {
 			return err
 		}
-		_, err = backup.ExportRunning(ctx, dir, path)
+		manifest, err := backup.ExportRunning(ctx, dir, path)
+		if err != nil {
+			return err
+		}
+		if s.OnChange {
+			fingerprint, err = backup.ManifestFingerprint(manifest)
+		}
 		return err
 	})
 	if err != nil {
@@ -187,5 +337,7 @@ func (a *App) autoBackupOne(now time.Time) {
 		if a.model != nil {
 			a.model.Notice = "自动备份失败；检查目标目录和备份数量"
 		}
+	} else {
+		a.backupAutoJob = true
 	}
 }

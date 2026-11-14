@@ -406,6 +406,11 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		if callErr = decodeStrict(args, &input); callErr == nil {
 			value, callErr = a.setBackupSchedule(input.Enabled, input.Directory, input.IntervalHours, time.Now())
 		}
+	case "backup-on-change":
+		var input agent.BackupOnChangeArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.setBackupOnChange(input.Enabled)
+		}
 	case "backup-create":
 		var input agent.BackupArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {

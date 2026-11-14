@@ -125,3 +125,115 @@ func TestBackupScheduleChecksAreThrottledAndReconfigurationWakesThem(t *testing.
 		t.Fatal("future schedule was not throttled")
 	}
 }
+
+func TestBackupOnChangeBaselineAndContentChanges(t *testing.T) {
+	base := t.TempDir()
+	dir, dest := filepath.Join(base, "config"), filepath.Join(base, "backups")
+	for _, path := range []string{dir, dest} {
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte("first"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	d := newSerialDispatcher()
+	a := &App{dir: dir, core: diagnosticsTestEngine{}, dispatch: d.call}
+	defer func() { d.close(); a.stopBackup() }()
+	var err error
+	d.call(func() { _, err = a.setBackupOnChange(true) })
+	if err == nil {
+		t.Fatal("change backups enabled without directory consent")
+	}
+	d.call(func() { _, err = a.setBackupSchedule(true, dest, 24, time.Now()) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := a.loadBackupSchedule()
+	if err != nil || s.OnChange {
+		t.Fatal("change backups enabled implicitly", err)
+	}
+	d.call(func() { _, err = a.setBackupOnChange(true); a.autoBackupOne(time.Now()) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := func() {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			var busy bool
+			d.call(func() { busy = a.backupBusy || a.backupScanBusy })
+			if !busy {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("automatic work timed out")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	wait()
+	state, _, err := a.readBackupSchedule()
+	if err != nil || state.Baseline == "" {
+		t.Fatal("baseline not persisted", err)
+	}
+	files, _ := os.ReadDir(dest)
+	if len(files) != 1 {
+		t.Fatalf("baseline count %d", len(files))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte("other"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	d.call(func() { a.autoBackupOne(time.Now()) })
+	wait()
+	d.call(func() {
+		if a.backupChangeDue.IsZero() {
+			t.Error("change was not detected")
+		}
+		a.backupChangeDue = time.Now().Add(-time.Second)
+		a.backupCheckAfter = time.Time{}
+		a.autoBackupOne(time.Now())
+	})
+	wait()
+	files, _ = os.ReadDir(dest)
+	if len(files) != 2 {
+		t.Fatalf("changed snapshot count %d", len(files))
+	}
+	d.call(func() { a.autoBackupOne(time.Now()) })
+	wait()
+	d.call(func() {
+		if !a.backupChangeDue.IsZero() {
+			t.Error("unchanged content caused repeat backup")
+		}
+		_, err = a.setBackupOnChange(false)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err = a.loadBackupSchedule()
+	if err != nil || s.OnChange {
+		t.Fatal("change backups did not disable", err)
+	}
+}
+
+func TestBackupScheduleCompareRejectsStaleUpdate(t *testing.T) {
+	dir, dest := t.TempDir(), t.TempDir()
+	a := &App{dir: dir}
+	if _, err := a.setBackupSchedule(true, dest, 24, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	old, raw, err := a.readBackupSchedule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.setBackupOnChange(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.writeBackupState(old, raw); err == nil {
+		t.Fatal("stale schedule overwrote user change")
+	}
+	current, err := a.loadBackupSchedule()
+	if err != nil || !current.OnChange {
+		t.Fatal("new schedule lost", err)
+	}
+}

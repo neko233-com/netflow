@@ -53,6 +53,7 @@ type Hooks struct {
 	BrowseBackup               func() (string, error)
 	BrowseBackupDirectory      func() (string, error)
 	SetBackupSchedule          func(bool, string, int) (agent.BackupSchedule, error)
+	SetBackupOnChange          func(bool) (agent.BackupSchedule, error)
 	CreateBackupAsync          func(string, func(error)) error
 	BrowseRestore              func() (string, string, error)
 	RestoreBackupAsync         func(string, string, func(error)) error

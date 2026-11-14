@@ -117,6 +117,7 @@ func (a *App) ready(quitting *bool) {
 	a.model.Hooks.SetBackupSchedule = func(enabled bool, directory string, hours int) (agent.BackupSchedule, error) {
 		return a.setBackupSchedule(enabled, directory, hours, time.Now())
 	}
+	a.model.Hooks.SetBackupOnChange = a.setBackupOnChange
 	if schedule, err := a.loadBackupSchedule(); err != nil {
 		a.model.Notice = "读取自动备份计划失败"
 	} else {

@@ -112,6 +112,13 @@ type App struct {
 	backupRetry         time.Time
 	backupCheckAfter    time.Time
 	backupScheduleError string
+	backupScanCancel    func()
+	backupScanDone      chan struct{}
+	backupScanBusy      bool
+	backupInventory     string
+	backupReconcile     time.Time
+	backupChangeDue     time.Time
+	backupAutoJob       bool
 	webDAVProtected     string
 	webDAVProtectionErr error
 	webDAVClient        *webdav.Client

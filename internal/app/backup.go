@@ -222,6 +222,12 @@ func (a *App) getBackupJob(id string, now time.Time) (agent.BackupJob, error) {
 
 // stopBackup is called before the core and configuration lock are released.
 func (a *App) stopBackup() {
+	if a.backupScanCancel != nil {
+		a.backupScanCancel()
+	}
+	if a.backupScanDone != nil {
+		<-a.backupScanDone
+	}
 	if a.backupCancel != nil {
 		a.backupCancel()
 	}

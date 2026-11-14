@@ -672,6 +672,24 @@ func (m *Model) backupBody(c *mygoui.Context, pal Palette) {
 	})
 	if m.BackupSchedule.Enabled {
 		mygoui.Text(c, "已启用：每 "+itoa(m.BackupSchedule.IntervalHours)+" 小时；"+m.BackupSchedule.Directory).FontSize(12).TextColor(pal.TextMuted)
+		label := "启用配置变更备份"
+		if m.BackupSchedule.OnChange {
+			label = "关闭配置变更备份"
+		}
+		if backupButton(c, pal, label, "backup-on-change", false) {
+			if m.Hooks.SetBackupOnChange == nil {
+				m.Notice = "配置变更备份不可用"
+			} else {
+				s, err := m.Hooks.SetBackupOnChange(!m.BackupSchedule.OnChange)
+				if err != nil {
+					m.Notice = "设置配置变更备份失败: " + err.Error()
+				} else {
+					m.BackupSchedule = s
+					m.Notice = "配置变更备份设置已保存"
+				}
+			}
+		}
+		mygoui.Text(c, "启用后先创建基线；运行时检查变更，保留时间戳的改动最多约 10 分钟检查一次。").FontSize(12).TextColor(pal.TextMuted)
 	}
 	mygoui.Text(c, "仅运行期间执行；最多保留 30 个，需手动清理，不自动删除。").FontSize(12).TextColor(pal.TextMuted)
 	mygoui.Text(c, "手动").FontSize(16).Bold()

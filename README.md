@@ -77,11 +77,13 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 
 ```powershell
 & $agent backup-schedule-set on 'D:\Backups' 24
+& $agent backup-on-change on  # 可选：显式启用配置变更备份
 & $agent backup-schedule
+& $agent backup-on-change off
 & $agent backup-schedule-set off
 ```
 
-对应 MCP 工具为 `netflow_backup_schedule` 和 `netflow_backup_schedule_set`。频率为 1–168 小时，仅在 GUI 或无界面服务运行时执行，错过计划后下次启动会补做；失败后约 15 分钟重试，状态包含最近错误。每次执行前检查目标目录，已有 30 个 `netflow-auto-*.zip` 文件时停止创建，用户需要手动清理；不会自动删除文件，多个配置实例同时使用一个目录可能超过该上限。关闭定时计划不会中断已经开始的备份。定时计划本身不进入备份，恢复不会自动启用它。备份不加密，应选择受保护的目录；按配置变更触发的自动备份尚未实现。
+对应 MCP 工具为 `netflow_backup_schedule`、`netflow_backup_schedule_set` 和 `netflow_backup_on_change`。频率为 1–168 小时，仅在 GUI 或无界面服务运行时执行，错过计划后下次启动会补做；失败后约 15 分钟重试，状态包含最近错误。每次执行前检查目标目录，已有 30 个 `netflow-auto-*.zip` 文件时停止创建，用户需要手动清理；不会自动删除文件，多个配置实例同时使用一个目录可能超过该上限。关闭定时计划或配置变更备份会尝试取消正在进行的自动备份；异常中断可能留下不完整归档。定时计划本身不进入备份，恢复不会自动启用它。备份不加密，应选择受保护的目录。配置变更备份是独立的显式选项，启用后先创建基线；运行期间约每 30 秒检查文件变化并合并短时间内的变化，保留大小和修改时间的内容修改通过约 10 分钟一次的完整内容核对发现，实际时间受任务和配置活动影响。现有用户不会自动启用此选项。
 
 WebDAV 上传需要明确选择已有的 NetFlow 备份 ZIP。界面可输入本次对话框使用的地址与凭据，或使用已保存配置；默认不保存新输入。Windows 可显式选择保存或替换配置，地址、用户名和密码均使用当前账户的 DPAPI 保护；其他平台暂不支持安全保存新凭据，不会降级写入明文。CLI 的 `webdav-save` 从标准输入读取 `url`、`user`、`password` 并替换已保存配置，`webdav-config` 只返回是否已保存及保护是否可用，`webdav-clear` 删除保存的地址和全部凭据；对应 MCP 工具分别为 `netflow_webdav_save`、`netflow_webdav_config` 和 `netflow_webdav_clear`。正在运行备份任务时不能替换或删除配置。
 

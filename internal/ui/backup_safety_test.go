@@ -261,3 +261,26 @@ func TestBackupActionsFitMinimumWindowHeight(t *testing.T) {
 		}
 	}
 }
+
+func TestChangeBackupRequiresExplicitToggle(t *testing.T) {
+	m := DemoModel()
+	m.Dialogs.Backup = true
+	m.BackupSchedule = agent.BackupSchedule{Enabled: true, Directory: `C:\Backups`, IntervalHours: 24}
+	called := false
+	m.Hooks.SetBackupOnChange = func(on bool) (agent.BackupSchedule, error) {
+		called = on
+		s := m.BackupSchedule
+		s.OnChange = on
+		return s, nil
+	}
+	tt := renderModel(m, WindowWidth, WindowHeight, false)
+	if called || m.BackupSchedule.OnChange {
+		t.Fatal("change backup enabled implicitly")
+	}
+	if err := tt.Click("backup-on-change"); err != nil {
+		t.Fatal(err)
+	}
+	if !called || !m.BackupSchedule.OnChange {
+		t.Fatal("explicit change backup toggle did not apply")
+	}
+}

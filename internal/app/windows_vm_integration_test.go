@@ -828,6 +828,41 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if err != nil || len(archives) != 1 || !schedule.NextRun.After(time.Now()) {
 		t.Fatalf("scheduled backup failed: %s %v", payload, err)
 	}
+	if payload, err := call("backup-on-change", "on"); err != nil || json.Unmarshal(payload, &schedule) != nil || !schedule.OnChange {
+		t.Fatalf("enable change backup: %s %v", payload, err)
+	}
+	changeDeadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(changeDeadline) {
+		archives, err = os.ReadDir(scheduledDir)
+		if err == nil && len(archives) >= 2 {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil || len(archives) != 2 {
+		t.Fatalf("change backup baseline: %v %v", archives, err)
+	}
+	synthetic := filepath.Join(dir, "change-backup-integration.txt")
+	if err := os.WriteFile(synthetic, []byte("changed configuration"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	changeDeadline = time.Now().Add(90 * time.Second)
+	for time.Now().Before(changeDeadline) {
+		archives, err = os.ReadDir(scheduledDir)
+		if err == nil && len(archives) >= 3 {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil || len(archives) != 3 {
+		t.Fatalf("configuration change not backed up: %v %v", archives, err)
+	}
+	if err := os.Remove(synthetic); err != nil {
+		t.Fatal(err)
+	}
+	if payload, err := call("backup-on-change", "off"); err != nil || json.Unmarshal(payload, &schedule) != nil || schedule.OnChange {
+		t.Fatalf("disable change backup: %s %v", payload, err)
+	}
 	if payload, err := call("backup-schedule-set", "off"); err != nil {
 		t.Fatalf("disable schedule: %s %v", payload, err)
 	}
