@@ -34,7 +34,7 @@ func ComposeArchivedSnapshot(ctx context.Context, base []byte, snapshot Archived
 	if selection.Profile && snapshot.Profile == nil {
 		return nil, errors.New("profile script is unavailable")
 	}
-	result, err := profile.ComposeVergeExtensions(base, profile.VergeExtensions{Proxies: extensions.Proxies, Groups: extensions.Groups, GlobalMerge: extensions.GlobalMerge})
+	result, err := profile.ComposeVergeExtensions(base, profile.VergeExtensions{Rules: extensions.Rules, Proxies: extensions.Proxies, Groups: extensions.Groups, GlobalMerge: extensions.GlobalMerge})
 	if err != nil {
 		return nil, err
 	}

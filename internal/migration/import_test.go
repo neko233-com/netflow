@@ -3,6 +3,7 @@ package migration
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,6 +46,27 @@ func TestReadArchivedRuleSequenceSupportsSelectedAndDefaultRules(t *testing.T) {
 			data, archive, digest, err := ReadArchivedRuleSequence(target, item.Option.VergeArchive, item.Option.VergeUID)
 			if err != nil || !strings.Contains(string(data), "DOMAIN,example.test,DIRECT") || archive == "" || digest == ([32]byte{}) {
 				t.Fatal("selected archived rule sequence missing", err)
+			}
+			base := []byte("rules: ['MATCH,DIRECT']\n")
+			legacy, _, _, err := ComposeArchived(target, item.Option.VergeArchive, item.Option.VergeUID, base)
+			if err != nil || strings.Contains(string(legacy), "DOMAIN,example.test,DIRECT") {
+				t.Fatal("legacy composition unexpectedly changed", err)
+			}
+			modern, _, _, err := ComposeArchivedWithRules(target, item.Option.VergeArchive, item.Option.VergeUID, base, true)
+			if err != nil || !strings.Contains(string(modern), "DOMAIN,example.test,DIRECT") {
+				t.Fatal("modern composition omitted rules", err)
+			}
+			snapshot, ext, err := ReadArchivedCompositionSelectedWithRules(target, item.Option.VergeArchive, item.Option.VergeUID, ScriptSelection{Profile: true}, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			observed := false
+			_, err = ComposeArchivedSnapshot(context.Background(), base, snapshot, ext, item.Name, ScriptSelection{Profile: true}, func(_ context.Context, input []byte, _, _ string) ([]byte, error) {
+				observed = strings.Contains(string(input), "DOMAIN,example.test,DIRECT")
+				return input, nil
+			})
+			if err != nil || !observed {
+				t.Fatal("profile script did not receive Verge rules", err)
 			}
 		})
 	}

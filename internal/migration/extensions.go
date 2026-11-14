@@ -101,6 +101,13 @@ func ArchivePath(root, relative string) (string, error) {
 // ComposeArchived applies data-only Verge enhancements from the original
 // private archive. The archive and subscription files are never modified.
 func ComposeArchived(root, relative, uid string, body []byte) ([]byte, string, [32]byte, error) {
+	return ComposeArchivedWithRules(root, relative, uid, body, false)
+}
+
+// ComposeArchivedWithRules optionally includes Verge's selected rule
+// sequence before proxy/group extensions and merges. Legacy callers retain
+// their previous behavior by using ComposeArchived.
+func ComposeArchivedWithRules(root, relative, uid string, body []byte, includeRules bool) ([]byte, string, [32]byte, error) {
 	var empty [32]byte
 	if _, err := ArchivePath(root, relative); err != nil {
 		return nil, "", empty, err
@@ -110,7 +117,7 @@ func ComposeArchived(root, relative, uid string, body []byte) ([]byte, string, [
 		return nil, "", empty, err
 	}
 	hash := sha256.Sum256(data)
-	source, err := readArchiveExtensions(data, uid)
+	source, err := readArchiveSelected(data, uid, true, false, false, includeRules)
 	if err != nil {
 		return nil, "", empty, err
 	}
@@ -118,16 +125,18 @@ func ComposeArchived(root, relative, uid string, body []byte) ([]byte, string, [
 	if err != nil {
 		return nil, "", empty, err
 	}
+	if includeRules {
+		ext.Rules, err = source.selectedRuleData(uid)
+		if err != nil {
+			return nil, "", empty, err
+		}
+	}
 	result, err := profile.ComposeVergeExtensions(body, ext)
 	return result, filepath.Join(root, relative), hash, err
 }
 
 // Only the index and referenced extensions are decompressed during a reload;
 // the potentially large original subscription archive remains untouched.
-func readArchiveExtensions(archive []byte, uid string) (*Source, error) {
-	return readArchiveExtensionsWithScript(archive, uid, false)
-}
-
 func readArchiveExtensionsWithScript(archive []byte, uid string, includeScript bool) (*Source, error) {
 	return readArchiveSelected(archive, uid, true, includeScript, false, false)
 }
@@ -272,22 +281,27 @@ type ArchivedScriptSnapshot struct {
 // script from the original import snapshot. Missing or mismatched explicit
 // profile references fail rather than silently selecting unrelated content.
 func ReadArchivedScripts(root, relative, uid string) (ArchivedScriptSnapshot, error) {
-	snapshot, _, err := readArchivedScriptSnapshot(root, relative, uid, false, ScriptSelection{Global: true, Profile: true})
+	snapshot, _, err := readArchivedScriptSnapshot(root, relative, uid, false, ScriptSelection{Global: true, Profile: true}, false)
 	return snapshot, err
 }
 
 // ReadArchivedCompositionSnapshot obtains data extensions and scripts from a
 // single archive read, so preview inputs all share one immutable archive hash.
 func ReadArchivedCompositionSnapshot(root, relative, uid string) (ArchivedScriptSnapshot, profile.VergeExtensions, error) {
-	return readArchivedScriptSnapshot(root, relative, uid, true, ScriptSelection{Global: true, Profile: true})
+	return readArchivedScriptSnapshot(root, relative, uid, true, ScriptSelection{Global: true, Profile: true}, false)
 }
 
 // ReadArchivedCompositionSelected avoids loading unselected scripts. In
 // particular, a damaged script must not prevent previewing its removal.
 func ReadArchivedCompositionSelected(root, relative, uid string, selection ScriptSelection) (ArchivedScriptSnapshot, profile.VergeExtensions, error) {
-	return readArchivedScriptSnapshot(root, relative, uid, true, selection)
+	return readArchivedScriptSnapshot(root, relative, uid, true, selection, false)
 }
-func readArchivedScriptSnapshot(root, relative, uid string, includeData bool, selection ScriptSelection) (ArchivedScriptSnapshot, profile.VergeExtensions, error) {
+
+func ReadArchivedCompositionSelectedWithRules(root, relative, uid string, selection ScriptSelection, includeRules bool) (ArchivedScriptSnapshot, profile.VergeExtensions, error) {
+	return readArchivedScriptSnapshot(root, relative, uid, true, selection, includeRules)
+}
+
+func readArchivedScriptSnapshot(root, relative, uid string, includeData bool, selection ScriptSelection, includeRules bool) (ArchivedScriptSnapshot, profile.VergeExtensions, error) {
 	var empty profile.VergeExtensions
 	var result ArchivedScriptSnapshot
 	archivePath, err := ArchivePath(root, relative)
@@ -298,7 +312,7 @@ func readArchivedScriptSnapshot(root, relative, uid string, includeData bool, se
 	if err != nil {
 		return result, empty, err
 	}
-	source, err := readArchiveSelected(data, uid, includeData, selection.Profile, selection.Global, false)
+	source, err := readArchiveSelected(data, uid, includeData, selection.Profile, selection.Global, includeRules)
 	if err != nil {
 		return result, empty, err
 	}
@@ -312,6 +326,12 @@ func readArchivedScriptSnapshot(root, relative, uid string, includeData bool, se
 	extensions, err := source.extensions(uid)
 	if err != nil {
 		return result, empty, err
+	}
+	if includeRules {
+		extensions.Rules, err = source.selectedRuleData(uid)
+		if err != nil {
+			return result, empty, err
+		}
 	}
 	return snapshot, extensions, nil
 }
