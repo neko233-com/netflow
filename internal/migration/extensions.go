@@ -231,16 +231,22 @@ type ArchivedScriptSnapshot struct {
 // script from the original import snapshot. Missing or mismatched explicit
 // profile references fail rather than silently selecting unrelated content.
 func ReadArchivedScripts(root, relative, uid string) (ArchivedScriptSnapshot, error) {
-	snapshot, _, err := readArchivedScriptSnapshot(root, relative, uid, false)
+	snapshot, _, err := readArchivedScriptSnapshot(root, relative, uid, false, ScriptSelection{Global: true, Profile: true})
 	return snapshot, err
 }
 
 // ReadArchivedCompositionSnapshot obtains data extensions and scripts from a
 // single archive read, so preview inputs all share one immutable archive hash.
 func ReadArchivedCompositionSnapshot(root, relative, uid string) (ArchivedScriptSnapshot, profile.VergeExtensions, error) {
-	return readArchivedScriptSnapshot(root, relative, uid, true)
+	return readArchivedScriptSnapshot(root, relative, uid, true, ScriptSelection{Global: true, Profile: true})
 }
-func readArchivedScriptSnapshot(root, relative, uid string, includeData bool) (ArchivedScriptSnapshot, profile.VergeExtensions, error) {
+
+// ReadArchivedCompositionSelected avoids loading unselected scripts. In
+// particular, a damaged script must not prevent previewing its removal.
+func ReadArchivedCompositionSelected(root, relative, uid string, selection ScriptSelection) (ArchivedScriptSnapshot, profile.VergeExtensions, error) {
+	return readArchivedScriptSnapshot(root, relative, uid, true, selection)
+}
+func readArchivedScriptSnapshot(root, relative, uid string, includeData bool, selection ScriptSelection) (ArchivedScriptSnapshot, profile.VergeExtensions, error) {
 	var empty profile.VergeExtensions
 	var result ArchivedScriptSnapshot
 	archivePath, err := ArchivePath(root, relative)
@@ -251,11 +257,11 @@ func readArchivedScriptSnapshot(root, relative, uid string, includeData bool) (A
 	if err != nil {
 		return result, empty, err
 	}
-	source, err := readArchiveSelected(data, uid, includeData, true, true)
+	source, err := readArchiveSelected(data, uid, includeData, selection.Profile, selection.Global)
 	if err != nil {
 		return result, empty, err
 	}
-	snapshot, err := archivedScriptsFromSource(source, uid, archivePath, sha256.Sum256(data))
+	snapshot, err := archivedScriptsFromSource(source, uid, archivePath, sha256.Sum256(data), selection)
 	if err != nil {
 		return result, empty, err
 	}
@@ -268,7 +274,7 @@ func readArchivedScriptSnapshot(root, relative, uid string, includeData bool) (A
 	}
 	return snapshot, extensions, nil
 }
-func archivedScriptsFromSource(source *Source, uid, archivePath string, archiveHash [32]byte) (ArchivedScriptSnapshot, error) {
+func archivedScriptsFromSource(source *Source, uid, archivePath string, archiveHash [32]byte, selection ScriptSelection) (ArchivedScriptSnapshot, error) {
 	var result ArchivedScriptSnapshot
 	var err error
 	index, ok := source.itemByID[uid]
@@ -300,13 +306,17 @@ func archivedScriptsFromSource(source *Source, uid, archivePath string, archiveH
 		}
 		return &ArchivedScript{UID: id, Source: append([]byte(nil), contents...), SHA256: sha256.Sum256(contents)}, nil
 	}
-	result.Global, err = lookup("Script", false)
-	if err != nil {
-		return ArchivedScriptSnapshot{}, err
+	if selection.Global {
+		result.Global, err = lookup("Script", false)
+		if err != nil {
+			return ArchivedScriptSnapshot{}, err
+		}
 	}
-	result.Profile, err = lookup(item.Option.Script, item.Option.Script != "")
-	if err != nil {
-		return ArchivedScriptSnapshot{}, err
+	if selection.Profile {
+		result.Profile, err = lookup(item.Option.Script, item.Option.Script != "")
+		if err != nil {
+			return ArchivedScriptSnapshot{}, err
+		}
 	}
 	result.OriginalProfileName = item.Name
 	result.ArchivePath = archivePath

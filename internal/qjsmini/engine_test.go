@@ -50,7 +50,7 @@ func TestGuestCannotAccessHostFilesystemOrEnvironment(t *testing.T) {
 func TestGuestLinearMemoryHasHardCap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, err := eval(ctx, `(()=>{try {new Uint8Array(512 * 1024 * 1024);return "allocated"} catch(e){return "blocked"}})()`, 0, 1000)
+	out, err := eval(ctx, `(()=>{try {new Uint8Array(512 * 1024 * 1024);return "allocated"} catch(e){return "blocked"}})()`, 0, 1000, time.Unix(0, 0))
 	if err == nil && string(out) != "blocked" {
 		t.Fatalf("guest allocated beyond memory cap: %s", out)
 	}

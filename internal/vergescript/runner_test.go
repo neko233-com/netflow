@@ -157,3 +157,44 @@ func TestRunRejectsWrapperEscape(t *testing.T) {
 		t.Fatal("source escaped the execution wrapper")
 	}
 }
+
+func TestIdenticalInputsProduceStableScriptOutput(t *testing.T) {
+	input := []byte(`{"rules":["MATCH,DIRECT"]}`)
+	script := `function main(c) { c.clock=Date.now(); c.random=[Math.random(),Math.random()]; return c; }`
+	first, err := Run(context.Background(), input, script, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(25 * time.Millisecond)
+	second, err := Run(context.Background(), input, script, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatalf("same input produced different output: %s / %s", first, second)
+	}
+}
+
+func TestRunAtKeepsApprovalTimeAndRandomStable(t *testing.T) {
+	clock := time.Date(2026, 11, 15, 12, 34, 56, 123000000, time.UTC)
+	script := `function main(c){c.time=new Date().toISOString();c.random=Math.random();return c}`
+	first, err := RunAt(context.Background(), []byte(`{}`), script, "", clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(25 * time.Millisecond)
+	second, err := RunAt(context.Background(), []byte(`{}`), script, "", clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) || !bytes.Contains(first, []byte(`2026-11-15T12:34:56.123Z`)) {
+		t.Fatalf("approval clock or random changed: %s / %s", first, second)
+	}
+	changed, err := RunAt(context.Background(), []byte(`{}`), script, "", clock.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(first, changed) {
+		t.Fatal("distinct approval time did not change clock")
+	}
+}

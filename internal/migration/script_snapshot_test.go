@@ -162,3 +162,37 @@ func TestRealVergeScriptSnapshots(t *testing.T) {
 		}
 	}
 }
+
+func TestUnselectedDamagedVergeScriptDoesNotBlockRemovalPreview(t *testing.T) {
+	source := fixture(t)
+	if err := os.WriteFile(filepath.Join(source, "profiles", "s1.js"), []byte{0xff, 0xfe}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	original, err := ReadVerge(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	if _, err := original.ImportVerge(target); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := profile.NewStore(target).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := catalog.Items[0]
+	snapshot, extensions, err := ReadArchivedCompositionSelected(target, item.Option.VergeArchive, item.Option.VergeUID, ScriptSelection{})
+	if err != nil || snapshot.Profile != nil {
+		t.Fatalf("unselected script blocked removal: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(target, item.File))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ComposeArchivedSnapshot(context.Background(), body, snapshot, extensions, item.Name, ScriptSelection{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ReadArchivedCompositionSelected(target, item.Option.VergeArchive, item.Option.VergeUID, ScriptSelection{Profile: true}); err == nil {
+		t.Fatal("selected invalid script was accepted")
+	}
+}

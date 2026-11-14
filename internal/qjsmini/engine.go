@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/metacubex/wazero"
 	"github.com/metacubex/wazero/api"
@@ -24,9 +25,15 @@ var ErrOutput = errors.New("guest output is invalid or too large")
 // filesystem or environment and no Go callbacks. The caller supplies a
 // deadline, an output limit and its own concurrency limit.
 func Eval(ctx context.Context, code string, outputLimit int) ([]byte, error) {
-	return eval(ctx, code, 64<<20, outputLimit)
+	return EvalAt(ctx, code, outputLimit, time.Unix(0, 0))
 }
-func eval(ctx context.Context, code string, heapLimit uint64, outputLimit int) ([]byte, error) {
+
+// EvalAt freezes the guest wall clock to the caller-provided approval time.
+// The WASI random and monotonic sources remain deterministic per guest.
+func EvalAt(ctx context.Context, code string, outputLimit int, clock time.Time) ([]byte, error) {
+	return eval(ctx, code, 64<<20, outputLimit, clock)
+}
+func eval(ctx context.Context, code string, heapLimit uint64, outputLimit int, clock time.Time) ([]byte, error) {
 	if ctx == nil || ctx.Err() != nil || outputLimit < 1 {
 		if ctx != nil && ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -53,7 +60,9 @@ func eval(ctx context.Context, code string, heapLimit uint64, outputLimit int) (
 	if _, err = guest.NewHostModuleBuilder("env").NewFunctionBuilder().WithFunc(denyProxy).Export("jsFunctionProxy").Instantiate(ctx); err != nil {
 		return fail()
 	}
-	mod, err := guest.InstantiateModule(ctx, compiled, wazero.NewModuleConfig().WithStartFunctions("").WithSysWalltime().WithSysNanotime().WithFSConfig(wazero.NewFSConfig()).WithStdout(io.Discard).WithStderr(io.Discard))
+	fixed := clock.UTC()
+	walltime := func() (int64, int32) { return fixed.Unix(), int32(fixed.Nanosecond()) }
+	mod, err := guest.InstantiateModule(ctx, compiled, wazero.NewModuleConfig().WithStartFunctions("").WithWalltime(walltime, 1_000_000).WithFSConfig(wazero.NewFSConfig()).WithStdout(io.Discard).WithStderr(io.Discard))
 	if err != nil {
 		return fail()
 	}

@@ -31,7 +31,13 @@ var ErrOutput = errors.New("script must return a valid configuration object with
 // environment, network or Go functions. Input and output are JSON objects.
 // JS exceptions are deliberately redacted because a script can include the
 // complete subscription credentials in an exception message.
-func Run(ctx context.Context, input []byte, script string, profileName string) (out []byte, err error) {
+func Run(ctx context.Context, input []byte, script string, profileName string) ([]byte, error) {
+	return RunAt(ctx, input, script, profileName, time.Unix(0, 0))
+}
+
+// RunAt fixes the guest clock for reproducible previews. Callers must persist
+// the same clock when validating or applying the corresponding script output.
+func RunAt(ctx context.Context, input []byte, script string, profileName string, clock time.Time) (out []byte, err error) {
 	if ctx == nil || len(script) == 0 || len(script) > MaxScriptBytes || !utf8.ValidString(script) || strings.ContainsRune(script, '\x00') || len(input) > MaxJSONBytes || !utf8.Valid(input) || len(profileName) > MaxProfileNameBytes || !utf8.ValidString(profileName) || !objectJSON(input) {
 		return nil, ErrInput
 	}
@@ -59,7 +65,7 @@ func Run(ctx context.Context, input []byte, script string, profileName string) (
 	// Source is passed as data to Function, preventing it from breaking out
 	// of the host wrapper. Capture JSON builtins before the script executes.
 	code := "(function(raw, name, source) { delete globalThis.std; delete globalThis.os; delete globalThis.bjson; delete globalThis.print; delete globalThis.loadScript; delete globalThis.scriptArgs; globalThis.console = {log(){}, info(){}, warn(){}, error(){}, debug(){}}; delete globalThis.setTimeout; delete globalThis.setInterval; delete globalThis.clearTimeout; delete globalThis.clearInterval; const parsed = JSON.parse(raw); const stringify = JSON.stringify; const invoke = Function(source)(); const result = invoke(parsed, name); if (result === null || typeof result !== 'object' || Array.isArray(result) || typeof result.then === 'function') throw new Error('invalid result'); return stringify(result);\n})(" + string(raw) + "," + string(name) + "," + string(source) + ")"
-	result, err := qjsmini.Eval(ctx, code, MaxJSONBytes)
+	result, err := qjsmini.EvalAt(ctx, code, MaxJSONBytes, clock)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -86,6 +92,11 @@ func objectJSON(data []byte) bool {
 // RunYAML converts a YAML profile to ordered JSON before invoking Run. The
 // returned JSON is also valid YAML and must still be validated by the caller.
 func RunYAML(ctx context.Context, yamlData []byte, script, profileName string) ([]byte, error) {
+	return RunYAMLAt(ctx, yamlData, script, profileName, time.Unix(0, 0))
+}
+
+// RunYAMLAt uses a caller-provided, fixed guest clock for preview and apply.
+func RunYAMLAt(ctx context.Context, yamlData []byte, script, profileName string, clock time.Time) ([]byte, error) {
 	if ctx == nil {
 		return nil, ErrInput
 	}
@@ -95,5 +106,5 @@ func RunYAML(ctx context.Context, yamlData []byte, script, profileName string) (
 	if err != nil {
 		return nil, err
 	}
-	return Run(ctx, input, script, profileName)
+	return RunAt(ctx, input, script, profileName, clock)
 }
