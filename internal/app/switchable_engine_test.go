@@ -11,6 +11,7 @@ import (
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appconfig"
 	"github.com/neko233-com/netflow/internal/core"
+	"github.com/neko233-com/netflow/internal/coreipc"
 	"github.com/neko233-com/netflow/internal/rules"
 	"github.com/neko233-com/netflow/internal/tun"
 	"github.com/neko233-com/netflow/internal/ui"
@@ -258,6 +259,48 @@ func TestTUNOffStaysOffWhenPersistenceFails(t *testing.T) {
 	err := a.setDirectTUN(false)
 	if err == nil || a.settings.TUN || engine.tun {
 		t.Fatalf("TUN did not stay off after save failure: %v settings=%v actual=%v", err, a.settings.TUN, engine.tun)
+	}
+}
+
+type busyTUNEngine struct {
+	*switchTestEngine
+	busy                  bool
+	tryCalls, reloadCalls int
+}
+
+func (e *busyTUNEngine) TryReload() error {
+	e.tryCalls++
+	if e.busy {
+		return coreipc.ErrKernelBusy
+	}
+	return e.switchTestEngine.Reload()
+}
+func (e *busyTUNEngine) Reload() error { e.reloadCalls++; return e.switchTestEngine.Reload() }
+
+func TestTUNBusyReloadRestoresSettingsWithoutRetryingReload(t *testing.T) {
+	store := appconfig.NewMemory(t.TempDir())
+	settings := appconfig.Settings{TUN: true}
+	if err := store.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+	controller := tun.NewMemory()
+	if err := controller.Set(true); err != nil {
+		t.Fatal(err)
+	}
+	engine := &busyTUNEngine{switchTestEngine: &switchTestEngine{running: true, tun: true}, busy: true}
+	a := &App{store: store, tun: controller, core: newSwitchableEngine(engine), settings: settings}
+	engine.onReload = func() { engine.tun = a.settings.TUN }
+	err := a.setDirectTUN(false)
+	if !errors.Is(err, coreipc.ErrKernelBusy) || !a.settings.TUN || !engine.tun || engine.tryCalls != 1 || engine.reloadCalls != 0 {
+		t.Fatalf("busy TUN request changed state or retried reload: %v settings=%+v", err, a.settings)
+	}
+	saved, err := store.Load()
+	if err != nil || !saved.TUN {
+		t.Fatalf("busy request changed persisted settings: %+v %v", saved, err)
+	}
+	engine.busy = false
+	if err := a.setDirectTUN(false); err != nil || a.settings.TUN || engine.tun {
+		t.Fatalf("retry did not stop TUN: %v", err)
 	}
 }
 

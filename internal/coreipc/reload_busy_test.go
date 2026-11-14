@@ -1,0 +1,183 @@
+package coreipc
+
+import (
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/rpc"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+type blockedUpdateRPC struct{ started, release chan struct{} }
+
+type blockedSnapshotRPC struct{ started, release chan struct{} }
+
+func (s *blockedSnapshotRPC) ProviderCaches(_ ProviderCacheQuery, _ *ProviderCaches) error {
+	close(s.started)
+	<-s.release
+	return nil
+}
+
+func TestTryReloadDoesNotWaitForProviderCacheSnapshot(t *testing.T) {
+	left, right := net.Pipe()
+	server := rpc.NewServer()
+	blocked := &blockedSnapshotRPC{started: make(chan struct{}), release: make(chan struct{})}
+	if err := server.RegisterName("Kernel", blocked); err != nil {
+		t.Fatal(err)
+	}
+	go server.ServeConn(right)
+	client, err := NewClient(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	client.dir = t.TempDir()
+	client.caches = newCacheState(nil, true)
+	finished := make(chan error, 1)
+	go func() { client.applyMu.Lock(); defer client.applyMu.Unlock(); finished <- client.syncProviderCaches() }()
+	<-blocked.started
+	if err := client.TryReload(); !errors.Is(err, ErrKernelBusy) {
+		close(blocked.release)
+		<-finished
+		t.Fatalf("expected busy while cache snapshot is in progress: %v", err)
+	}
+	close(blocked.release)
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (s *blockedUpdateRPC) UpdateProxyProvider(_ Name, _ *Empty) error {
+	close(s.started)
+	<-s.release
+	return nil
+}
+
+func TestRealProviderUpdateMakesTryReloadRetryableWithoutDataLoss(t *testing.T) {
+	t.Setenv("CI", "1")
+	started, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-release:
+			_, _ = w.Write([]byte("proxies: [{name: fresh, type: direct}]\n"))
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	userDir, stageDir := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(userDir, "providers"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(userDir, "providers", "proxy.yaml")
+	old := "proxies: [{name: old, type: direct}]\n"
+	if err := os.WriteFile(cache, []byte(old), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\nproxy-providers:\n  test: {type: http, url: '" + server.URL + "', path: providers/proxy.yaml, interval: 3600, health-check: {enable: false}}\nrules: ['MATCH,DIRECT']\n"
+	if err := os.WriteFile(filepath.Join(userDir, "config.yaml"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	left, right := net.Pipe()
+	worker := NewWorker()
+	worker.stageFactory = func() (fileStage, error) { return &testStage{dir: stageDir}, nil }
+	served := make(chan error, 1)
+	go func() { served <- worker.Serve(right) }()
+	client, err := NewClient(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close(); <-served }()
+	client.cacheInterval = time.Hour
+	if err := client.Start(userDir); err != nil {
+		t.Fatal(err)
+	}
+	updated := make(chan error, 1)
+	go func() { updated <- client.UpdateProxyProvider("test") }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("provider request did not start")
+	}
+	if err := client.TryReload(); !errors.Is(err, ErrKernelBusy) {
+		close(release)
+		<-updated
+		t.Fatalf("expected busy: %v", err)
+	}
+	if status := client.Status(); !status.Running {
+		close(release)
+		<-updated
+		t.Fatal("kernel stopped on rejected reload")
+	}
+	if data, err := os.ReadFile(cache); err != nil || string(data) != old {
+		close(release)
+		<-updated
+		t.Fatal("cache changed while update was pending")
+	}
+	close(release)
+	if err := <-updated; err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(cache); err != nil || !strings.Contains(string(data), "fresh") {
+		t.Fatal("completed provider update was not saved")
+	}
+	if err := client.TryReload(); err != nil {
+		t.Fatalf("retry failed: %v", err)
+	}
+	if err := client.Stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+func (*blockedUpdateRPC) Capabilities(_ Empty, _ *Capabilities) error { return nil }
+func (*blockedUpdateRPC) Reload(_ Apply, _ *Empty) error              { return nil }
+
+func TestReloadDoesNotWaitForProviderNetworkOperation(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("rules: ['MATCH,DIRECT']\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	left, right := net.Pipe()
+	server := rpc.NewServer()
+	blocked := &blockedUpdateRPC{started: make(chan struct{}), release: make(chan struct{})}
+	if err := server.RegisterName("Kernel", blocked); err != nil {
+		t.Fatal(err)
+	}
+	go server.ServeConn(right)
+	client, err := NewClient(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	client.dir = dir
+	updated := make(chan error, 1)
+	go func() { updated <- client.UpdateProxyProvider("remote") }()
+	<-blocked.started
+	reloaded := make(chan error, 1)
+	go func() { reloaded <- client.TryReload() }()
+	select {
+	case err := <-reloaded:
+		if !errors.Is(err, ErrKernelBusy) {
+			close(blocked.release)
+			<-updated
+			t.Fatalf("expected a retryable busy error, got %v", err)
+		}
+	case <-time.After(time.Second):
+		close(blocked.release)
+		<-updated
+		<-reloaded
+		t.Fatal("reload waited for provider network operation")
+	}
+	close(blocked.release)
+	if err := <-updated; err != nil {
+		t.Fatal(err)
+	}
+	if err := client.TryReload(); err != nil {
+		t.Fatalf("reload after provider update: %v", err)
+	}
+}

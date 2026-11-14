@@ -24,6 +24,7 @@ import (
 	"github.com/neko233-com/netflow/internal/clashlog"
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
+	"github.com/neko233-com/netflow/internal/coreipc"
 	"github.com/neko233-com/netflow/internal/geoupdate"
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/profile"
@@ -563,15 +564,21 @@ func (a *App) setDirectTUN(on bool) error {
 				errorsFound = append(errorsFound, err)
 			}
 		}
-		if err := a.core.Reload(); err != nil {
-			errorsFound = append(errorsFound, err)
+		if !errors.Is(cause, coreipc.ErrKernelBusy) {
+			if err := a.core.Reload(); err != nil {
+				errorsFound = append(errorsFound, err)
+			}
 		}
 		if len(errorsFound) > 0 {
 			return errors.Join(cause, fmt.Errorf("恢复虚拟网卡配置失败: %w", errors.Join(errorsFound...)))
 		}
 		return cause
 	}
-	if err := a.core.Reload(); err != nil {
+	reload := a.core.Reload
+	if engine, ok := a.core.(interface{ TryReload() error }); ok {
+		reload = engine.TryReload
+	}
+	if err := reload(); err != nil {
 		return rollback(err)
 	}
 	saveErr := a.store.Save(a.settings)

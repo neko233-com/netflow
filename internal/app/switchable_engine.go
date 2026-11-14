@@ -60,6 +60,14 @@ func (s *switchableEngine) Reload() error {
 	defer s.mu.RUnlock()
 	return s.active.Reload()
 }
+func (s *switchableEngine) TryReload() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if engine, ok := s.active.(interface{ TryReload() error }); ok {
+		return engine.TryReload()
+	}
+	return s.active.Reload()
+}
 func (s *switchableEngine) Stop() error { s.mu.RLock(); defer s.mu.RUnlock(); return s.active.Stop() }
 func (s *switchableEngine) CacheWarning() string {
 	s.mu.RLock()

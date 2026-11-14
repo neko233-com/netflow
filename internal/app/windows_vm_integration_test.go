@@ -1420,6 +1420,127 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	t.Fatal("headless shutdown did not restore routes and DNS")
 }
 
+func vmProviderBusyTUN(t *testing.T, agentExe string) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	var slow atomic.Bool
+	var signaled atomic.Bool
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if slow.Load() && signaled.CompareAndSwap(false, true) {
+			close(entered)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		_, _ = io.WriteString(w, "proxies: [{name: fresh, type: direct}]\n")
+	}))
+	defer provider.Close()
+	defer unblock()
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "providers"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "providers", "slow.yaml"), []byte("proxies: [{name: old, type: direct}]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\nproxy-providers:\n  slow: {type: http, url: '" + provider.URL + "', path: providers/slow.yaml, interval: 3600, health-check: {enable: false}}\nrules: ['MATCH,DIRECT']\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server := vmCommand(ctx, agentExe, "--config-dir", dir, "serve")
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- server.Wait() }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			_ = server.Process.Kill()
+			<-finished
+		}
+	}()
+	client := agent.Client{Dir: dir, Timeout: 5 * time.Second}
+	deadline := time.Now().Add(90 * time.Second)
+	var status agent.Status
+	for time.Now().Before(deadline) {
+		if err := client.Call(context.Background(), "status", nil, &status); err == nil && status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if !status.TUN {
+		t.Fatalf("provider busy test did not start TUN: %+v", status)
+	}
+	slow.Store(true)
+	var job agent.ProviderJob
+	if err := client.Call(context.Background(), "update-provider", agent.ProviderUpdateArgs{Kind: "proxy", Name: "slow"}, &job); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("provider update did not reach server")
+	}
+	off := false
+	var result agent.TunResult
+	started := time.Now()
+	err = client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &off}, &result)
+	if err == nil || !strings.Contains(err.Error(), "内核正忙") || time.Since(started) >= 5*time.Second {
+		t.Fatalf("TUN off did not return busy promptly: %v", err)
+	}
+	status = agent.Status{}
+	if err := client.Call(context.Background(), "status", nil, &status); err != nil || !status.TUN {
+		t.Fatalf("busy request changed TUN or blocked status: %+v %v", status, err)
+	}
+	unblock()
+	deadline = time.Now().Add(30 * time.Second)
+	for job.State == "pending" && time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		if err := client.Call(context.Background(), "provider-job-status", agent.ProviderJobArgs{JobID: job.JobID}, &job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if job.State != "succeeded" {
+		t.Fatalf("provider did not complete: %+v", job)
+	}
+	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &off}, &result); err != nil {
+		t.Fatalf("TUN retry failed: %v", err)
+	}
+	if err := client.Call(context.Background(), "shutdown", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-finished:
+		stopped = true
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(45 * time.Second):
+		t.Fatal("headless shutdown timed out")
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, dns, e := vmNetworkSnapshot()
+		if e == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
+			t.Log("busy provider returned promptly; retry stopped TUN and restored networking")
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatal("busy-provider test did not restore networking")
+}
+
 func vmHeadlessParentExit(t *testing.T, agentExe, dir string) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -2511,6 +2632,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	t.Log("migrated DNS, hosts, proxy and group extensions applied by installed GUI")
 	vmHeadlessRoundTrip(t, agentExe, backupTarget)
 	t.Log("installed headless CLI activated TUN, applied a rewrite without visible windows, and restored networking on shutdown")
+	vmProviderBusyTUN(t, agentExe)
 	vmHeadlessParentExit(t, agentExe, backupTarget)
 	t.Log("headless child restored networking after its CLI launcher was forcibly terminated")
 	vmGUIAutoStartTUN(t, filepath.Join(install, "NetFlow.exe"), agentExe, backupTarget)

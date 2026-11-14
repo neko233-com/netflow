@@ -42,6 +42,10 @@ type Client struct {
 	cacheInterval time.Duration
 }
 
+// ErrKernelBusy means no reload was attempted because another serialized
+// kernel operation is still using the private worker.
+var ErrKernelBusy = errors.New("内核正忙，请等待集合更新或缓存同步结束后重试")
+
 func NewClient(c io.ReadWriteCloser) (*Client, error) {
 	if c == nil {
 		return nil, errors.New("nil kernel transport")
@@ -168,6 +172,20 @@ func (c *Client) Start(dir string) error {
 func (c *Client) Reload() error {
 	c.applyMu.Lock()
 	defer c.applyMu.Unlock()
+	return c.reloadLocked()
+}
+
+// TryReload never waits behind a provider update or cache synchronization.
+// ErrKernelBusy guarantees no reload request was sent to the worker.
+func (c *Client) TryReload() error {
+	if !c.applyMu.TryLock() {
+		return ErrKernelBusy
+	}
+	defer c.applyMu.Unlock()
+	return c.reloadLocked()
+}
+
+func (c *Client) reloadLocked() error {
 	c.mu.Lock()
 	dir := c.dir
 	c.mu.Unlock()
