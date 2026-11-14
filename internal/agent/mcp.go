@@ -65,6 +65,24 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "preview", change, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_rewrite_history", Description: "List bounded stored rewrite-state revision summaries, newest first. History may include a state whose kernel reload failed.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, RewriteHistory, error) {
+			var out RewriteHistory
+			err := client.Call(ctx, "rewrite-history", nil, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_clear_rewrite_history", Description: "Delete stored rewrite history without changing current rules; invalidates pending proposals when history was present.", Annotations: &mcp.ToolAnnotations{DestructiveHint: func() *bool { b := true; return &b }()}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, ClearRewriteHistoryResult, error) {
+			var out ClearRewriteHistoryResult
+			err := client.Call(ctx, "clear-rewrite-history", nil, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_preview_rollback", Description: "Preview and validate one global, profile or connection scope from a stored rewrite revision. The result must be explicitly applied with netflow_apply_rewrite. Expired or changed connection matchers cannot be restored.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in RollbackArgs) (*mcp.CallToolResult, Preview, error) {
+			var out Preview
+			err := client.Call(ctx, "rollback-preview", in, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_apply_rewrite", Description: "Apply an unexpired preview proposal if its configuration and revision are unchanged. This changes network routing; an explicitly requested connection close may interrupt that connection.", Annotations: &mcp.ToolAnnotations{}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args ApplyArgs) (*mcp.CallToolResult, ApplyResult, error) {
 			var out ApplyResult

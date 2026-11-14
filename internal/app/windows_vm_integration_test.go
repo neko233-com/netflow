@@ -904,6 +904,10 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatal("live backup included the Agent endpoint")
 	}
 	t.Log("installed headless Agent created and restored a live backup without runtime tokens")
+	var beforeRollback agent.Status
+	if output, err := call("status"); err != nil || json.Unmarshal(output, &beforeRollback) != nil || !beforeRollback.TUN {
+		t.Fatalf("headless state before rollback: %s %v", output, err)
+	}
 	input := `{"scope":"global","operation":"set","layer":{"prepend":["DOMAIN,headless.example,DIRECT"]}}`
 	c, done := context.WithTimeout(context.Background(), 30*time.Second)
 	preview := vmCommand(c, agentExe, "--config-dir", dir, "preview")
@@ -917,6 +921,27 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if out, err = call("apply", proposal.ProposalID); err != nil {
 		t.Fatalf("headless apply failed: %s %v", out, err)
 	}
+	var history agent.RewriteHistory
+	if out, err = call("rewrite-history"); err != nil || json.Unmarshal(out, &history) != nil || len(history.Entries) == 0 || history.Entries[0].Revision != beforeRollback.Revision {
+		t.Fatalf("headless rewrite history failed: %s %v", out, err)
+	}
+	c, done = context.WithTimeout(context.Background(), 30*time.Second)
+	preview = vmCommand(c, agentExe, "--config-dir", dir, "rollback-preview")
+	rollbackInput, _ := json.Marshal(agent.RollbackArgs{Revision: &beforeRollback.Revision, Scope: "global"})
+	preview.Stdin = strings.NewReader(string(rollbackInput))
+	out, err = preview.CombinedOutput()
+	done()
+	if err != nil || json.Unmarshal(out, &proposal) != nil || proposal.ProposalID == "" {
+		t.Fatalf("headless rollback preview: %s %v", out, err)
+	}
+	if out, err = call("apply", proposal.ProposalID); err != nil {
+		t.Fatalf("headless rollback apply: %s %v", out, err)
+	}
+	var afterRollback agent.Status
+	if out, err = call("status"); err != nil || json.Unmarshal(out, &afterRollback) != nil || !afterRollback.TUN || !reflect.DeepEqual(beforeRollback.Overrides.Global, afterRollback.Overrides.Global) {
+		t.Fatalf("headless rollback did not restore global rules and TUN: %s %v", out, err)
+	}
+	t.Log("installed headless Agent previewed and applied global history rollback while TUN remained enabled")
 	// A pending proposal must never overwrite an outside edit to the rule file.
 	c, done = context.WithTimeout(context.Background(), 30*time.Second)
 	preview = vmCommand(c, agentExe, "--config-dir", dir, "preview")

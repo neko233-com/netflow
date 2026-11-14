@@ -12,6 +12,19 @@ import (
 func TestMCPRequestsTUN(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := Start(dir, func(_ context.Context, method string, args json.RawMessage) (any, error) {
+		if method == "rewrite-history" {
+			return RewriteHistory{}, nil
+		}
+		if method == "clear-rewrite-history" {
+			return ClearRewriteHistoryResult{Revision: 2}, nil
+		}
+		if method == "rollback-preview" {
+			var in RollbackArgs
+			if json.Unmarshal(args, &in) != nil || in.Revision == nil || *in.Revision != 0 || in.Scope != "global" {
+				t.Error("incorrect rollback request")
+			}
+			return Preview{ProposalID: "proposal"}, nil
+		}
 		if method == "profile-url-set" {
 			var in ProfileURLArgs
 			if json.Unmarshal(args, &in) != nil || in.ProfileID != "profile" || in.URL != "https://example.invalid/?token=synthetic-secret" {
@@ -86,6 +99,9 @@ func TestMCPRequestsTUN(t *testing.T) {
 		t.Fatalf("MCP version %q does not match the application version %q", got, netflow.Version())
 	}
 	for _, call := range []*mcp.CallToolParams{
+		{Name: "netflow_rewrite_history", Arguments: map[string]any{}},
+		{Name: "netflow_clear_rewrite_history", Arguments: map[string]any{}},
+		{Name: "netflow_preview_rollback", Arguments: map[string]any{"revision": 0, "scope": "global"}},
 		{Name: "netflow_kernel_options", Arguments: map[string]any{}},
 		{Name: "netflow_set_kernel_option", Arguments: map[string]any{"name": "ipv6", "bool_value": true}},
 		{Name: "netflow_profile_settings", Arguments: map[string]any{"profile_id": "profile"}},

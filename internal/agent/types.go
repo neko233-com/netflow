@@ -234,6 +234,22 @@ type Change struct {
 	CloseExisting bool          `json:"close_existing,omitempty" jsonschema:"close the selected existing connection after applying a connection override"`
 }
 
+type RewriteHistory struct {
+	Entries []rewrite.HistoryItem `json:"entries"`
+}
+
+type ClearRewriteHistoryResult struct {
+	Revision uint64 `json:"revision"`
+}
+
+type RollbackArgs struct {
+	Revision      *uint64 `json:"revision" jsonschema:"historical stored revision to preview"`
+	Scope         string  `json:"scope" jsonschema:"global, profile, or connection"`
+	ProfileID     string  `json:"profile_id,omitempty" jsonschema:"profile id for profile scope"`
+	ConnectionID  string  `json:"connection_id,omitempty" jsonschema:"connection id for connection scope"`
+	CloseExisting bool    `json:"close_existing,omitempty" jsonschema:"optionally close the selected existing connection after applying a restored matcher"`
+}
+
 type Preview struct {
 	ProposalID    string    `json:"proposal_id"`
 	Revision      uint64    `json:"revision"`

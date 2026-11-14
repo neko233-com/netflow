@@ -38,10 +38,17 @@ func (a *App) stopAgent() {
 }
 
 func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMessage) (any, error) {
-	if method == "preview" {
+	if method == "preview" || method == "rollback-preview" {
 		var change agent.Change
-		if err := decodeStrict(args, &change); err != nil {
-			return nil, err
+		var rollback agent.RollbackArgs
+		if method == "preview" {
+			if err := decodeStrict(args, &change); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := decodeStrict(args, &rollback); err != nil {
+				return nil, err
+			}
 		}
 		var draft previewDraft
 		var prepareErr error
@@ -49,7 +56,11 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		a.runOnMain(func() {
 			executed = true
 			if prepareErr = ctx.Err(); prepareErr == nil {
-				draft, prepareErr = a.prepareAgentPreview(change)
+				if method == "preview" {
+					draft, prepareErr = a.prepareAgentPreview(change)
+				} else {
+					draft, prepareErr = a.prepareAgentRollback(rollback)
+				}
 			}
 		})
 		if !executed {
@@ -111,6 +122,22 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		value, callErr = a.agentStatus()
 	case "diagnostics":
 		value = a.diagnostics()
+	case "rewrite-history":
+		var input agent.Empty
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentRewriteHistory()
+		}
+	case "clear-rewrite-history":
+		var input agent.Empty
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if a.rewrites == nil {
+				callErr = errors.New("rewrite store is unavailable")
+			} else if callErr = a.rewrites.CheckCurrent(); callErr == nil {
+				var revision uint64
+				revision, callErr = a.rewrites.ClearHistory()
+				value = agent.ClearRewriteHistoryResult{Revision: revision}
+			}
+		}
 	case "kernel-options":
 		value, callErr = a.agentKernelOptions()
 	case "kernel-option":

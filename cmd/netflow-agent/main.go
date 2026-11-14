@@ -24,7 +24,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags := flag.NewFlagSet("netflow-agent", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, kernel-options, kernel-option NAME VALUE|inherit, update-geo, tun on|off, profiles, profile-settings ID, profile-settings-set|profile-url-set (JSON stdin), import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, webdav-config, webdav-clear, webdav-save|webdav-list|webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
+		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, kernel-options, kernel-option NAME VALUE|inherit, update-geo, tun on|off, profiles, profile-settings ID, profile-settings-set|profile-url-set (JSON stdin), import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, rewrite-history, clear-rewrite-history, preview|rollback-preview (JSON stdin), apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, webdav-config, webdav-clear, webdav-save|webdav-list|webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -107,12 +107,12 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	case "help":
 		flags.Usage()
 		return nil
-	case "diagnostics", "shutdown", "kernel-options", "kernel-option", "update-geo", "groups", "profiles", "profile-settings", "profile-settings-set", "profile-url-set", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "webdav-config", "webdav-save", "webdav-clear", "webdav-list", "webdav-upload", "webdav-restore", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
+	case "diagnostics", "shutdown", "rewrite-history", "clear-rewrite-history", "kernel-options", "kernel-option", "update-geo", "groups", "profiles", "profile-settings", "profile-settings-set", "profile-url-set", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "webdav-config", "webdav-save", "webdav-clear", "webdav-list", "webdav-upload", "webdav-restore", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
 		method := flags.Arg(0)
 		stdin := input
 		var input any
 		switch method {
-		case "diagnostics", "shutdown", "kernel-options", "update-geo", "groups", "profiles", "providers", "backup-schedule", "webdav-config", "webdav-clear":
+		case "diagnostics", "shutdown", "rewrite-history", "clear-rewrite-history", "kernel-options", "update-geo", "groups", "profiles", "providers", "backup-schedule", "webdav-config", "webdav-clear":
 			if flags.NArg() != 1 {
 				return fmt.Errorf("%s takes no arguments", method)
 			}
@@ -310,11 +310,16 @@ func run(args []string, input io.Reader, output io.Writer) error {
 			return err
 		}
 		return json.NewEncoder(output).Encode(out)
-	case "preview":
+	case "preview", "rollback-preview":
 		if flags.NArg() != 1 {
-			return fmt.Errorf("preview reads one JSON object from stdin")
+			return fmt.Errorf("%s reads one JSON object from stdin", flags.Arg(0))
 		}
-		var change agent.Change
+		var request any
+		if flags.Arg(0) == "preview" {
+			request = &agent.Change{}
+		} else {
+			request = &agent.RollbackArgs{}
+		}
 		body, err := io.ReadAll(io.LimitReader(input, (1<<20)+1))
 		if err != nil {
 			return err
@@ -324,7 +329,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 		}
 		dec := json.NewDecoder(bytes.NewReader(body))
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(&change); err != nil {
+		if err := dec.Decode(request); err != nil {
 			return err
 		}
 		var extra any
@@ -332,7 +337,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 			return errors.New("unexpected trailing JSON")
 		}
 		var out agent.Preview
-		if err := client.Call(ctx, "preview", change, &out); err != nil {
+		if err := client.Call(ctx, flags.Arg(0), request, &out); err != nil {
 			return err
 		}
 		return json.NewEncoder(output).Encode(out)

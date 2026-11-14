@@ -2,9 +2,11 @@ package rewrite
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -101,5 +103,109 @@ func TestStorePersistsAndRejectsStaleRevision(t *testing.T) {
 	}
 	if again.Snapshot().Revision != 1 || again.Snapshot().Global.Prepend[0] != "DOMAIN,a.test,DIRECT" {
 		t.Fatal(again.Snapshot())
+	}
+}
+
+func TestHistoryIsBoundedPersistentAndIsolated(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := uint64(0); i < 11; i++ {
+		next := s.Snapshot()
+		next.Global.Prepend = []string{fmt.Sprintf("DOMAIN,%d.test,DIRECT", i)}
+		if _, err := s.Replace(next, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	history := s.History()
+	if len(history) != maxHistoryEntries || history[0].Revision != 10 || history[len(history)-1].Revision != 3 {
+		t.Fatalf("unexpected history: %+v", history)
+	}
+	old, err := s.Historical(3)
+	if err != nil || old.Global.Prepend[0] != "DOMAIN,2.test,DIRECT" {
+		t.Fatalf("old state: %+v %v", old, err)
+	}
+	old.Global.Prepend[0] = "mutated"
+	old, err = s.Historical(3)
+	if err != nil || old.Global.Prepend[0] == "mutated" {
+		t.Fatal("history state was not isolated")
+	}
+	if _, err := s.Historical(2); err == nil {
+		t.Fatal("evicted revision remained available")
+	}
+	reopened, err := Open(dir)
+	if err != nil || !reflect.DeepEqual(reopened.History(), history) {
+		t.Fatalf("history was not persisted: %v", err)
+	}
+}
+
+func TestClearHistoryPreservesRulesAndRejectsExternalChange(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.Replace(State{Global: Layer{Prepend: []string{"DOMAIN,keep.test,DIRECT"}}}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "agent-rules.json")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("external edit"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClearHistory(); !errors.Is(err, ErrConflict) {
+		t.Fatalf("external edit accepted: %v", err)
+	}
+	if len(s.History()) != 1 || !reflect.DeepEqual(s.Snapshot(), state) {
+		t.Fatal("failed clear modified memory")
+	}
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	revision, err := s.ClearHistory()
+	if err != nil || revision != state.Revision+1 {
+		t.Fatalf("clear: %d %v", revision, err)
+	}
+	state.Revision = revision
+	reopened, err := Open(dir)
+	if err != nil || len(reopened.History()) != 0 || !reflect.DeepEqual(reopened.Snapshot(), state) {
+		t.Fatalf("clear not persisted: %v", err)
+	}
+	if again, err := reopened.ClearHistory(); err != nil || again != revision {
+		t.Fatalf("empty clear changed revision: %d %v", again, err)
+	}
+}
+
+func TestHistoryPrunesToFileSizeLimit(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		state := s.Snapshot()
+		state.Global.Prepend = make([]string, 400)
+		for j := range state.Global.Prepend {
+			state.Global.Prepend[j] = fmt.Sprintf("DOMAIN,%d-%d.%s,DIRECT", i, j, strings.Repeat("x", 3960))
+		}
+		if _, err := s.Replace(state, state.Revision); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if history := s.History(); len(history) != 1 || history[0].Revision != 2 {
+		t.Fatalf("size limit did not evict older states: %+v", history)
+	}
+	info, err := os.Stat(filepath.Join(dir, "agent-rules.json"))
+	if err != nil || info.Size() > 4<<20 {
+		t.Fatalf("oversized rewrite file: %v", err)
+	}
+	if reopened, err := Open(dir); err != nil || reopened.Snapshot().Revision != 3 {
+		t.Fatalf("reopen pruned history: %v", err)
 	}
 }

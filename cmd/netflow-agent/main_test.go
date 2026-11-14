@@ -105,6 +105,40 @@ func TestKernelOptionCLI(t *testing.T) {
 	}
 }
 
+func TestRollbackCLIUsesPreview(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		if method == "rewrite-history" {
+			return agent.RewriteHistory{}, nil
+		}
+		if method == "clear-rewrite-history" {
+			return agent.ClearRewriteHistoryResult{Revision: 2}, nil
+		}
+		var in agent.RollbackArgs
+		if method != "rollback-preview" || json.Unmarshal(raw, &in) != nil || in.Revision == nil || *in.Revision != 0 || in.Scope != "global" {
+			return nil, errors.New("unexpected rollback request")
+		}
+		return agent.Preview{ProposalID: "proposal"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	var output bytes.Buffer
+	if err := run([]string{"--config-dir", dir, "rewrite-history"}, strings.NewReader(""), &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config-dir", dir, "clear-rewrite-history"}, strings.NewReader(""), &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config-dir", dir, "rollback-preview"}, strings.NewReader(`{"revision":0,"scope":"global"}`), &output); err != nil || !strings.Contains(output.String(), "proposal") {
+		t.Fatalf("rollback preview failed: %v", err)
+	}
+	if err := run([]string{"--config-dir", dir, "rollback-preview"}, strings.NewReader(`{"revision":0,"scope":"global","unknown":1}`), &output); err == nil {
+		t.Fatal("unknown field accepted")
+	}
+}
+
 func TestProfileSettingsCLIReadsPatchFromStdin(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {

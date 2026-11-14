@@ -160,6 +160,21 @@ func TestHeadlessAgentRewriteAndGracefulShutdown(t *testing.T) {
 	if err := client.Call(context.Background(), "apply", agent.ApplyArgs{ProposalID: proposal.ProposalID}, &applied); err != nil {
 		t.Fatal(err)
 	}
+	var history agent.RewriteHistory
+	if err := client.Call(context.Background(), "rewrite-history", nil, &history); err != nil || len(history.Entries) == 0 {
+		t.Fatalf("missing rewrite history: %+v %v", history, err)
+	}
+	oldRevision := history.Entries[0].Revision
+	var rollback agent.Preview
+	if err := client.Call(context.Background(), "rollback-preview", agent.RollbackArgs{Revision: &oldRevision, Scope: "global"}, &rollback); err != nil || rollback.ProposalID == "" {
+		t.Fatalf("rollback preview failed: %+v %v", rollback, err)
+	}
+	if err := client.Call(context.Background(), "apply", agent.ApplyArgs{ProposalID: rollback.ProposalID}, &applied); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Call(context.Background(), "status", nil, &status); err != nil || len(status.Overrides.Global.Prepend) != 0 {
+		t.Fatalf("rollback did not restore previous state: %+v %v", status, err)
+	}
 	var result agent.ActionResult
 	if err := client.Call(context.Background(), "shutdown", nil, &result); err != nil || !result.OK {
 		t.Fatalf("shutdown acknowledgement: %+v %v", result, err)

@@ -98,6 +98,10 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 
 预览在独立进程中离线校验配置和本地规则、代理集合，不会为校验下载或修复 GeoData；配置引用缺失或损坏的 GeoData 时会返回错误，缺少 HTTP 集合缓存时会提示其下载内容未被验证。提案最多有效两分钟，配置、已校验的集合文件、GeoData、订阅、路由模式或 TUN 状态变化后须重新预览，TUN 切换期间不能预览或应用。应用失败时尝试恢复旧规则。连接层根据源 IP、目标域名或 IP、端口及网络匹配**后续连接**，可能同时影响其他符合条件的连接；已建立的连接不能被重新路由，可显式选择关闭原连接。规则只在规则模式下控制路由。Agent 状态包含连接元数据，务必只授予可信程序访问权限。
 
+可以主动回滚指定范围：先运行 `rewrite-history` 查看历史版本，再把例如 `'{"revision":1,"scope":"global"}'` 通过标准输入传给 `rollback-preview`，检查返回的规则和警告后用 `apply <proposal_id>` 应用。订阅范围还需 `profile_id`，连接范围还需 `connection_id`；对应 MCP 工具是 `netflow_rewrite_history`、`netflow_preview_rollback` 和 `netflow_apply_rewrite`。只恢复选择的范围，其余规则保留；订阅必须仍然存在，恢复连接匹配器时原连接必须仍活动且匹配内容未变，并且不会延长原来的到期时间。历史中没有该连接匹配器时，回滚会清除当前匹配器。
+
+规则文件最多保存 8 个历史快照，历史与当前规则共限 4 MiB，空间不足时更早的快照会提前淘汰。快照可能包含曾应用失败的中间状态，应检查预览而非假定它此前生效。历史持久化并包含在备份中，可能保留过期连接的域名或 IP 等匹配信息；可用 `clear-rewrite-history` 或 MCP `netflow_clear_rewrite_history` 清除当前规则文件中的历史并使待应用提案失效。已有备份不受影响。
+
 程序运行时若规则文件被外部修改，预览、应用和到期清理会拒绝覆盖该文件；`status` 的 `rewrite_warning` 会提示检查文件并重启。到期清理无法写入时会尝试重载内核，以移除已经到期的运行时规则；如果重载也失败，规则可能继续生效，应检查警告和日志。最终检查和替换之间仍存在外部并发竞争。
 
 CLI 还提供 `version`、`diagnostics`、`groups`、`rules [偏移 [数量]]`、`select <组> <节点>`、`mode <rule|global|direct>`、`use-profile <订阅 ID>` 和 `close-connection <连接 ID>`。`version` 无需运行桌面程序；其余操作有对应的 `netflow_` MCP 工具。设置页、CLI 和 MCP 的诊断摘要仅包含版本、平台、运行状态及计数，不包含订阅地址、配置目录、错误原文、令牌或连接详情。切换节点、模式、订阅及关闭连接会直接改变运行状态；关闭不存在的连接会返回 `closed: false`。规则覆写仍需要先预览再应用。

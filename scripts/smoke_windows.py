@@ -189,7 +189,7 @@ def main():
         deadline = time.monotonic() + 5
         while True:
             status = call("status")
-            matches = [item for item in status.get("connections", []) if item.get("DestinationPort") == str(origin.server_port)]
+            matches = [item for item in status.get("connections", []) if item.get("DestinationPort") == str(origin.server_port) and item.get("SourcePort") == str(tunnel.getsockname()[1])]
             if matches:
                 break
             if time.monotonic() >= deadline:
@@ -228,6 +228,65 @@ def main():
         if response.status != 200 or response.read() != b"netflow-release-smoke-ok":
             raise RuntimeError("routing was not restored after expiry")
         conn.close()
+        # A rollback restores only the selected matcher and must not reroute an
+        # already established socket. Exercise the packaged CLI end to end.
+        tunnel = socket.create_connection(("127.0.0.1", port), timeout=5)
+        tunnel.sendall(f"CONNECT {origin_address} HTTP/1.1\r\nHost: {origin_address}\r\n\r\n".encode())
+        header = b""
+        while b"\r\n\r\n" not in header:
+            chunk = tunnel.recv(4096)
+            if not chunk:
+                raise RuntimeError("rollback CONNECT ended before response")
+            header += chunk
+        if b" 200 " not in header.split(b"\r\n", 1)[0]:
+            raise RuntimeError("rollback CONNECT failed")
+        deadline = time.monotonic() + 5
+        while True:
+            status = call("status")
+            matches = [item for item in status.get("connections", []) if item.get("DestinationPort") == str(origin.server_port) and item.get("SourcePort") == str(tunnel.getsockname()[1])]
+            if matches:
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("rollback connection absent from status")
+            time.sleep(0.1)
+        connection_id = matches[0]["ID"]
+        before_revision = status["revision"]
+        proposal = call("preview", data=json.dumps({"scope":"connection", "operation":"set", "connection_id":connection_id, "policy":"REJECT", "ttl_seconds":60}))
+        reject_revision = call("apply", proposal["proposal_id"])["revision"]
+        proposal = call("preview", data=json.dumps({"scope":"connection", "operation":"set", "connection_id":connection_id, "policy":"DIRECT", "ttl_seconds":60}))
+        call("apply", proposal["proposal_id"])
+        history = call("rewrite-history")["entries"]
+        if reject_revision not in [entry["revision"] for entry in history]:
+            raise RuntimeError("connection history missing")
+        proposal = call("rollback-preview", data=json.dumps({"revision":reject_revision, "scope":"connection", "connection_id":connection_id}))
+        call("apply", proposal["proposal_id"])
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            conn.request("GET", f"http://{origin_address}/", headers={"Host": origin_address})
+            if conn.getresponse().status == 200:
+                raise RuntimeError("connection rollback did not restore REJECT")
+        except (ConnectionResetError, http.client.RemoteDisconnected):
+            pass
+        finally:
+            conn.close()
+        proposal = call("rollback-preview", data=json.dumps({"revision":before_revision, "scope":"connection", "connection_id":connection_id}))
+        call("apply", proposal["proposal_id"])
+        tunnel.sendall(f"GET / HTTP/1.1\r\nHost: {origin_address}\r\nConnection: close\r\n\r\n".encode())
+        existing_response = b""
+        while True:
+            chunk = tunnel.recv(4096)
+            if not chunk:
+                break
+            existing_response += chunk
+        tunnel.close()
+        if b"netflow-release-smoke-ok" not in existing_response:
+            raise RuntimeError("rollback interrupted established connection")
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", f"http://{origin_address}/", headers={"Host": origin_address})
+        response = conn.getresponse()
+        if response.status != 200 or response.read() != b"netflow-release-smoke-ok":
+            raise RuntimeError("connection rollback did not clear the matcher")
+        conn.close()
         mcp = subprocess.Popen([agent, "--config-dir", str(data_dir), "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True, creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
         lines = queue.Queue()
@@ -245,7 +304,7 @@ def main():
             mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n"); mcp.stdin.flush()
             response = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
             names = {item["name"] for item in response["result"]["tools"]}
-            expected = {"netflow_status", "netflow_diagnostics", "netflow_kernel_options", "netflow_set_kernel_option", "netflow_shutdown_headless", "netflow_set_tun", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
+            expected = {"netflow_status", "netflow_diagnostics", "netflow_kernel_options", "netflow_set_kernel_option", "netflow_shutdown_headless", "netflow_set_tun", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_rewrite_history", "netflow_preview_rollback", "netflow_clear_rewrite_history", "netflow_proxy_groups", "netflow_rules",
                         "netflow_profiles", "netflow_profile_settings", "netflow_update_profile_settings", "netflow_replace_profile_url", "netflow_import_profile", "netflow_update_profile", "netflow_profile_job_status", "netflow_delete_profile",
                         "netflow_backup_create", "netflow_backup_job_status", "netflow_restore_backup", "netflow_backup_schedule", "netflow_backup_schedule_set", "netflow_webdav_config", "netflow_webdav_save", "netflow_webdav_clear", "netflow_webdav_list", "netflow_webdav_upload", "netflow_webdav_restore",
                         "netflow_providers", "netflow_update_provider", "netflow_provider_job_status",
@@ -253,6 +312,14 @@ def main():
                         "netflow_migration_preview", "netflow_migration_import", "netflow_migration_export"}
             if names != expected:
                 raise RuntimeError(f"unexpected MCP tools: {names}")
+            response = rpc({"jsonrpc":"2.0", "id":10, "method":"tools/call", "params":{"name":"netflow_rewrite_history", "arguments":{}}})
+            if response.get("result", {}).get("isError") or not response.get("result", {}).get("structuredContent", {}).get("entries"):
+                raise RuntimeError(f"MCP rewrite history failed: {response}")
+            response = rpc({"jsonrpc":"2.0", "id":11, "method":"tools/call", "params":{"name":"netflow_clear_rewrite_history", "arguments":{}}})
+            if response.get("result", {}).get("isError") or "revision" not in response.get("result", {}).get("structuredContent", {}):
+                raise RuntimeError(f"MCP clear history failed: {response}")
+            if call("rewrite-history")["entries"]:
+                raise RuntimeError("history was not cleared")
             response = rpc({"jsonrpc":"2.0", "id":7, "method":"tools/call", "params":{"name":"netflow_kernel_options", "arguments":{}}})
             if response.get("result", {}).get("isError") or "error" in response or "overrides" not in response.get("result", {}).get("structuredContent", {}) or response.get("result", {}).get("structuredContent", {}).get("effective", {}).get("log_level") != "error":
                 raise RuntimeError(f"MCP kernel options failed: {response}")
