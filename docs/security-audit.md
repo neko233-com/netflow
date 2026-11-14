@@ -8,6 +8,8 @@
 
 `0.2.100-alpha.1` 本地构建后，对实际 Windows `NetFlow.exe`、`netflow-agent.exe` 和 `netflow-kernel-worker.exe` 分别运行相同数据库的二进制扫描，均返回 `No vulnerabilities found`。构建版 GUI 文件副本的本机 Defender 不修复自定义扫描未报告威胁，单磁盘 Windows 来宾一次完整回归通过；这些结果不构成微软对 `0.2.99-alpha.1` 检测的裁定。
 
+对同版 macOS ARM64 包中的 GUI、Agent 和内核工作进程也分别执行了 Go 二进制静态扫描，均未报告数据库中的已知漏洞。该检查不运行 macOS 程序，也不验证 macOS TUN、签名或公证。
+
 可在受信任网络下重现源码扫描：
 
 ```powershell
