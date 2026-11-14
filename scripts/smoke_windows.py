@@ -153,8 +153,30 @@ def main():
         groups = call("groups")["groups"]
         if not any(g["name"] == "SmokeGroup" and len(g["nodes"]) == 2 for g in groups):
             raise RuntimeError("agent did not list real proxy group members")
-        if call("rules", "0", "1")["total"] < 1:
+        rule_page = call("rules", "0", "1")
+        if rule_page["total"] < 1 or rule_page["next_offset"] != 1:
             raise RuntimeError("agent did not list active rules")
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as active:
+            active.sendall(f"CONNECT {origin_address} HTTP/1.1\r\nHost: {origin_address}\r\n\r\n".encode("ascii"))
+            header = b""
+            while b"\r\n\r\n" not in header and len(header) < 8192:
+                chunk = active.recv(1024)
+                if not chunk:
+                    break
+                header += chunk
+            if not header.startswith(b"HTTP/1.1 200"):
+                raise RuntimeError(f"local CONNECT failed: {header!r}")
+            deadline = time.monotonic() + 5
+            while True:
+                connections = call("connections", "0", "1")
+                if connections["total"] and connections["connections"]:
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("agent did not observe the live CONNECT")
+                time.sleep(0.1)
+            status_live = call("status")
+            if connections["next_offset"] != 1 or status_live["connections_total"] < 1:
+                raise RuntimeError("agent connection page is invalid")
         if not call("select", "SmokeGroup", "REJECT")["ok"]:
             raise RuntimeError("agent proxy selection failed")
         if not call("mode", "global")["ok"] or not call("mode", "rule")["ok"]:
@@ -313,7 +335,7 @@ def main():
             mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n"); mcp.stdin.flush()
             response = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
             names = {item["name"] for item in response["result"]["tools"]}
-            expected = {"netflow_status", "netflow_diagnostics", "netflow_kernel_options", "netflow_set_kernel_option", "netflow_shutdown_headless", "netflow_set_tun", "netflow_tun_autostart", "netflow_set_tun_autostart", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_preview_rules", "netflow_cancel_preview", "netflow_apply_rewrite", "netflow_rewrite_history", "netflow_preview_rollback", "netflow_clear_rewrite_history", "netflow_proxy_groups", "netflow_rules",
+            expected = {"netflow_status", "netflow_connections", "netflow_diagnostics", "netflow_kernel_options", "netflow_set_kernel_option", "netflow_shutdown_headless", "netflow_set_tun", "netflow_tun_autostart", "netflow_set_tun_autostart", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_preview_rules", "netflow_cancel_preview", "netflow_apply_rewrite", "netflow_rewrite_history", "netflow_preview_rollback", "netflow_clear_rewrite_history", "netflow_proxy_groups", "netflow_rules",
                         "netflow_profiles", "netflow_profile_settings", "netflow_update_profile_settings", "netflow_replace_profile_url", "netflow_import_profile", "netflow_update_profile", "netflow_profile_job_status", "netflow_delete_profile",
                         "netflow_backup_create", "netflow_backup_job_status", "netflow_restore_backup", "netflow_backup_schedule", "netflow_backup_schedule_set", "netflow_webdav_config", "netflow_webdav_save", "netflow_webdav_clear", "netflow_webdav_list", "netflow_webdav_upload", "netflow_webdav_restore",
                         "netflow_providers", "netflow_update_provider", "netflow_provider_job_status",
@@ -321,6 +343,9 @@ def main():
                         "netflow_migration_preview", "netflow_migration_import", "netflow_migration_export"}
             if names != expected:
                 raise RuntimeError(f"unexpected MCP tools: {names}")
+            response = rpc({"jsonrpc":"2.0", "id":16, "method":"tools/call", "params":{"name":"netflow_connections", "arguments":{"offset":0,"limit":1}}})
+            if response.get("result", {}).get("isError") or "next_offset" not in response.get("result", {}).get("structuredContent", {}):
+                raise RuntimeError(f"MCP connection page failed: {response}")
             response = rpc({"jsonrpc":"2.0", "id":14, "method":"tools/call", "params":{"name":"netflow_set_tun_autostart", "arguments":{"enabled":True}}})
             if response.get("result", {}).get("isError") or not response.get("result", {}).get("structuredContent", {}).get("enabled") or call("status")["tun"]:
                 raise RuntimeError(f"MCP TUN startup preference failed: {response}")

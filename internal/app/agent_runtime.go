@@ -120,6 +120,11 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 	switch method {
 	case "status":
 		value, callErr = a.agentStatus()
+	case "connections":
+		var input agent.ConnectionsArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentConnections(input)
+		}
 	case "diagnostics":
 		value = a.diagnostics()
 	case "rewrite-history":

@@ -131,7 +131,12 @@ func (a *App) agentStatus() (agent.Status, error) {
 	}
 	st := a.core.Status()
 	connections, _, _ := a.core.Connections()
-	out := agent.Status{Running: st.Running, Headless: a.headless, TUN: st.TUN, TUNPending: a.tunBusy, TUNError: a.tunLastError, GeoPending: a.geoBusy, GeoError: a.geoLastError, GeoRestart: a.geoRestart, TUNStacks: tun.SupportedStacks(), Mode: st.Mode, ActiveProfile: a.core.ProfileID(), Revision: a.rewrites.Snapshot().Revision, Connections: connections, Overrides: a.rewrites.Snapshot()}
+	page, pageErr := connectionPage(connections, agent.ConnectionsArgs{})
+	out := agent.Status{Running: st.Running, Headless: a.headless, TUN: st.TUN, TUNPending: a.tunBusy, TUNError: a.tunLastError, GeoPending: a.geoBusy, GeoError: a.geoLastError, GeoRestart: a.geoRestart, TUNStacks: tun.SupportedStacks(), Mode: st.Mode, ActiveProfile: a.core.ProfileID(), Revision: a.rewrites.Snapshot().Revision, Connections: page.Connections, ConnectionsTotal: len(connections), ConnectionsTruncated: pageErr != nil || page.NextOffset < len(connections), Overrides: a.rewrites.Snapshot()}
+	if pageErr != nil {
+		out.Connections = []conn.Item{}
+		out.ConnectionsWarning = "A connection is too large to display; inspect it in the application."
+	}
 	out.RewriteWarning = a.rewriteWarning
 	if a.rewrites.CheckCurrent() != nil && out.RewriteWarning == "" {
 		out.RewriteWarning = "Rule file changed or is unreadable; inspect it and restart NetFlow."

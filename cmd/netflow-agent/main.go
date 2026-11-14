@@ -25,7 +25,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags.SetOutput(output)
 	flags.Usage = func() {
 		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, kernel-options, kernel-option NAME VALUE|inherit, update-geo, tun on|off, profiles, profile-settings ID, profile-settings-set|profile-url-set (JSON stdin), import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, rewrite-history, clear-rewrite-history, preview|rollback-preview (JSON stdin), preview-rules ID before|after [OFFSET [LIMIT]], cancel-preview ID, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, webdav-config, webdav-clear, webdav-save|webdav-list|webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
-		fmt.Fprintln(output, "tun-autostart [on|off] reads or sets the GUI-only TUN startup preference")
+		fmt.Fprintln(output, "tun-autostart [on|off] reads or sets the GUI-only TUN startup preference; connections [OFFSET [LIMIT]] pages through active connections")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -108,7 +108,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	case "help":
 		flags.Usage()
 		return nil
-	case "diagnostics", "shutdown", "rewrite-history", "clear-rewrite-history", "preview-rules", "kernel-options", "kernel-option", "update-geo", "groups", "profiles", "profile-settings", "profile-settings-set", "profile-url-set", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "webdav-config", "webdav-save", "webdav-clear", "webdav-list", "webdav-upload", "webdav-restore", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun", "tun-autostart":
+	case "diagnostics", "shutdown", "rewrite-history", "clear-rewrite-history", "preview-rules", "kernel-options", "kernel-option", "update-geo", "groups", "profiles", "profile-settings", "profile-settings-set", "profile-url-set", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "webdav-config", "webdav-save", "webdav-clear", "webdav-list", "webdav-upload", "webdav-restore", "providers", "update-provider", "provider-job-status", "rules", "connections", "select", "mode", "use-profile", "close-connection", "tun", "tun-autostart":
 		method := flags.Arg(0)
 		stdin := input
 		var input any
@@ -117,9 +117,9 @@ func run(args []string, input io.Reader, output io.Writer) error {
 			if flags.NArg() != 1 {
 				return fmt.Errorf("%s takes no arguments", method)
 			}
-		case "rules":
+		case "rules", "connections":
 			if flags.NArg() > 3 {
-				return errors.New("rules takes optional OFFSET and LIMIT")
+				return fmt.Errorf("%s takes optional OFFSET and LIMIT", method)
 			}
 			q := agent.RulesArgs{}
 			var err error
@@ -135,7 +135,14 @@ func run(args []string, input io.Reader, output io.Writer) error {
 					return errors.New("invalid rules limit")
 				}
 			}
-			input = q
+			if q.Offset < 0 || q.Limit < 0 || q.Limit > 500 {
+				return errors.New("offset must be nonnegative and limit at most 500")
+			}
+			if method == "connections" {
+				input = agent.ConnectionsArgs{Offset: q.Offset, Limit: q.Limit}
+			} else {
+				input = q
+			}
 		case "preview-rules":
 			if flags.NArg() < 3 || flags.NArg() > 5 || flags.Arg(1) == "" || (flags.Arg(2) != "before" && flags.Arg(2) != "after") {
 				return errors.New("preview-rules requires ID before|after and optional OFFSET and LIMIT")

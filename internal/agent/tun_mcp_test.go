@@ -12,6 +12,13 @@ import (
 func TestMCPRequestsTUN(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := Start(dir, func(_ context.Context, method string, args json.RawMessage) (any, error) {
+		if method == "connections" {
+			var in ConnectionsArgs
+			if json.Unmarshal(args, &in) != nil || in.Offset != 2 || in.Limit != 3 {
+				t.Error("incorrect connection page request")
+			}
+			return ConnectionsResult{Total: 2, Offset: 2, NextOffset: 2}, nil
+		}
 		if method == "tun-autostart" {
 			return TunAutoStartResult{AppliesTo: "gui"}, nil
 		}
@@ -119,6 +126,7 @@ func TestMCPRequestsTUN(t *testing.T) {
 		t.Fatalf("MCP version %q does not match the application version %q", got, netflow.Version())
 	}
 	for _, call := range []*mcp.CallToolParams{
+		{Name: "netflow_connections", Arguments: map[string]any{"offset": 2, "limit": 3}},
 		{Name: "netflow_tun_autostart", Arguments: map[string]any{}},
 		{Name: "netflow_set_tun_autostart", Arguments: map[string]any{"enabled": true}},
 		{Name: "netflow_rewrite_history", Arguments: map[string]any{}},

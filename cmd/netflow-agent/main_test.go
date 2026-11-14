@@ -72,6 +72,31 @@ func TestImportProfileCLIReadsCredentialsFromStdin(t *testing.T) {
 	}
 }
 
+func TestConnectionsCLIPage(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		var in agent.ConnectionsArgs
+		if method != "connections" || json.Unmarshal(raw, &in) != nil || in.Offset != 2 || in.Limit != 3 {
+			return nil, errors.New("unexpected connection page request")
+		}
+		return agent.ConnectionsResult{Total: 2, Offset: 2, NextOffset: 2}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	var out bytes.Buffer
+	if err := run([]string{"--config-dir", dir, "connections", "2", "3"}, strings.NewReader(""), &out); err != nil || !strings.Contains(out.String(), `"next_offset":2`) {
+		t.Fatalf("connection page: %s %v", out.String(), err)
+	}
+	for _, args := range [][]string{{"-1"}, {"0", "501"}, {"invalid"}, {"0", "1", "extra"}} {
+		out.Reset()
+		if err := run(append([]string{"--config-dir", dir, "connections"}, args...), strings.NewReader(""), &out); err == nil {
+			t.Fatalf("accepted invalid connection arguments: %v", args)
+		}
+	}
+}
+
 func TestKernelOptionCLI(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {

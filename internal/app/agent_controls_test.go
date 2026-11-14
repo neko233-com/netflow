@@ -2,17 +2,74 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appconfig"
 	"github.com/neko233-com/netflow/internal/appdir"
+	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
+	"github.com/neko233-com/netflow/internal/profile"
+	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/rules"
 	"github.com/neko233-com/netflow/internal/sysproxy"
 	"github.com/neko233-com/netflow/internal/tun"
 )
+
+type pagingTestEngine struct {
+	*switchTestEngine
+	items     []conn.Item
+	ruleItems []rules.Item
+}
+
+func (e *pagingTestEngine) Connections() ([]conn.Item, int64, int64) { return e.items, 0, 0 }
+func (e *pagingTestEngine) Rules() []rules.Item                      { return e.ruleItems }
+
+func TestAgentConnectionAndRulePages(t *testing.T) {
+	items := make([]conn.Item, 300)
+	for i := range items {
+		items[i] = conn.Item{ID: fmt.Sprintf("%04d", len(items)-i), Host: "example.invalid"}
+	}
+	engine := &pagingTestEngine{switchTestEngine: &switchTestEngine{running: true}, items: items}
+	dir := t.TempDir()
+	rw, err := rewrite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &App{core: engine, rewrites: rw, profiles: profile.NewStore(dir)}
+	status, err := a.agentStatus()
+	if err != nil || status.ConnectionsTotal != 300 || !status.ConnectionsTruncated || len(status.Connections) != 100 || status.Connections[0].ID != "0001" {
+		t.Fatalf("unexpected status page: %+v %v", status, err)
+	}
+	page, err := a.agentConnections(agent.ConnectionsArgs{Offset: 100, Limit: 200})
+	if err != nil || page.Total != 300 || page.NextOffset != 300 || page.Connections[0].ID != "0101" || items[0].ID != "0300" {
+		t.Fatalf("unstable connection page: %+v %v", page, err)
+	}
+	if _, err := a.agentConnections(agent.ConnectionsArgs{Limit: 501}); err == nil {
+		t.Fatal("invalid limit accepted")
+	}
+	engine.items = []conn.Item{{ID: "1", Host: strings.Repeat("<", maxAgentPageBytes)}}
+	status, err = a.agentStatus()
+	if err != nil || !status.ConnectionsTruncated || status.ConnectionsWarning == "" || len(status.Connections) != 0 {
+		t.Fatalf("oversized connection blocked status: %+v %v", status, err)
+	}
+	if _, err := a.agentConnections(agent.ConnectionsArgs{}); err == nil {
+		t.Fatal("oversized connection accepted")
+	}
+	engine.ruleItems = []rules.Item{{Type: "DOMAIN", Payload: strings.Repeat("<", 30000), Proxy: "DIRECT"}, {Type: "DOMAIN", Payload: strings.Repeat("<", 30000), Proxy: "DIRECT"}, {Type: "MATCH", Proxy: "DIRECT"}}
+	first, err := a.agentRules(agent.RulesArgs{Limit: 3})
+	if err != nil || first.Total != 3 || first.NextOffset != 1 {
+		t.Fatalf("rule byte bound: %+v %v", first, err)
+	}
+	second, err := a.agentRules(agent.RulesArgs{Offset: first.NextOffset, Limit: 3})
+	if err != nil || second.NextOffset != 3 {
+		t.Fatalf("rule continuation: %+v %v", second, err)
+	}
+}
 
 func TestAgentControlsOperateOnRealCore(t *testing.T) {
 	dir := t.TempDir()

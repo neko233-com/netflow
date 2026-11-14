@@ -17,10 +17,16 @@ type Empty struct{}
 // local bridge. No subscription URLs, core secrets, or token are returned.
 func NewMCP(client Client) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "netflow", Version: netflow.Version()}, nil)
-	mcp.AddTool(s, &mcp.Tool{Name: "netflow_status", Description: "List the running core, profiles, active connections and agent-managed rewrite state. Subscription URLs are omitted.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_status", Description: "List core status, profiles, a bounded first page of active connections, and agent-managed rewrite state. Subscription URLs are omitted.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, Status, error) {
 			var out Status
 			err := client.Call(ctx, "status", nil, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_connections", Description: "Page through active connections sorted by ID. Each request sees a fresh live snapshot, so connections opening or closing can shift offsets; pages may be shorter than requested. Use next_offset.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in ConnectionsArgs) (*mcp.CallToolResult, ConnectionsResult, error) {
+			var out ConnectionsResult
+			err := client.Call(ctx, "connections", in, &out)
 			return nil, out, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_diagnostics", Description: "Return an allowlisted diagnostics summary without subscription URLs, file paths, error text, tokens, or connection metadata.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
@@ -251,7 +257,7 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "provider-job-status", args, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "netflow_rules", Description: "Read a page of active kernel rules in evaluation order.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in RulesArgs) (*mcp.CallToolResult, RulesResult, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_rules", Description: "Read active kernel rules in evaluation order. Pages may be shorter than requested; use next_offset until total. The list can change on reload.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in RulesArgs) (*mcp.CallToolResult, RulesResult, error) {
 		var out RulesResult
 		err := client.Call(ctx, "rules", in, &out)
 		return nil, out, err

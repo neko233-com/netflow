@@ -1,11 +1,60 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 
 	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/conn"
 )
+
+const maxAgentPageBytes = 256 << 10
+
+func connectionPage(items []conn.Item, in agent.ConnectionsArgs) (agent.ConnectionsResult, error) {
+	if in.Offset < 0 || in.Limit < 0 || in.Limit > 500 {
+		return agent.ConnectionsResult{}, errors.New("offset must be nonnegative and limit must be at most 500")
+	}
+	if in.Limit == 0 {
+		in.Limit = 100
+	}
+	items = append([]conn.Item(nil), items...)
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	if in.Offset > len(items) {
+		in.Offset = len(items)
+	}
+	out := agent.ConnectionsResult{Total: len(items), Offset: in.Offset, NextOffset: in.Offset, Connections: []conn.Item{}}
+	encodedBytes := 2
+	for out.NextOffset < len(items) && len(out.Connections) < in.Limit {
+		item := items[out.NextOffset]
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return agent.ConnectionsResult{}, err
+		}
+		if len(encoded)+2 > maxAgentPageBytes {
+			if len(out.Connections) > 0 {
+				break
+			}
+			return agent.ConnectionsResult{}, errors.New("one connection exceeds the page size limit")
+		}
+		if encodedBytes+len(encoded)+1 > maxAgentPageBytes {
+			break
+		}
+		encodedBytes += len(encoded) + 1
+		out.Connections = append(out.Connections, item)
+		out.NextOffset++
+	}
+	return out, nil
+}
+
+func (a *App) agentConnections(in agent.ConnectionsArgs) (agent.ConnectionsResult, error) {
+	if a == nil || a.core == nil || !a.core.Status().Running {
+		return agent.ConnectionsResult{}, errors.New("core is not running")
+	}
+	items, _, _ := a.core.Connections()
+	return connectionPage(items, in)
+}
 
 func (a *App) agentGroups() (agent.GroupsResult, error) {
 	if a == nil || a.core == nil || !a.core.Status().Running || a.model == nil {
@@ -66,13 +115,27 @@ func (a *App) agentRules(in agent.RulesArgs) (agent.RulesResult, error) {
 	if offset > len(items) {
 		offset = len(items)
 	}
-	end := offset + in.Limit
-	if end > len(items) {
-		end = len(items)
-	}
-	out := agent.RulesResult{Total: len(items), Offset: offset, Rules: []agent.Rule{}}
-	for _, item := range items[offset:end] {
-		out.Rules = append(out.Rules, agent.Rule{Type: item.Type, Payload: item.Payload, Policy: item.Proxy})
+	out := agent.RulesResult{Total: len(items), Offset: offset, NextOffset: offset, Rules: []agent.Rule{}}
+	encodedBytes := 2
+	for out.NextOffset < len(items) && len(out.Rules) < in.Limit {
+		item := items[out.NextOffset]
+		rule := agent.Rule{Type: item.Type, Payload: item.Payload, Policy: item.Proxy}
+		encoded, err := json.Marshal(rule)
+		if err != nil {
+			return agent.RulesResult{}, err
+		}
+		if len(encoded)+2 > maxAgentPageBytes {
+			if len(out.Rules) > 0 {
+				break
+			}
+			return agent.RulesResult{}, errors.New("one rule exceeds the page size limit")
+		}
+		if encodedBytes+len(encoded)+1 > maxAgentPageBytes {
+			break
+		}
+		encodedBytes += len(encoded) + 1
+		out.Rules = append(out.Rules, rule)
+		out.NextOffset++
 	}
 	return out, nil
 }

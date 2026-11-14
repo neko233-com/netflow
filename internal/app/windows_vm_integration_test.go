@@ -316,6 +316,10 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if !status.TUN || !status.Headless {
 		t.Fatalf("headless TUN did not start: %+v", status)
 	}
+	var connectionPage agent.ConnectionsResult
+	if output, err := call("connections", "0", "1"); err != nil || json.Unmarshal(output, &connectionPage) != nil || connectionPage.NextOffset > connectionPage.Total {
+		t.Fatalf("installed headless connection page failed: %s %v", output, err)
+	}
 	{
 		settingsPath := filepath.Join(dir, "settings.json")
 		original, err := os.ReadFile(settingsPath)

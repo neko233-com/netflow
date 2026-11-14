@@ -197,7 +197,22 @@ type Status struct {
 	Revision             uint64        `json:"revision"`
 	Profiles             []Profile     `json:"profiles"`
 	Connections          []conn.Item   `json:"connections"`
+	ConnectionsTotal     int           `json:"connections_total"`
+	ConnectionsTruncated bool          `json:"connections_truncated"`
+	ConnectionsWarning   string        `json:"connections_warning,omitempty"`
 	Overrides            rewrite.State `json:"overrides"`
+}
+
+type ConnectionsArgs struct {
+	Offset int `json:"offset,omitempty" jsonschema:"zero-based offset in the current live connection list"`
+	Limit  int `json:"limit,omitempty" jsonschema:"maximum items, 1 to 500; default 100"`
+}
+
+type ConnectionsResult struct {
+	Total       int         `json:"total"`
+	Offset      int         `json:"offset"`
+	NextOffset  int         `json:"next_offset"`
+	Connections []conn.Item `json:"connections"`
 }
 
 // Diagnostics deliberately excludes configuration contents, paths, profile
@@ -337,9 +352,10 @@ type Rule struct {
 	Policy  string `json:"policy"`
 }
 type RulesResult struct {
-	Total  int    `json:"total"`
-	Offset int    `json:"offset"`
-	Rules  []Rule `json:"rules"`
+	Total      int    `json:"total"`
+	Offset     int    `json:"offset"`
+	NextOffset int    `json:"next_offset"`
+	Rules      []Rule `json:"rules"`
 }
 
 // TunArgs requests a user-visible TUN transition. Enabling may prompt for UAC.
