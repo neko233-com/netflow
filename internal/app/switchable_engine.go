@@ -32,6 +32,20 @@ type switchableEngine struct {
 	generation   uint64
 }
 
+type stoppedHandoff struct {
+	status     core.Status
+	profileID  string
+	generation uint64
+}
+
+var errHandoffBusy = errors.New("内核正忙，请等待网络操作完成后重试")
+
+func (s *switchableEngine) handoffSnapshot() stoppedHandoff {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return stoppedHandoff{status: s.active.Status(), profileID: s.active.ProfileID(), generation: s.generation}
+}
+
 func newSwitchableEngine(active coreEngine) *switchableEngine {
 	return &switchableEngine{active: active, logs: make(map[uint64]*engineLogSubscription)}
 }
@@ -241,6 +255,16 @@ func (s *switchableEngine) startLogs() {
 // settings and restart the previous engine. before and undo run under the same
 // lock as all engine calls and must not themselves call this wrapper.
 func (s *switchableEngine) replace(next coreEngine, before func() error, commit func() error, undo func() error) (result error) {
+	return s.replaceInternal(next, before, commit, undo, nil)
+}
+
+// replaceStopped performs the same transactional handoff after the previous
+// engine has been stopped asynchronously. The snapshot binds it to that engine.
+func (s *switchableEngine) replaceStopped(next coreEngine, before func() error, commit func() error, undo func() error, stopped stoppedHandoff) error {
+	return s.replaceInternal(next, before, commit, undo, &stopped)
+}
+
+func (s *switchableEngine) replaceInternal(next coreEngine, before func() error, commit func() error, undo func() error, stopped *stoppedHandoff) (result error) {
 	if next == nil {
 		return errors.New("new kernel is unavailable")
 	}
@@ -255,26 +279,35 @@ func (s *switchableEngine) replace(next coreEngine, before func() error, commit 
 		}
 	}()
 	if !s.mu.TryLock() {
-		return errors.New("内核正忙，请等待网络操作完成后重试")
+		return errHandoffBusy
 	}
 	defer s.mu.Unlock()
-	s.generation++
 	old := s.active
 	status := old.Status()
-	if !status.Running || status.ConfigDir == "" {
-		return errors.New("内核未运行，无法切换进程")
-	}
 	id := old.ProfileID()
-	s.stopLogs()
-	if err := old.Stop(); err != nil {
-		if errors.Is(err, coreipc.ErrKernelStoppedBeforeFinalization) {
-			if restartErr := old.Start(status.ConfigDir); restartErr != nil {
-				s.startLogs()
-				return errors.Join(err, fmt.Errorf("恢复原内核失败: %w", restartErr))
-			}
+	if stopped == nil {
+		if !status.Running || status.ConfigDir == "" {
+			return errors.New("内核未运行，无法切换进程")
 		}
-		s.startLogs()
-		return err
+	} else {
+		if s.generation != stopped.generation || status.Running || !stopped.status.Running || stopped.status.ConfigDir == "" || id != stopped.profileID {
+			return errors.New("已停止内核的状态发生变化，无法交接")
+		}
+		status, id = stopped.status, stopped.profileID
+	}
+	s.generation++
+	s.stopLogs()
+	if stopped == nil {
+		if err := old.Stop(); err != nil {
+			if errors.Is(err, coreipc.ErrKernelStoppedBeforeFinalization) {
+				if restartErr := old.Start(status.ConfigDir); restartErr != nil {
+					s.startLogs()
+					return errors.Join(err, fmt.Errorf("恢复原内核失败: %w", restartErr))
+				}
+			}
+			s.startLogs()
+			return err
+		}
 	}
 	if source, ok := old.(interface{ CacheWarning() string }); ok {
 		if warning := source.CacheWarning(); warning != "" {

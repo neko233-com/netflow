@@ -47,6 +47,27 @@ func TestSwitchTransfersFakeIPBeforeStartingNextKernel(t *testing.T) {
 	}
 }
 
+func TestStoppedHandoffTransfersFakeIPAndRejectsStaleSnapshot(t *testing.T) {
+	state := &mihomodns.FakeIPState{IPv4: &fakeip.Snapshot{Prefix: "198.18.0.1/16", Offset: "198.18.0.4"}}
+	old := &fakeStateEngine{switchTestEngine: &switchTestEngine{running: true, dir: t.TempDir(), id: "profile"}, state: state}
+	s := newSwitchableEngine(old)
+	snapshot := s.handoffSnapshot()
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	next := &fakeStateEngine{switchTestEngine: &switchTestEngine{}}
+	if err := s.replaceStopped(next, nil, nil, nil, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if !next.running || !next.staged || next.state != state || !old.closed {
+		t.Fatal("stopped handoff lost Fake-IP state")
+	}
+	stale := &fakeStateEngine{switchTestEngine: &switchTestEngine{}}
+	if err := s.replaceStopped(stale, nil, nil, nil, snapshot); err == nil || !stale.closed {
+		t.Fatal("stale stopped handoff was accepted")
+	}
+}
+
 func TestSwitchRollsBackWhenFakeIPExportFails(t *testing.T) {
 	old := &fakeStateEngine{switchTestEngine: &switchTestEngine{running: true, dir: t.TempDir()}, exportErr: errors.New("snapshot failed")}
 	next := &fakeStateEngine{switchTestEngine: &switchTestEngine{}}

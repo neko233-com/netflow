@@ -1093,6 +1093,9 @@ func selectorGroup(kind string) bool {
 // profile-switch half of activateSelected. Startup does the same work
 // from Prepare via loadProfiles and loadGroups.
 func (a *App) UseProfile(uid string) error {
+	if a != nil && a.tunBusy {
+		return errors.New("虚拟网卡正在切换，请稍后重试")
+	}
 	if a != nil && a.chain.Load() != nil && a.core != nil && a.core.ProfileID() != uid {
 		return errors.New("请先断开链式代理，再切换订阅")
 	}
@@ -1252,6 +1255,9 @@ func (a *App) bindHooks() {
 }
 
 func (a *App) saveProfileMetadata(form ui.ProfileForm) error {
+	if a.tunBusy {
+		return errors.New("虚拟网卡正在切换，请稍后重试")
+	}
 	if a.profiles == nil {
 		return errors.New("订阅存储不可用")
 	}
@@ -1289,6 +1295,9 @@ func (a *App) SetAutoLaunch(on bool) error {
 func (a *App) SelectProxy(group, node string) error {
 	if a == nil {
 		return nil
+	}
+	if a.tunBusy {
+		return errors.New("虚拟网卡正在切换，请稍后重试")
 	}
 	if active := a.chain.Load(); active != nil && active.Spec.Target == group {
 		return errors.New("请先断开链式代理，再更换目标组节点")
@@ -1350,6 +1359,9 @@ func (a *App) persistSelection(group, node string) error {
 
 // SetMode writes the profile mode and reloads the kernel when it is running.
 func (a *App) SetMode(mode string) error {
+	if a != nil && a.tunBusy {
+		return errors.New("虚拟网卡正在切换，请稍后重试")
+	}
 	if a != nil && a.chain.Load() != nil && a.core != nil && a.core.Status().Mode != mode {
 		return errors.New("请先断开链式代理，再切换模式")
 	}
@@ -1398,6 +1410,9 @@ func (a *App) SetMode(mode string) error {
 // ImportURL stores a remote subscription and, when it is the current one,
 // installs it as the kernel profile.
 func (a *App) ImportURL(raw string) error {
+	if a.tunBusy {
+		return errors.New("虚拟网卡正在切换，请稍后重试")
+	}
 	client := newSubscriptionClient("", 20*time.Second, false)
 	defer client.CloseIdleConnections()
 	result, err := fetchProfileResponse(raw, client, "")
@@ -1413,6 +1428,9 @@ func (a *App) importURLData(raw string, body []byte, headers http.Header) error 
 }
 
 func (a *App) importURLDataConfigured(raw string, body []byte, headers http.Header, metadata *profile.RemoteMetadata) (string, error) {
+	if a.tunBusy {
+		return "", errors.New("虚拟网卡正在切换，请稍后重试")
+	}
 	if a.profiles == nil {
 		a.profiles = profile.NewStore(a.dir)
 	}
@@ -1445,6 +1463,9 @@ func (a *App) importURLDataConfigured(raw string, body []byte, headers http.Head
 }
 
 func (a *App) ImportLocal(path string) error {
+	if a.tunBusy {
+		return errors.New("虚拟网卡正在切换，请稍后重试")
+	}
 	if a.profiles == nil {
 		a.profiles = profile.NewStore(a.dir)
 	}
@@ -1490,6 +1511,9 @@ func (a *App) finishProfileImport(previous, uid string) error {
 }
 
 func (a *App) DeleteProfile(uid string) error {
+	if a.tunBusy {
+		return errors.New("虚拟网卡正在切换，请稍后重试")
+	}
 	if a.profiles == nil {
 		return errors.New("订阅存储不可用")
 	}
@@ -1605,6 +1629,9 @@ func (a *App) openDir(kind string) {
 }
 
 func (a *App) restartCore() error {
+	if a.tunBusy {
+		return errors.New("虚拟网卡正在切换，请稍后重试")
+	}
 	if a.core == nil || a.dir == "" {
 		return nil
 	}

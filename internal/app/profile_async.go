@@ -200,6 +200,10 @@ func (a *App) createProfileAsync(form ui.ProfileForm, done func(error)) {
 // createProfileWithResult commits metadata with the new catalog entry and
 // reports a possible identifier if activation rollback cannot be confirmed.
 func (a *App) createProfileWithResult(form ui.ProfileForm, done func(string, error)) {
+	if a.tunBusy {
+		done("", fmt.Errorf("虚拟网卡正在切换，请稍后重试"))
+		return
+	}
 	raw := strings.TrimSpace(form.URL)
 	if form.Timeout < 1 || form.Timeout > 300 || form.Interval < 1 || form.Interval > 43200 {
 		done("", fmt.Errorf("下载超时须在 1 到 300 秒之间，更新间隔须在 1 到 43200 分钟之间"))

@@ -1426,7 +1426,7 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entered, release := make(chan struct{}), make(chan struct{})
+	entered, release, canceled := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	var slow atomic.Bool
@@ -1447,6 +1447,7 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 			select {
 			case <-release:
 			case <-r.Context().Done():
+				close(canceled)
 				return
 			}
 		}
@@ -1493,8 +1494,21 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	if !status.TUN {
 		t.Fatalf("provider busy test did not start TUN: %+v", status)
 	}
-	slow.Store(true)
 	var job agent.ProviderJob
+	if err := client.Call(context.Background(), "update-provider", agent.ProviderUpdateArgs{Kind: "proxy", Name: "slow"}, &job); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for job.State == "pending" && time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		if err := client.Call(context.Background(), "provider-job-status", agent.ProviderJobArgs{JobID: job.JobID}, &job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if job.State != "succeeded" {
+		t.Fatalf("initial provider update failed: %+v", job)
+	}
+	slow.Store(true)
 	if err := client.Call(context.Background(), "update-provider", agent.ProviderUpdateArgs{Kind: "proxy", Name: "slow"}, &job); err != nil {
 		t.Fatal(err)
 	}
@@ -1507,26 +1521,30 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	var result agent.TunResult
 	started := time.Now()
 	err = client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &off}, &result)
-	if err == nil || !strings.Contains(err.Error(), "内核正忙") || time.Since(started) >= 5*time.Second {
-		t.Fatalf("TUN off did not return busy promptly: %v", err)
+	if err != nil || !result.Accepted || time.Since(started) >= 5*time.Second {
+		t.Fatalf("TUN off was not accepted promptly: %+v %v", result, err)
 	}
 	status = agent.Status{}
-	if err := client.Call(context.Background(), "status", nil, &status); err != nil || !status.TUN {
-		t.Fatalf("busy request changed TUN or blocked status: %+v %v", status, err)
+	if err := client.Call(context.Background(), "status", nil, &status); err != nil {
+		t.Fatalf("status blocked during TUN off: %+v %v", status, err)
 	}
-	unblock()
+	select {
+	case <-canceled:
+	case <-time.After(20 * time.Second):
+		t.Fatal("TUN off did not cancel provider request")
+	}
 	deadline = time.Now().Add(30 * time.Second)
-	for job.State == "pending" && time.Now().Before(deadline) {
-		time.Sleep(200 * time.Millisecond)
-		if err := client.Call(context.Background(), "provider-job-status", agent.ProviderJobArgs{JobID: job.JobID}, &job); err != nil {
-			t.Fatal(err)
+	for time.Now().Before(deadline) {
+		if err := client.Call(context.Background(), "status", nil, &status); err == nil && !status.TUN && !status.TUNPending {
+			break
 		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	if job.State != "succeeded" {
-		t.Fatalf("provider did not complete: %+v", job)
+	if status.TUN || status.TUNPending || !status.Running {
+		t.Fatalf("TUN off did not complete: %+v", status)
 	}
-	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &off}, &result); err != nil {
-		t.Fatalf("TUN retry failed: %v", err)
+	if data, err := os.ReadFile(filepath.Join(dir, "providers", "slow.yaml")); err != nil || !strings.Contains(string(data), "fresh") {
+		t.Fatal("TUN off lost previously completed provider cache")
 	}
 	on := true
 	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &on}, &result); err != nil {
@@ -1577,7 +1595,7 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	for time.Now().Before(deadline) {
 		routes, dns, e := vmNetworkSnapshot()
 		if e == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
-			t.Log("busy provider returned promptly; retry stopped TUN; shutdown canceled stalled update and restored networking")
+			t.Log("TUN off and shutdown canceled stalled provider updates, preserved cache and restored networking")
 			return
 		}
 		time.Sleep(time.Second)

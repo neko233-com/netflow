@@ -53,6 +53,9 @@ func composeProfileDNSFromCatalog(data []byte, id string, catalog profile.File) 
 }
 
 func (a *App) setProfileDNS(id string, enabled bool, text string) error {
+	if a.tunBusy {
+		return errors.New("虚拟网卡正在切换，请稍后重试")
+	}
 	if a.profiles == nil || a.core == nil || !a.core.Status().Running || a.core.ProfileID() != id {
 		return errors.New("当前订阅或内核不可用")
 	}

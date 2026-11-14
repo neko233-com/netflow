@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -318,6 +319,196 @@ func TestTUNBusyReloadRestoresSettingsWithoutRetryingReload(t *testing.T) {
 	engine.busy = false
 	if err := a.setDirectTUN(false); err != nil || a.settings.TUN || engine.tun {
 		t.Fatalf("retry did not stop TUN: %v", err)
+	}
+}
+
+type blockedBusyWorker struct {
+	*busyTUNEngine
+	started, release chan struct{}
+	stopError        error
+}
+
+func (e *blockedBusyWorker) Stop() error {
+	close(e.started)
+	<-e.release
+	if e.stopError != nil {
+		if errors.Is(e.stopError, coreipc.ErrKernelStoppedBeforeFinalization) {
+			e.running, e.tun = false, false
+		}
+		return e.stopError
+	}
+	e.running, e.tun = false, false
+	return nil
+}
+
+func TestBusyWorkerTUNOffStopsAsynchronouslyAndRecovers(t *testing.T) {
+	for _, tc := range []struct {
+		name                                        string
+		failStart, failSave, failStop, failFinalize bool
+	}{
+		{name: "success"}, {name: "local start failure", failStart: true}, {name: "settings failure", failSave: true}, {name: "stop failure", failStop: true},
+		{name: "stop finalization failure", failFinalize: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := appconfig.NewMemory(t.TempDir())
+			settings := appconfig.Settings{TUN: true}
+			if err := store.Save(settings); err != nil {
+				t.Fatal(err)
+			}
+			if tc.failSave {
+				store.FailSave(errors.New("synthetic settings failure"))
+			}
+			old := &blockedBusyWorker{busyTUNEngine: &busyTUNEngine{switchTestEngine: &switchTestEngine{running: true, tun: true, dir: "config", id: "profile"}, busy: true}, started: make(chan struct{}), release: make(chan struct{})}
+			if tc.failStop {
+				old.stopError = errors.New("synthetic stop failure")
+			}
+			if tc.failFinalize {
+				old.stopError = coreipc.ErrKernelStoppedBeforeFinalization
+			}
+			next := &switchTestEngine{failStart: tc.failStart}
+			dispatch := newSerialDispatcher()
+			defer dispatch.close()
+			a := &App{store: store, core: newSwitchableEngine(old), settings: settings, privilegedTUN: true, dispatch: dispatch.call, localCoreFactory: func() coreEngine { return next }}
+			old.onStart = func() { old.tun = a.settings.TUN }
+			result := make(chan error, 1)
+			dispatch.call(func() { a.requestTUN(false, func(err error) { result <- err }) })
+			select {
+			case <-old.started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("worker stop did not start")
+			}
+			var pending bool
+			var updateErr error
+			var mutationErrors []error
+			dispatch.call(func() {
+				pending = a.tunBusy
+				a.updateProxyProviderAsync("x", func(err error) { updateErr = err })
+				mutationErrors = []error{a.UseProfile("x"), a.SelectProxy("g", "n"), a.SetMode("rule"), a.DeleteProfile("x"), a.ImportLocal("missing"), a.setProfileDNS("x", false, ""), a.restartCore()}
+			})
+			if !pending || updateErr == nil {
+				close(old.release)
+				t.Fatal("transition did not block new provider updates")
+			}
+			for _, mutationErr := range mutationErrors {
+				if mutationErr == nil || !strings.Contains(mutationErr.Error(), "虚拟网卡正在切换") {
+					close(old.release)
+					t.Fatalf("mutation not blocked during transition: %v", mutationErr)
+				}
+			}
+			select {
+			case <-result:
+				close(old.release)
+				t.Fatal("request completed before worker stopped")
+			default:
+			}
+			close(old.release)
+			var err error
+			select {
+			case err = <-result:
+			case <-time.After(5 * time.Second):
+				t.Fatal("TUN off did not finish")
+			}
+			var current appconfig.Settings
+			var privileged, busy bool
+			dispatch.call(func() { current = a.settings; privileged = a.privilegedTUN; busy = a.tunBusy })
+			if busy {
+				t.Fatal("transition remained busy")
+			}
+			if tc.failStop {
+				if err == nil || !current.TUN || !old.running || !old.tun {
+					t.Fatalf("failed stop changed state: %v %+v", err, current)
+				}
+				return
+			}
+			if current.TUN {
+				t.Fatal("TUN setting remained on")
+			}
+			if tc.failStart {
+				if err == nil || !privileged || !old.running || old.tun {
+					t.Fatalf("old worker was not restored with TUN off: %v", err)
+				}
+			} else if !next.running || privileged || ((tc.failSave || tc.failFinalize) && err == nil) || (!tc.failSave && !tc.failFinalize && err != nil) {
+				t.Fatalf("unexpected handoff state: err=%v privileged=%v", err, privileged)
+			}
+			if !tc.failSave {
+				saved, e := store.Load()
+				if e != nil || saved.TUN {
+					t.Fatalf("TUN off was not saved: %+v %v", saved, e)
+				}
+			}
+		})
+	}
+}
+
+func TestAgentTUNOffReportsPendingWithoutWaitingForBusyWorker(t *testing.T) {
+	store := appconfig.NewMemory(t.TempDir())
+	settings := appconfig.Settings{TUN: true}
+	if err := store.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+	old := &blockedBusyWorker{busyTUNEngine: &busyTUNEngine{switchTestEngine: &switchTestEngine{running: true, tun: true, dir: "config", id: "profile"}, busy: true}, started: make(chan struct{}), release: make(chan struct{})}
+	next := &switchTestEngine{}
+	dispatch := newSerialDispatcher()
+	defer dispatch.close()
+	a := &App{store: store, core: newSwitchableEngine(old), settings: settings, privilegedTUN: true, dispatch: dispatch.call, localCoreFactory: func() coreEngine { return next }}
+	var value any
+	var err error
+	dispatch.call(func() { value, err = a.agentCommand("tun", json.RawMessage(`{"enabled":false}`)) })
+	result, ok := value.(agent.TunResult)
+	if err != nil || !ok || !result.Accepted || !result.Pending || !result.TUN {
+		close(old.release)
+		t.Fatalf("unexpected pending result: %+v %v", value, err)
+	}
+	select {
+	case <-old.started:
+	case <-time.After(5 * time.Second):
+		close(old.release)
+		t.Fatal("worker stop did not start")
+	}
+	close(old.release)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var pending bool
+		dispatch.call(func() { pending = a.tunBusy })
+		if !pending {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("TUN transition remained pending")
+}
+
+func TestBusyWorkerHandoffRetriesWhileReaderFinishes(t *testing.T) {
+	store := appconfig.NewMemory(t.TempDir())
+	settings := appconfig.Settings{TUN: true}
+	if err := store.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+	old := &blockedBusyWorker{busyTUNEngine: &busyTUNEngine{switchTestEngine: &switchTestEngine{running: true, tun: true, dir: "config"}, busy: true}, started: make(chan struct{}), release: make(chan struct{})}
+	sw := newSwitchableEngine(old)
+	dispatch := newSerialDispatcher()
+	defer dispatch.close()
+	created := make(chan struct{}, 10)
+	a := &App{store: store, core: sw, settings: settings, privilegedTUN: true, dispatch: dispatch.call, localCoreFactory: func() coreEngine { created <- struct{}{}; return &switchTestEngine{} }}
+	result := make(chan error, 1)
+	dispatch.call(func() { a.requestTUN(false, func(err error) { result <- err }) })
+	<-old.started
+	sw.mu.RLock()
+	close(old.release)
+	select {
+	case <-created:
+	case <-time.After(5 * time.Second):
+		sw.mu.RUnlock()
+		t.Fatal("handoff did not attempt while reader held lock")
+	}
+	sw.mu.RUnlock()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handoff did not retry")
 	}
 }
 

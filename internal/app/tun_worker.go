@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/neko233-com/netflow/internal/core"
+	"github.com/neko233-com/netflow/internal/coreipc"
 	"github.com/neko233-com/netflow/internal/tun"
 )
 
@@ -68,7 +69,14 @@ func (a *App) requestTUN(on bool, done func(error)) {
 		}
 	}
 	if !on || a.tunAllowed() {
-		finish(a.SetTUN(on))
+		err := a.SetTUN(on)
+		if !on && errors.Is(err, coreipc.ErrKernelBusy) && a.privilegedTUN {
+			if sw, ok := a.core.(*switchableEngine); ok {
+				a.stopBusyWorkerTUN(sw, finish)
+				return
+			}
+		}
+		finish(err)
 		return
 	}
 	if !canLaunchTUNWorker() {
@@ -105,6 +113,72 @@ func (a *App) requestTUN(on bool, done func(error)) {
 				_ = c.Close()
 			}
 		}
+	}()
+}
+
+// stopBusyWorkerTUN cancels worker activity off the event loop, then transfers
+// its stopped kernel state to a normal kernel without re-enabling TUN.
+func (a *App) stopBusyWorkerTUN(sw *switchableEngine, finish func(error)) {
+	snapshot := sw.handoffSnapshot()
+	if !snapshot.status.Running || snapshot.status.ConfigDir == "" {
+		finish(errors.New("内核未运行，无法关闭虚拟网卡"))
+		return
+	}
+	a.tunBusy = true
+	go func() {
+		stopErr := sw.Stop()
+		a.runOnMain(func() {
+			if stopErr != nil && !errors.Is(stopErr, coreipc.ErrKernelStoppedBeforeFinalization) {
+				a.tunBusy = false
+				a.refreshHome()
+				finish(fmt.Errorf("停止特权内核失败: %w", stopErr))
+				return
+			}
+			a.settings.TUN = false
+			saveErr := a.store.Save(a.settings)
+			a.refreshHome()
+			deadline := time.Now().Add(5 * time.Second)
+			var attempt func()
+			attempt = func() {
+				var local coreEngine = core.New()
+				if a.localCoreFactory != nil {
+					local = a.localCoreFactory()
+				}
+				err := sw.replaceStopped(local,
+					func() error { a.privilegedTUN = false; return nil }, nil,
+					func() error { a.privilegedTUN = true; return nil }, snapshot)
+				if errors.Is(err, errHandoffBusy) && time.Now().Before(deadline) {
+					time.AfterFunc(25*time.Millisecond, func() { a.runOnMain(attempt) })
+					return
+				}
+				if err != nil && !sw.Status().Running {
+					if restartErr := sw.Start(snapshot.status.ConfigDir); restartErr != nil {
+						err = errors.Join(err, fmt.Errorf("恢复关闭 TUN 的原内核失败: %w", restartErr))
+					}
+				}
+				if err == nil && a.model != nil {
+					a.loadGroups()
+				}
+				a.tunBusy = false
+				a.refreshHome()
+				var warnings []error
+				if stopErr != nil {
+					warnings = append(warnings, stopErr)
+				}
+				if saveErr != nil {
+					warnings = append(warnings, fmt.Errorf("设置保存失败: %w", saveErr))
+				}
+				if err != nil {
+					warnings = append(warnings, fmt.Errorf("切换普通内核失败: %w", err))
+				}
+				if len(warnings) != 0 {
+					finish(fmt.Errorf("虚拟网卡已关闭，但%w", errors.Join(warnings...)))
+					return
+				}
+				finish(nil)
+			}
+			attempt()
+		})
 	}()
 }
 

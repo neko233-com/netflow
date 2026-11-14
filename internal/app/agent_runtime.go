@@ -811,6 +811,7 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 			} else {
 				var completed, returned bool
 				var immediateErr error
+				previousTUN := a.core.Status().TUN
 				a.requestTUN(*input.Enabled, func(err error) {
 					a.tunActionDone(err)
 					if !returned {
@@ -820,7 +821,10 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 				returned = true
 				callErr = immediateErr
 				if !completed || callErr == nil {
-					value = agent.TunResult{Accepted: true, Pending: !completed, TUN: a.core.Status().TUN}
+					if completed {
+						previousTUN = a.core.Status().TUN
+					}
+					value = agent.TunResult{Accepted: true, Pending: !completed, TUN: previousTUN}
 				}
 			}
 		}
@@ -932,7 +936,9 @@ func (a *App) expiryLoop(stop <-chan struct{}) {
 					a.pruneExpiredProposals(time.Now())
 					a.pruneExpiredChainProposals(time.Now())
 				}
-				if !expired {
+				// The handoff is composing a stopped kernel. Retry expiration on
+				// the next tick instead of mutating its rule snapshot mid-switch.
+				if !expired || a.tunBusy {
 					return
 				}
 				if err := a.expireRules(time.Now()); err != nil {

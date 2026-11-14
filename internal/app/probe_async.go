@@ -83,6 +83,10 @@ func (a *App) checkUnlockAsync(name string, done func(string, string, int, error
 }
 
 func (a *App) updateProxyProviderAsync(name string, done func(error)) {
+	if a.tunBusy {
+		done(errors.New("虚拟网卡正在切换"))
+		return
+	}
 	slots, stop := a.probeSlots, a.probeStop
 	profileID := a.core.ProfileID()
 	go func() {
@@ -107,6 +111,10 @@ func (a *App) updateProxyProviderAsync(name string, done func(error)) {
 }
 
 func (a *App) updateRuleProviderAsync(name string, done func(error)) {
+	if a.tunBusy {
+		done(errors.New("虚拟网卡正在切换"))
+		return
+	}
 	slots, stop := a.probeSlots, a.probeStop
 	profileID := a.core.ProfileID()
 	go func() {
