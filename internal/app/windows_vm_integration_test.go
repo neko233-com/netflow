@@ -246,6 +246,45 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		}
 	}
 	t.Log("installed CLI previewed and imported a Clash Verge profile")
+	backupRoot := t.TempDir()
+	backupArchive := filepath.Join(backupRoot, "snapshot.zip")
+	backupTarget := filepath.Join(backupRoot, "restored")
+	for _, step := range []struct{ dir, action string }{{migrationTarget, "backup-export"}, {backupTarget, "backup-restore"}} {
+		c, done := context.WithTimeout(context.Background(), 40*time.Second)
+		out, e := vmCommand(c, agentExe, "--config-dir", step.dir, step.action, backupArchive).CombinedOutput()
+		done()
+		if e != nil {
+			t.Fatalf("installed %s failed: %s: %v", step.action, out, e)
+		}
+	}
+	catalog, err := profile.NewStore(migrationTarget).Load()
+	if err != nil || len(catalog.Items) == 0 {
+		t.Fatal("missing migrated profile index")
+	}
+	paths := []string{"profiles.json"}
+	for _, item := range catalog.Items {
+		paths = append(paths, item.File)
+	}
+	for _, rel := range paths {
+		original, e1 := vmHash(filepath.Join(migrationTarget, rel))
+		restored, e2 := vmHash(filepath.Join(backupTarget, rel))
+		if e1 != nil || e2 != nil || original != restored {
+			t.Fatalf("installed backup lost %s", rel)
+		}
+	}
+	originalFiles, e1 := os.ReadDir(filepath.Join(migrationTarget, "verge-imports"))
+	restoredFiles, e2 := os.ReadDir(filepath.Join(backupTarget, "verge-imports"))
+	if e1 != nil || e2 != nil || len(originalFiles) == 0 || len(restoredFiles) != len(originalFiles) {
+		t.Fatal("installed backup lost Verge recovery archive")
+	}
+	for _, file := range originalFiles {
+		original, e1 := vmHash(filepath.Join(migrationTarget, "verge-imports", file.Name()))
+		restored, e2 := vmHash(filepath.Join(backupTarget, "verge-imports", file.Name()))
+		if e1 != nil || e2 != nil || original != restored {
+			t.Fatal("installed backup changed Verge recovery archive")
+		}
+	}
+	t.Log("installed CLI backed up and restored the migrated configuration to a new directory")
 	func() {
 		if err := os.WriteFile(filepath.Join(migrationTarget, "settings.json"), []byte(`{"prefs":"{\"SilentStart\":true}"}`), 0600); err != nil {
 			t.Fatal(err)
@@ -283,11 +322,28 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if !ok || answer.A.String() != "192.0.2.77" {
 			t.Fatalf("migrated hosts not applied: %v", response.Answer)
 		}
-		commandCtx, commandCancel := context.WithTimeout(context.Background(), 40*time.Second)
-		out, err := vmCommand(commandCtx, agentExe, "--config-dir", migrationTarget, "groups").CombinedOutput()
-		commandCancel()
+		// The kernel starts during Prepare, before the desktop window and Agent
+		// bridge are ready. DNS success alone is not an Agent readiness signal.
+		var out []byte
+		agentDeadline := time.Now().Add(30 * time.Second)
+		attempts := 0
+		for time.Now().Before(agentDeadline) {
+			attempts++
+			commandCtx, commandCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			out, err = vmCommand(commandCtx, agentExe, "--config-dir", migrationTarget, "groups").CombinedOutput()
+			commandCancel()
+			if err == nil {
+				break
+			}
+			time.Sleep(time.Second)
+		}
 		if err != nil {
-			t.Fatalf("migrated groups query failed: %s: %v", out, err)
+			data, _ := os.ReadFile(filepath.Join(migrationTarget, "migration-gui.log"))
+			entries, listErr := os.ReadDir(filepath.Join(migrationTarget, "agent"))
+			t.Fatalf("migrated groups query failed after %d attempts: %s: %v; endpoint count %d (%v); GUI log: %s", attempts, out, err, len(entries), listErr, data)
+		}
+		if attempts > 1 {
+			t.Logf("Agent became ready after %d read-only groups attempts", attempts)
 		}
 		var groups agent.GroupsResult
 		if err := json.Unmarshal(out, &groups); err != nil {

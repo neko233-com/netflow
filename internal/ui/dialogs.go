@@ -549,7 +549,7 @@ func (m *Model) hotkeyBody(c *mygoui.Context, pal Palette) {
 }
 
 func (m *Model) backupBody(c *mygoui.Context, pal Palette) {
-	mygoui.Text(c, "备份尚未实现，以下选项不会创建备份。可在退出程序后使用 Agent 的 migrate-export 命令迁出兼容数据。").FontSize(12).TextColor(pal.Warning)
+	mygoui.Text(c, "自动备份尚未实现。关闭程序后可使用 Agent 的 backup-export 和 backup-restore 命令进行本地备份与恢复。").FontSize(12).TextColor(pal.Warning)
 	mygoui.Text(c, "自动备份").FontSize(16).Bold()
 	backupOff := false
 	mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
@@ -566,7 +566,7 @@ func (m *Model) backupBody(c *mygoui.Context, pal Palette) {
 		mygoui.Switch(c, &changeOff).Disabled(true).Label("backup-change-disabled")
 	})
 	mygoui.Text(c, "手动").FontSize(16).Bold()
-	mygoui.Text(c, "本地备份尚未实现").FontSize(13)
+	mygoui.Text(c, "本地备份目前通过命令行操作；备份包含订阅凭据，请妥善保管。").FontSize(13)
 	if filledButton(c, pal, "WebDAV 状态", "webdav-open", false) {
 		m.Dialogs.WebDAV = true
 	}

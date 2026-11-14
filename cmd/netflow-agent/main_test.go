@@ -15,6 +15,40 @@ import (
 	"github.com/neko233-com/netflow/internal/profile"
 )
 
+func TestOfflineBackupCLIRespectsLockAndRestoresNewDirectory(t *testing.T) {
+	base := t.TempDir()
+	source := filepath.Join(base, "source")
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "config.yaml"), []byte("rules: [MATCH,DIRECT]"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	archive, target := filepath.Join(base, "backup.zip"), filepath.Join(base, "restored")
+	var output bytes.Buffer
+	lock, err := appdir.Acquire(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config-dir", source, "backup-export", archive}, bytes.NewReader(nil), &output); err == nil {
+		t.Fatal("backup accepted while app directory was locked")
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config-dir", source, "backup-export", archive}, bytes.NewReader(nil), &output); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := run([]string{"--config-dir", target, "backup-restore", archive}, bytes.NewReader(nil), &output); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(target, "config.yaml"))
+	if err != nil || string(data) != "rules: [MATCH,DIRECT]" {
+		t.Fatalf("restored config: %v", err)
+	}
+}
+
 func TestRealVergeImportThroughCLI(t *testing.T) {
 	source := os.Getenv("NETFLOW_TEST_VERGE_SOURCE")
 	if source == "" {

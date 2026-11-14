@@ -16,6 +16,7 @@ import (
 	"github.com/neko233-com/netflow"
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appdir"
+	"github.com/neko233-com/netflow/internal/backup"
 	"github.com/neko233-com/netflow/internal/migration"
 )
 
@@ -23,7 +24,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags := flag.NewFlagSet("netflow-agent", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: version, status, diagnostics, update-geo, tun on|off, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH")
+		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: version, status, diagnostics, update-geo, tun on|off, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-export PATH, backup-restore PATH")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -57,6 +58,30 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	}
 	ctx := context.Background()
 	switch flags.Arg(0) {
+	case "backup-export", "backup-restore":
+		if flags.NArg() != 2 || *pid != 0 || !filepath.IsAbs(flags.Arg(1)) {
+			return errors.New("backup command requires an absolute archive path; --pid is not applicable")
+		}
+		var result backup.Manifest
+		var err error
+		if flags.Arg(0) == "backup-export" {
+			info, statErr := os.Stat(*dir)
+			if statErr != nil || !info.IsDir() {
+				return errors.New("configuration directory does not exist")
+			}
+			lock, lockErr := appdir.Acquire(*dir)
+			if lockErr != nil {
+				return lockErr
+			}
+			defer lock.Close()
+			result, err = backup.Export(*dir, flags.Arg(1))
+		} else {
+			result, err = backup.Restore(flags.Arg(1), *dir)
+		}
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(result)
 	case "migrate-export":
 		if flags.NArg() != 2 || *pid != 0 {
 			return errors.New("migrate-export requires an absolute destination ZIP path; --pid is not applicable")

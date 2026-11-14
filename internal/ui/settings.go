@@ -225,7 +225,7 @@ func (m *Model) vergeBasic(c *mygoui.Context, pal Palette) {
 func (m *Model) vergeAdvanced(c *mygoui.Context, pal Palette) {
 	sectionCard(c, pal, "Verge 高级设置", func() {
 		clickRow(c, pal, "备份设置", "backup", false, func() { m.Dialogs.Backup = true }, func() {
-			helpMark(c, pal, "help-backup", "备份尚未实现；可在退出后通过 Agent 迁出 Verge 兼容数据")
+			helpMark(c, pal, "help-backup", "关闭程序后可通过 Agent 命令备份和恢复；自动备份尚未实现")
 		})
 		clickRow(c, pal, "当前配置", "runtime-row", false, func() { m.openRuntimeConfig() }, nil)
 		clickRow(c, pal, "配置目录", "conf-dir", false, func() { m.openDir("config") }, func() {
