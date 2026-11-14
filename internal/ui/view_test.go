@@ -549,7 +549,7 @@ func TestSettingsSections(t *testing.T) {
 	m.Dialogs.Hotkey = false
 	m.Dialogs.Backup = true
 	tt = renderModel(m, WindowWidth, WindowHeight, false)
-	if !tt.HasText("启用定时备份") || !tt.HasText("24") {
+	if !tt.HasText("选择目录并启用") || !tt.HasText("24") {
 		t.Fatal("backup defaults")
 	}
 }

@@ -101,6 +101,8 @@ type App struct {
 	backupBusy          bool
 	backupCancel        func()
 	backupDone          chan struct{}
+	backupRetry         time.Time
+	backupScheduleError string
 	webDAVProtected     string
 	webDAVProtectionErr error
 	localCoreFactory    func() coreEngine

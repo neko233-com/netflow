@@ -32,6 +32,7 @@ func TestOfflineSnapshotRoundTrip(t *testing.T) {
 	put(t, source, "verge-imports/original.zip", "private import")
 	put(t, source, "agent/endpoint.json", "secret endpoint")
 	put(t, source, ".netflow.lock", "runtime lock")
+	put(t, source, "backup-schedule.json", "schedule must not be restored")
 	archive := filepath.Join(base, "backup.zip")
 	manifest, err := Export(source, archive)
 	if err != nil {
@@ -74,6 +75,9 @@ func TestOfflineSnapshotRoundTrip(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(target, "agent")); !os.IsNotExist(err) {
 		t.Fatal("runtime credentials restored")
+	}
+	if _, err := os.Stat(filepath.Join(target, "backup-schedule.json")); !os.IsNotExist(err) {
+		t.Fatal("automatic schedule restored")
 	}
 	if _, err := Restore(archive, target); err == nil {
 		t.Fatal("overwrote existing directory")
@@ -120,6 +124,7 @@ func TestRestoreRejectsCorruptionAndUnsafePathsBeforeCreatingDirectory(t *testin
 		{"traversal", map[string]string{"files/../escape": "x"}, []Entry{{Path: "../escape", Size: 1, SHA256: strings.Repeat("0", 64)}}},
 		{"bad_hash", map[string]string{"files/config.yaml": "x"}, []Entry{{Path: "config.yaml", Size: 1, SHA256: strings.Repeat("0", 64)}}},
 		{"runtime_endpoint", map[string]string{"files/agent/endpoint.json": "x"}, []Entry{{Path: "agent/endpoint.json", Size: 1, SHA256: strings.Repeat("0", 64)}}},
+		{"automatic_schedule", map[string]string{"files/backup-schedule.json": "x"}, []Entry{{Path: "backup-schedule.json", Size: 1, SHA256: "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"}}},
 		{"windows_device", map[string]string{"files/CON.txt": "x"}, []Entry{{Path: "CON.txt", Size: 1, SHA256: strings.Repeat("0", 64)}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -34,7 +34,7 @@ func (a *App) startProfileAuto() {
 			case <-stop:
 				return
 			case now := <-ticker.C:
-				a.runOnMain(func() { a.autoUpdateOne(now) })
+				a.runOnMain(func() { a.autoUpdateOne(now); a.autoBackupOne(now) })
 			}
 		}
 	}()

@@ -78,7 +78,7 @@ func excluded(name string) bool {
 	if strings.Contains(name, "/") {
 		return false
 	}
-	return strings.EqualFold(name, ".netflow.lock") || strings.EqualFold(name, "agent")
+	return strings.EqualFold(name, ".netflow.lock") || strings.EqualFold(name, "agent") || strings.EqualFold(name, "backup-schedule.json")
 }
 
 func excludedOnline(name string) bool {

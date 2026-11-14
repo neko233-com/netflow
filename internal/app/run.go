@@ -107,6 +107,18 @@ func (a *App) ready(quitting *bool) {
 	a.model.Hooks.UpdateProfileViaProxyAsync = a.updateProfileViaProxyAsync
 	a.model.Hooks.BrowseProfiles = a.browseProfiles
 	a.model.Hooks.BrowseBackup = a.browseBackup
+	a.model.Hooks.BrowseBackupDirectory = a.browseBackupDirectory
+	a.model.Hooks.SetBackupSchedule = func(enabled bool, directory string, hours int) (agent.BackupSchedule, error) {
+		return a.setBackupSchedule(enabled, directory, hours, time.Now())
+	}
+	if schedule, err := a.loadBackupSchedule(); err != nil {
+		a.model.Notice = "读取自动备份计划失败"
+	} else {
+		a.model.BackupSchedule = schedule
+		if schedule.IntervalHours > 0 {
+			a.model.BackupHours = fmt.Sprint(schedule.IntervalHours)
+		}
+	}
 	a.model.Hooks.CreateBackupAsync = func(path string, done func(error)) error {
 		_, err := a.beginBackupJob(path, time.Now(), done)
 		return err

@@ -36,6 +36,7 @@ import (
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/migration"
 	"github.com/neko233-com/netflow/internal/profile"
+	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/tun"
 	"github.com/neko233-com/netflow/internal/validation"
 	"golang.org/x/sys/windows"
@@ -316,6 +317,41 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	}
 	t.Log("installed headless Agent imported, updated and deleted an inactive subscription without exposing its URL")
 	backupRoot := t.TempDir()
+	scheduledDir := filepath.Join(backupRoot, "scheduled")
+	if err := os.Mkdir(scheduledDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	payload, err = call("backup-schedule-set", "on", scheduledDir, "1")
+	var schedule agent.BackupSchedule
+	if err != nil || json.Unmarshal(payload, &schedule) != nil || !schedule.Enabled {
+		t.Fatalf("enable schedule: %s %v", payload, err)
+	}
+	// Advance the due time without waiting an hour; the actual installed
+	// scheduler still executes its normal one-minute timer in the guest.
+	schedule.NextRun = time.Now().UTC().Add(-time.Minute)
+	encodedSchedule, err := json.Marshal(schedule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := safepath.WriteFile(dir, scheduleFile, encodedSchedule); err != nil {
+		t.Fatal(err)
+	}
+	scheduledDeadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(scheduledDeadline) {
+		payload, err = call("backup-schedule")
+		if err == nil && json.Unmarshal(payload, &schedule) == nil && schedule.NextRun.After(time.Now()) {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	archives, err := os.ReadDir(scheduledDir)
+	if err != nil || len(archives) != 1 || !schedule.NextRun.After(time.Now()) {
+		t.Fatalf("scheduled backup failed: %s %v", payload, err)
+	}
+	if payload, err := call("backup-schedule-set", "off"); err != nil {
+		t.Fatalf("disable schedule: %s %v", payload, err)
+	}
+	t.Log("installed headless Agent scheduled a live TUN backup and disabled its schedule")
 	liveArchive := filepath.Join(backupRoot, "live.zip")
 	payload, err = call("backup-create", liveArchive)
 	var backupJob agent.BackupJob

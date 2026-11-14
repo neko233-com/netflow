@@ -3,6 +3,8 @@ package ui
 import (
 	"errors"
 	"testing"
+
+	"github.com/neko233-com/netflow/internal/agent"
 )
 
 func TestUnsupportedBackupDoesNotExposeSavedPassword(t *testing.T) {
@@ -13,19 +15,43 @@ func TestUnsupportedBackupDoesNotExposeSavedPassword(t *testing.T) {
 	m.WebDAVSecretStored = true
 	m.Dialogs.Backup = true
 	tt := renderModel(m, WindowWidth, WindowHeight, false)
-	if !tt.HasText("备份尚未实现") || tt.HasText("synthetic-never-display") {
+	if !tt.HasText("备份包含敏感信息且未加密") || tt.HasText("synthetic-never-display") {
 		t.Fatal("backup status or password visibility is incorrect")
 	}
-	before := m.Prefs.AutoBackup
-	_ = tt.Click("backup-auto-disabled")
-	if m.Prefs.AutoBackup != before {
-		t.Fatal("unsupported backup switch changed")
+	if m.BackupSchedule.Enabled {
+		t.Fatal("automatic backup enabled by default")
 	}
 	m.Dialogs.Backup = false
 	m.Dialogs.WebDAV = true
 	tt = renderModel(m, WindowWidth, WindowHeight, false)
 	if !tt.HasText("WebDAV 备份尚未实现") || tt.HasText("synthetic-never-display") || tt.HasText("synthetic-url-secret") || tt.HasText("synthetic-hidden-user") {
 		t.Fatal("WebDAV status or password visibility is incorrect")
+	}
+}
+
+func TestAutomaticBackupRequiresChoosingDirectory(t *testing.T) {
+	m := DemoModel()
+	m.Dialogs.Backup = true
+	called := false
+	m.Hooks.BrowseBackupDirectory = func() (string, error) { return "", nil }
+	m.Hooks.SetBackupSchedule = func(enabled bool, directory string, hours int) (agent.BackupSchedule, error) {
+		called = true
+		return agent.BackupSchedule{Enabled: enabled, Directory: directory, IntervalHours: hours}, nil
+	}
+	tt := renderModel(m, WindowWidth, WindowHeight, false)
+	if err := tt.Click("backup-auto-enable"); err != nil {
+		t.Fatal(err)
+	}
+	if called || m.BackupSchedule.Enabled {
+		t.Fatal("canceling directory selection enabled backups")
+	}
+	m.Hooks.BrowseBackupDirectory = func() (string, error) { return `C:\Backups`, nil }
+	tt = renderModel(m, WindowWidth, WindowHeight, false)
+	if err := tt.Click("backup-auto-enable"); err != nil {
+		t.Fatal(err)
+	}
+	if !called || !m.BackupSchedule.Enabled || m.BackupSchedule.IntervalHours != 24 {
+		t.Fatal("explicit opt-in was not saved")
 	}
 }
 
@@ -91,6 +117,7 @@ func TestManualRestoreUsesNewDirectoryAndAllowsCopy(t *testing.T) {
 func TestBackupActionsFitMinimumWindowHeight(t *testing.T) {
 	m := DemoModel()
 	m.Dialogs.Backup = true
+	m.BackupSchedule = agent.BackupSchedule{Enabled: true, Directory: `C:\Backups`, IntervalHours: 24}
 	m.RestorePath = `C:\Restore\new`
 	tt := renderModel(m, WindowWidth, WindowMinHeight, false)
 	for _, id := range []string{"backup-create", "backup-restore", "backup-copy-restore", "webdav-open", "close-备份设置"} {

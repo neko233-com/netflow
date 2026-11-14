@@ -2,6 +2,7 @@ package ui
 
 import (
 	"runtime"
+	"strconv"
 
 	mygoui "github.com/egoist/mygo/ui"
 	"github.com/metacubex/mihomo/constant/features"
@@ -560,22 +561,62 @@ func backupButton(c *mygoui.Context, pal Palette, label, id string, disabled boo
 }
 
 func (m *Model) backupBody(c *mygoui.Context, pal Palette) {
-	mygoui.Text(c, "自动备份尚未实现。恢复会写入新目录；备份包含敏感信息且未加密。").FontSize(12).TextColor(pal.Warning)
+	mygoui.Text(c, "备份包含敏感信息且未加密；恢复会写入新目录。").FontSize(12).TextColor(pal.Warning)
 	mygoui.Text(c, "自动备份").FontSize(16).Bold()
-	backupOff := false
-	mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
-		mygoui.Text(c, "启用定时备份").FontSize(14).Grow(1)
-		mygoui.Switch(c, &backupOff).Disabled(true).Label("backup-auto-disabled")
+	if m.BackupHours == "" {
+		m.BackupHours = "24"
+	}
+	choices := []string{"1", "6", "12", "24", "72", "168"}
+	found := false
+	for _, v := range choices {
+		if v == m.BackupHours {
+			found = true
+		}
+	}
+	if !found {
+		choices = append(choices, m.BackupHours)
+	}
+	mygoui.Row(c).AlignItems(mygoui.Center).Gap(8).Children(func() {
+		mygoui.Text(c, "每隔（小时）").FontSize(13)
+		mygoui.Select(c, &m.BackupHours, choices).Width(80).Label("backup-every")
+		if backupButton(c, pal, "选择目录并启用", "backup-auto-enable", m.BackupBusy) {
+			if m.Hooks.BrowseBackupDirectory == nil || m.Hooks.SetBackupSchedule == nil {
+				m.Notice = "自动备份不可用"
+				return
+			}
+			dir, err := m.Hooks.BrowseBackupDirectory()
+			if err != nil {
+				m.Notice = "选择目录失败: " + err.Error()
+				return
+			}
+			if dir == "" {
+				return
+			}
+			hours, _ := strconv.Atoi(m.BackupHours)
+			s, err := m.Hooks.SetBackupSchedule(true, dir, hours)
+			if err != nil {
+				m.Notice = "启用自动备份失败: " + err.Error()
+			} else {
+				m.BackupSchedule = s
+				m.Notice = "已启用自动备份"
+			}
+		}
+		if m.BackupSchedule.Enabled && backupButton(c, pal, "关闭", "backup-auto-off", false) {
+			if m.Hooks.SetBackupSchedule != nil {
+				s, err := m.Hooks.SetBackupSchedule(false, "", 0)
+				if err != nil {
+					m.Notice = "关闭自动备份失败: " + err.Error()
+				} else {
+					m.BackupSchedule = s
+					m.Notice = "已关闭自动备份"
+				}
+			}
+		}
 	})
-	mygoui.Text(c, "备份频率").FontSize(13)
-	every := itoa(m.Prefs.BackupEvery)
-	mygoui.TextInput(c, &every).Width(80).Disabled(true).Label("backup-every")
-	mygoui.Text(c, "小时，默认 24，范围 1–168").FontSize(12).TextColor(pal.TextMuted)
-	changeOff := false
-	mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
-		mygoui.Text(c, "关键变更时自动备份").FontSize(14).Grow(1)
-		mygoui.Switch(c, &changeOff).Disabled(true).Label("backup-change-disabled")
-	})
+	if m.BackupSchedule.Enabled {
+		mygoui.Text(c, "已启用：每 "+itoa(m.BackupSchedule.IntervalHours)+" 小时；"+m.BackupSchedule.Directory).FontSize(12).TextColor(pal.TextMuted)
+	}
+	mygoui.Text(c, "仅运行期间执行；最多保留 30 个，需手动清理，不自动删除。").FontSize(12).TextColor(pal.TextMuted)
 	mygoui.Text(c, "手动").FontSize(16).Bold()
 	mygoui.Text(c, "请选择尚不存在的备份文件。运行时备份排除缓存、日志和待处理的 GeoData 更新；若配置发生变化，需重试。").FontSize(12).TextColor(pal.TextMuted)
 	if backupButton(c, pal, "创建本地备份", "backup-create", m.BackupBusy) {

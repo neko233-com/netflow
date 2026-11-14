@@ -171,6 +171,19 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		if callErr = decodeStrict(args, &input); callErr == nil {
 			value, callErr = a.getProfileJob(input.JobID, time.Now())
 		}
+	case "backup-schedule":
+		var input agent.Empty
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			var schedule agent.BackupSchedule
+			schedule, callErr = a.loadBackupSchedule()
+			schedule.LastError, schedule.NextRetry = a.backupScheduleError, a.backupRetry
+			value = schedule
+		}
+	case "backup-schedule-set":
+		var input agent.BackupScheduleArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.setBackupSchedule(input.Enabled, input.Directory, input.IntervalHours, time.Now())
+		}
 	case "backup-create":
 		var input agent.BackupArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {

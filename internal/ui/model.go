@@ -46,6 +46,8 @@ type Hooks struct {
 	UpdateProfileViaProxyAsync func(uid string, done func(error))
 	BrowseProfiles             func() ([]string, error)
 	BrowseBackup               func() (string, error)
+	BrowseBackupDirectory      func() (string, error)
+	SetBackupSchedule          func(bool, string, int) (agent.BackupSchedule, error)
 	CreateBackupAsync          func(string, func(error)) error
 	BrowseRestore              func() (string, string, error)
 	RestoreBackupAsync         func(string, string, func(error)) error
@@ -121,6 +123,8 @@ type Model struct {
 	DeleteUID          string
 	Prefs              Prefs
 	WebDAVSecretStored bool
+	BackupSchedule     agent.BackupSchedule
+	BackupHours        string
 	BackupBusy         bool
 	RestorePath        string
 	Notice             string

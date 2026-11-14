@@ -71,6 +71,18 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "profiles", nil, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_backup_schedule", Description: "Read the automatic local backup schedule.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args Empty) (*mcp.CallToolResult, BackupSchedule, error) {
+			var out BackupSchedule
+			err := client.Call(ctx, "backup-schedule", args, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_backup_schedule_set", Description: "Explicitly enable or disable periodic unencrypted local backups while the app is running. Backups contain credentials. At most 30 app-named archives are retained; no archive is deleted automatically."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args BackupScheduleArgs) (*mcp.CallToolResult, BackupSchedule, error) {
+			var out BackupSchedule
+			err := client.Call(ctx, "backup-schedule-set", args, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_backup_create", Description: "Create an unencrypted local backup while NetFlow is running. It contains subscription credentials, excludes volatile caches and logs, and fails if configuration changes during capture. Poll netflow_backup_job_status."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args BackupArgs) (*mcp.CallToolResult, BackupJob, error) {
 			var out BackupJob

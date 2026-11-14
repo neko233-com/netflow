@@ -60,6 +60,21 @@ type RestoreArgs struct {
 type BackupJobArgs struct {
 	JobID string `json:"job_id" jsonschema:"backup job identifier"`
 }
+
+type BackupSchedule struct {
+	Enabled       bool      `json:"enabled" jsonschema:"explicitly enable automatic local backups"`
+	Directory     string    `json:"directory,omitempty" jsonschema:"existing absolute directory outside the configuration"`
+	IntervalHours int       `json:"interval_hours,omitempty" jsonschema:"interval between 1 and 168 hours"`
+	NextRun       time.Time `json:"next_run,omitempty"`
+	LastError     string    `json:"last_error,omitempty"`
+	NextRetry     time.Time `json:"next_retry,omitempty"`
+}
+
+type BackupScheduleArgs struct {
+	Enabled       bool   `json:"enabled" jsonschema:"explicitly enable automatic local backups"`
+	Directory     string `json:"directory,omitempty" jsonschema:"existing absolute directory outside the configuration"`
+	IntervalHours int    `json:"interval_hours,omitempty" jsonschema:"interval between 1 and 168 hours"`
+}
 type Status struct {
 	Running              bool          `json:"running"`
 	Headless             bool          `json:"headless"`

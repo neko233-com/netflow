@@ -28,6 +28,14 @@ func (a *App) browseBackup() (string, error) {
 	return mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: a.win, Title: "保存本地备份", DefaultPath: "NetFlow-backup.zip", Filters: []mygo.FileFilter{{Name: "NetFlow 备份", Extensions: []string{"zip"}}}})
 }
 
+func (a *App) browseBackupDirectory() (string, error) {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "选择自动备份目录", Directory: true})
+	if err != nil || len(paths) == 0 {
+		return "", err
+	}
+	return paths[0], nil
+}
+
 func (a *App) browseRestore() (string, string, error) {
 	archives, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "选择 NetFlow 备份", Filters: []mygo.FileFilter{{Name: "NetFlow 备份", Extensions: []string{"zip"}}}})
 	if err != nil || len(archives) == 0 {
