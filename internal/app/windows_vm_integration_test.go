@@ -1592,6 +1592,20 @@ func vmGUIAutoStartTUN(t *testing.T, guiExe, agentExe, dir string) {
 func TestWindowsVMEndToEnd(t *testing.T) {
 	requireDisposableVM(t)
 	vmAgentJunctionSafety(t)
+	closedListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedAddress := closedListener.Addr().String()
+	if err := closedListener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	client := newSubscriptionClient("", 2*time.Second, false)
+	_, fetchErr := fetchProfileResponse("http://synthetic-user:synthetic-password@"+closedAddress+"/sub?token=synthetic-token", client, "")
+	client.CloseIdleConnections()
+	if fetchErr == nil || strings.Contains(fetchErr.Error(), "synthetic-") {
+		t.Fatalf("subscription network error exposed a credential: %v", fetchErr)
+	}
 	var expected map[string]string
 	if err := json.Unmarshal([]byte(os.Getenv("NETFLOW_VM_EXPECTED")), &expected); err != nil || len(expected) != 3 {
 		t.Fatal("invalid expected binary hashes")

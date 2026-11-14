@@ -1615,7 +1615,7 @@ func fetchProfileResponse(raw string, client *http.Client, userAgent string) (su
 func fetchProfileResponseContext(ctx context.Context, raw string, client *http.Client, userAgent string) (subscriptionResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
-		return subscriptionResponse{}, err
+		return subscriptionResponse{}, errors.New("订阅地址无效")
 	}
 	if userAgent != "" {
 		req.Header.Set("User-Agent", userAgent)
@@ -1637,20 +1637,35 @@ func fetchProfileResponseContext(ctx context.Context, raw string, client *http.C
 	}
 	resp, err := requestClient.Do(req)
 	if err != nil {
-		return subscriptionResponse{}, err
+		return subscriptionResponse{}, subscriptionFetchError(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return subscriptionResponse{}, io.ErrUnexpectedEOF
+		return subscriptionResponse{}, fmt.Errorf("订阅服务器返回 HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, profile.MaxSubscriptionBytes+1))
 	if err != nil {
-		return subscriptionResponse{}, err
+		return subscriptionResponse{}, subscriptionFetchError(ctx, err)
 	}
 	if len(body) > profile.MaxSubscriptionBytes {
 		return subscriptionResponse{}, errors.New("订阅超过 8 MiB")
 	}
 	return subscriptionResponse{body: body, headers: resp.Header.Clone()}, nil
+}
+
+// HTTP errors often include the full URL, including userinfo and query tokens.
+// Keep cancellation semantics without exposing the underlying error text.
+func subscriptionFetchError(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("订阅下载超时: %w", context.DeadlineExceeded)
+	}
+	return errors.New("订阅下载失败，请检查网络、代理、证书或重定向设置")
 }
 
 func (a *App) proxyEndpoint() string {

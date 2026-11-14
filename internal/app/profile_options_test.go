@@ -6,12 +6,47 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/neko233-com/netflow/internal/profile"
 )
+
+func TestSubscriptionFetchErrorsDoNotExposeAddressSecrets(t *testing.T) {
+	client := newSubscriptionClient("", time.Second, false)
+	defer client.CloseIdleConnections()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }))
+	address, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address.User = url.UserPassword("synthetic-user", "synthetic-password")
+	address.RawQuery = "token=synthetic-token"
+	for _, raw := range []string{address.String(), "http://synthetic-password@[bad?token=synthetic-token"} {
+		_, err := fetchProfileResponse(raw, client, "")
+		if err == nil || strings.Contains(err.Error(), "synthetic-") {
+			t.Fatalf("unsafe subscription error: %v", err)
+		}
+	}
+	server.Close()
+	_, err = fetchProfileResponse(address.String(), client, "")
+	if err == nil || strings.Contains(err.Error(), "synthetic-") {
+		t.Fatalf("unsafe network error: %v", err)
+	}
+}
+
+func TestSubscriptionFetchTimeoutRetainsDeadlineSemantics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	defer server.Close()
+	client := newSubscriptionClient("", 50*time.Millisecond, false)
+	defer client.CloseIdleConnections()
+	_, err := fetchProfileResponse(server.URL+"/?token=synthetic-token", client, "")
+	if !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "synthetic-token") {
+		t.Fatalf("unsafe timeout error: %v", err)
+	}
+}
 
 func TestSubscriptionFetchCancellationStopsInFlightRequest(t *testing.T) {
 	entered := make(chan struct{})
