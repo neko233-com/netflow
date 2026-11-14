@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"errors"
 
+	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/rewrite"
 )
 
@@ -22,4 +24,39 @@ func (a *App) loadRewrite(scope, profileID string) (rewrite.Layer, error) {
 	default:
 		return rewrite.Layer{}, errors.New("未知规则范围")
 	}
+}
+
+// Preparation and final acceptance run on the UI thread; potentially slow
+// external validation runs in the background just as it does for Agent calls.
+func (a *App) previewDraftAsync(draft previewDraft, err error, done func(agent.Preview, error)) {
+	if err != nil {
+		done(agent.Preview{}, err)
+		return
+	}
+	go func() {
+		checked, err := validateConfigurations(context.Background(), a.dir, draft.configs)
+		if err == nil {
+			err = a.verifyDraftSources(draft, checked)
+		}
+		a.runOnMain(func() {
+			var result agent.Preview
+			if err == nil {
+				result, err = a.finishAgentPreview(draft, checked)
+			}
+			done(result, err)
+			if a.win != nil {
+				a.win.Invalidate()
+			}
+		})
+	}()
+}
+
+func (a *App) previewRewriteAsync(change agent.Change, done func(agent.Preview, error)) {
+	draft, err := a.prepareAgentPreview(change)
+	a.previewDraftAsync(draft, err, done)
+}
+
+func (a *App) previewRollbackAsync(args agent.RollbackArgs, done func(agent.Preview, error)) {
+	draft, err := a.prepareAgentRollback(args)
+	a.previewDraftAsync(draft, err, done)
 }

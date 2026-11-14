@@ -3,7 +3,9 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	mygoui "github.com/egoist/mygo/ui"
 	"github.com/neko233-com/netflow/internal/agent"
@@ -70,5 +72,67 @@ func TestRuleEditorRequiresPreviewAndInvalidatesOnEdit(t *testing.T) {
 	}
 	if applied != 1 || m.RuleEditor.Open {
 		t.Fatal("previewed rules not applied")
+	}
+}
+
+func TestRuleEditorHistoryAndAsyncPreviewLifecycle(t *testing.T) {
+	m := NewModel(HomeState{})
+	m.Hooks.LoadRewrite = func(string, string) (rewrite.Layer, error) { return rewrite.Layer{}, nil }
+	m.Hooks.RewriteHistory = func() (agent.RewriteHistory, error) {
+		return agent.RewriteHistory{Entries: []rewrite.HistoryItem{{Revision: 0, RecordedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}}}, nil
+	}
+	var pending func(agent.Preview, error)
+	var rollback agent.RollbackArgs
+	var discarded []string
+	m.Hooks.PreviewRewriteAsync = func(_ agent.Change, done func(agent.Preview, error)) { pending = done }
+	m.Hooks.PreviewRollbackAsync = func(in agent.RollbackArgs, done func(agent.Preview, error)) { rollback, pending = in, done }
+	m.Hooks.DiscardRewriteProposal = func(id string) { discarded = append(discarded, id) }
+	applied := ""
+	m.Hooks.ApplyRewrite = func(id string) (agent.ApplyResult, error) { applied = id; return agent.ApplyResult{}, nil }
+	m.openRuleEditor("profile", "chosen")
+	if len(m.RuleEditor.HistoryChoices) != 1 {
+		t.Fatal("history not shown")
+	}
+	m.previewRules()
+	if !m.RuleEditor.Busy || pending == nil || m.RuleEditor.ProposalID != "" {
+		t.Fatal("preview was not asynchronous")
+	}
+	stale := pending
+	m.invalidateRulePreview()
+	stale(agent.Preview{ProposalID: "stale"}, nil)
+	if len(discarded) != 1 || discarded[0] != "stale" || m.RuleEditor.ProposalID != "" {
+		t.Fatal("stale proposal was not discarded")
+	}
+	if dir := os.Getenv("CLASHGO_SCREENSHOT_DIR"); dir != "" {
+		compact := mygoui.NewTester(m.View, WindowMinWidth, WindowMinHeight)
+		if err := writePNG(filepath.Join(dir, "rewrite-history-compact.png"), compact.Image()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tt := mygoui.NewTester(m.View, WindowWidth, 1600)
+	if err := tt.Click("rewrite-rollback-preview"); err != nil {
+		t.Fatal(err)
+	}
+	if rollback.Revision == nil || *rollback.Revision != 0 || rollback.Scope != "profile" || rollback.ProfileID != "chosen" {
+		t.Fatalf("wrong rollback scope: %+v", rollback)
+	}
+	pending(agent.Preview{ProposalID: "rollback", RulesAfter: []string{"MATCH,DIRECT"}, Warnings: []string{"inspect"}}, nil)
+	if m.RuleEditor.Busy || m.RuleEditor.ProposalID != "rollback" || !strings.Contains(m.RuleEditor.Preview, "inspect") {
+		t.Fatal("rollback result was not displayed")
+	}
+	tt = mygoui.NewTester(m.View, WindowWidth, WindowHeight)
+	if err := tt.Click("rewrite-apply"); err != nil {
+		t.Fatal(err)
+	}
+	if applied != "rollback" || m.RuleEditor.Open {
+		t.Fatal("rollback proposal not applied")
+	}
+	m.openRuleEditor("global", "")
+	m.previewRules()
+	late := pending
+	m.openRuleEditor("global", "")
+	late(agent.Preview{ProposalID: "old-dialog"}, nil)
+	if m.RuleEditor.ProposalID != "" || discarded[len(discarded)-1] != "old-dialog" {
+		t.Fatal("closed dialog accepted old preview")
 	}
 }
