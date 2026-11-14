@@ -14,14 +14,14 @@ try {
     $msiDir = "build/msi/$version"
     New-Item -ItemType Directory -Force resources/windows-amd64,resources/darwin-arm64,$msiDir | Out-Null
     $env:GOOS = 'windows'; $env:GOARCH = 'amd64'
-    & go build -o resources/windows-amd64/netflow-agent.exe ./cmd/netflow-agent
+    & go build -trimpath '-ldflags=-s -w' -o resources/windows-amd64/netflow-agent.exe ./cmd/netflow-agent
     if ($LASTEXITCODE -ne 0) { throw 'Windows agent build failed' }
-    & go build '-ldflags=-H=windowsgui' -o resources/windows-amd64/netflow-kernel-worker.exe ./cmd/netflow-kernel-worker
+    & go build -trimpath '-ldflags=-s -w -H=windowsgui' -o resources/windows-amd64/netflow-kernel-worker.exe ./cmd/netflow-kernel-worker
     if ($LASTEXITCODE -ne 0) { throw 'Windows kernel worker build failed' }
     $env:GOOS = 'darwin'; $env:GOARCH = 'arm64'
-    & go build -o resources/darwin-arm64/netflow-agent ./cmd/netflow-agent
+    & go build -trimpath '-ldflags=-s -w' -o resources/darwin-arm64/netflow-agent ./cmd/netflow-agent
     if ($LASTEXITCODE -ne 0) { throw 'macOS agent build failed' }
-    & go build -o resources/darwin-arm64/netflow-kernel-worker ./cmd/netflow-kernel-worker
+    & go build -trimpath '-ldflags=-s -w' -o resources/darwin-arm64/netflow-kernel-worker ./cmd/netflow-kernel-worker
     if ($LASTEXITCODE -ne 0) { throw 'macOS kernel worker build failed' }
     Remove-Item Env:GOOS,Env:GOARCH
     $buildArgs = @('tool', 'mygo', 'build', '-platform', 'windows/amd64,darwin/arm64', '-skip-dmg', '-skip-installer', '-o', $buildDir)

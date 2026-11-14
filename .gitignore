@@ -3,6 +3,8 @@
 /screenshots/
 coverage.out
 *.out
+__pycache__/
+*.py[cod]
 .DS_Store
 
 # Local indexes, credentials, user data, and generated binaries.

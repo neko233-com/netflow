@@ -36,6 +36,60 @@ def check_pe(path, require_amd64=True, subsystem=2):
         raise ValueError(f"unexpected Windows executable subsystem: {path}")
 
 
+def check_icon_resource(path):
+    """Ensure the Windows background worker carries icon and icon-group resources."""
+    with path.open("rb") as f:
+        f.seek(0, 2)
+        length = f.tell()
+
+        def read_at(offset, size):
+            if offset < 0 or size < 0 or offset + size > length:
+                raise ValueError(f"truncated PE resource in {path}")
+            f.seek(offset)
+            data = f.read(size)
+            if len(data) != size:
+                raise ValueError(f"truncated PE resource in {path}")
+            return data
+
+        dos = read_at(0, 64)
+        if dos[:2] != b"MZ":
+            raise ValueError(f"not a PE executable: {path}")
+        pe_offset = struct.unpack_from("<I", dos, 60)[0]
+        header = read_at(pe_offset, 24)
+        if header[:4] != b"PE\0\0":
+            raise ValueError(f"invalid PE header: {path}")
+        section_count = struct.unpack_from("<H", header, 6)[0]
+        optional_size = struct.unpack_from("<H", header, 20)[0]
+        if not 1 <= section_count <= 96:
+            raise ValueError(f"invalid PE sections: {path}")
+        optional = read_at(pe_offset + 24, optional_size)
+        if len(optional) < 136 or struct.unpack_from("<H", optional)[0] != 0x20B or struct.unpack_from("<I", optional, 108)[0] < 3:
+            raise ValueError(f"missing PE resource directory: {path}")
+        rva, resource_size = struct.unpack_from("<II", optional, 128)
+        sections = read_at(pe_offset + 24 + optional_size, section_count * 40)
+        root = None
+        for offset in range(0, len(sections), 40):
+            _, address, raw_size, raw_offset = struct.unpack_from("<IIII", sections, offset + 8)
+            if address <= rva and rva - address < raw_size and resource_size <= raw_size - (rva - address):
+                root = raw_offset + rva - address
+                break
+        if root is None or resource_size < 16:
+            raise ValueError(f"missing PE icon resources: {path}")
+        directory = read_at(root, 16)
+        named, ids = struct.unpack_from("<HH", directory, 12)
+        count = named + ids
+        if count > 4096 or 16 + count * 8 > resource_size:
+            raise ValueError(f"invalid PE resource directory: {path}")
+        entries = read_at(root + 16, count * 8)
+        kinds = set()
+        for i in range(count):
+            name, child = struct.unpack_from("<II", entries, i * 8)
+            if not (name & 0x80000000) and (child & 0x80000000) and (child & 0x7FFFFFFF) <= resource_size - 16:
+                kinds.add(name)
+        if not {3, 14}.issubset(kinds):  # RT_ICON and RT_GROUP_ICON
+            raise ValueError(f"missing PE icon or icon group: {path}")
+
+
 def check_tun_build_tags(path):
     info = subprocess.check_output(["go", "version", "-m", str(path)], text=True, encoding="utf-8")
     lines = [line.split("-tags=", 1)[1].strip() for line in info.splitlines() if "-tags=" in line]
@@ -97,6 +151,7 @@ def main():
     check_pe(windows / "NetFlow.exe")
     check_pe(windows / "netflow-agent.exe", subsystem=3)
     check_pe(windows / "netflow-kernel-worker.exe")
+    check_icon_resource(windows / "netflow-kernel-worker.exe")
     check_tun_build_tags(windows / "NetFlow.exe")
     check_tun_build_tags(windows / "netflow-kernel-worker.exe")
     check_macho(mac / "Contents/Resources/netflow-agent")
