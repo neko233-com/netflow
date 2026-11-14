@@ -63,6 +63,89 @@ type CatalogOption struct {
 	VergeProviderPaths map[string]string `json:"verge_provider_paths,omitempty"`
 }
 
+// MetadataPatch changes only specified fields. Download options apply only to
+// remote profiles; the subscription URL and extension data are never changed.
+type MetadataPatch struct {
+	Name, Description, UserAgent                            *string
+	Timeout, Interval                                       *int
+	AutoUpdate, UseCoreProxy, UseSystemProxy, AllowInsecure *bool
+}
+
+func (p MetadataPatch) hasDownloadOptions() bool {
+	return p.UserAgent != nil || p.Timeout != nil || p.Interval != nil || p.AutoUpdate != nil || p.UseCoreProxy != nil || p.UseSystemProxy != nil || p.AllowInsecure != nil
+}
+
+// PatchMetadata loads and conditionally commits one catalog snapshot, so a
+// concurrent edit is rejected rather than overwritten.
+func (s *Store) PatchMetadata(uid string, patch MetadataPatch) (CatalogItem, error) {
+	if uid == "" || (patch.Name == nil && patch.Description == nil && !patch.hasDownloadOptions()) {
+		return CatalogItem{}, errors.New("profile id and at least one metadata field are required")
+	}
+	f, snapshot, err := s.LoadForUpdate()
+	if err != nil {
+		return CatalogItem{}, err
+	}
+	for i := range f.Items {
+		item := &f.Items[i]
+		if item.UID != uid {
+			continue
+		}
+		if patch.hasDownloadOptions() && item.Type != "remote" {
+			return CatalogItem{}, errors.New("download options require a remote profile")
+		}
+		if patch.Name != nil {
+			name := strings.TrimSpace(*patch.Name)
+			if name == "" || len(name) > 256 || strings.ContainsAny(name, "\r\n\x00") {
+				return CatalogItem{}, errors.New("invalid profile name")
+			}
+			item.Name = name
+		}
+		if patch.Description != nil {
+			desc := strings.TrimSpace(*patch.Description)
+			if len(desc) > 2048 || strings.ContainsRune(desc, '\x00') {
+				return CatalogItem{}, errors.New("invalid profile description")
+			}
+			item.Description = desc
+		}
+		if patch.UserAgent != nil {
+			ua := strings.TrimSpace(*patch.UserAgent)
+			if len(ua) > 512 || strings.ContainsAny(ua, "\r\n\x00") {
+				return CatalogItem{}, errors.New("invalid user agent")
+			}
+			item.Option.UserAgent = ua
+		}
+		if patch.Timeout != nil {
+			if *patch.Timeout < 1 || *patch.Timeout > 300 {
+				return CatalogItem{}, errors.New("timeout must be between 1 and 300 seconds")
+			}
+			item.Option.TimeoutSeconds = *patch.Timeout
+		}
+		if patch.Interval != nil {
+			if *patch.Interval < 1 || *patch.Interval > 43200 {
+				return CatalogItem{}, errors.New("interval must be between 1 and 43200 minutes")
+			}
+			item.Option.UpdateInterval = *patch.Interval
+		}
+		if patch.AutoUpdate != nil {
+			item.Option.AllowAutoUpdate = *patch.AutoUpdate
+		}
+		if patch.UseCoreProxy != nil {
+			item.Option.UseClashProxy = *patch.UseCoreProxy
+		}
+		if patch.UseSystemProxy != nil {
+			item.Option.UseSystemProxy = *patch.UseSystemProxy
+		}
+		if patch.AllowInsecure != nil {
+			item.Option.AcceptInvalid = *patch.AllowInsecure
+		}
+		if err := s.SaveIfUnchanged(f, snapshot); err != nil {
+			return CatalogItem{}, err
+		}
+		return *item, nil
+	}
+	return CatalogItem{}, errors.New("profile not found")
+}
+
 // File is profiles.json.
 type File struct {
 	Items   []CatalogItem `json:"items"`

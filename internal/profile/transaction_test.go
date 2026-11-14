@@ -11,6 +11,47 @@ import (
 	"github.com/neko233-com/netflow/internal/safepath"
 )
 
+func TestPatchMetadataIsPartialValidatedAndPreservesExtensions(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	item, err := s.ImportRemote("https://example.invalid/sub?token=synthetic-secret", func(string) ([]byte, error) { return []byte("rules: []"), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, snapshot, err := s.LoadForUpdate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Items[0].Option.Script = "existing-script"
+	if err := s.SaveIfUnchanged(f, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	name, ua, timeout, auto := "updated", "NetFlow-test", 25, true
+	updated, err := s.PatchMetadata(item.UID, MetadataPatch{Name: &name, UserAgent: &ua, Timeout: &timeout, AutoUpdate: &auto})
+	if err != nil || updated.Name != name || updated.Option.UserAgent != ua || updated.Option.TimeoutSeconds != timeout || !updated.Option.AllowAutoUpdate || updated.Option.Script != "existing-script" || updated.URL != item.URL {
+		t.Fatalf("patch lost profile fields: %+v %v", updated, err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, "profiles.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := 0
+	if _, err := s.PatchMetadata(item.UID, MetadataPatch{Name: &name, Timeout: &bad}); err == nil {
+		t.Fatal("invalid patch accepted")
+	}
+	after, err := os.ReadFile(filepath.Join(dir, "profiles.json"))
+	if err != nil || string(after) != string(before) {
+		t.Fatal("invalid patch changed the catalog")
+	}
+	local, err := s.ImportLocal("local.yaml", []byte("rules: []"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PatchMetadata(local.UID, MetadataPatch{AutoUpdate: &auto}); err == nil {
+		t.Fatal("local profile accepted remote download option")
+	}
+}
+
 func TestConfiguredImportCommitsMetadataAndRejectsInvalidBeforeFetch(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)

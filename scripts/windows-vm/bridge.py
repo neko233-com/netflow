@@ -12,7 +12,7 @@ from pathlib import Path
 PAYLOAD = Path("/payload")
 RESULTS = Path("/storage/netflow-results")
 RUN_ID = os.environ["NETFLOW_RUN_ID"]
-FILES = ("netflow-app.test.exe", "NetFlow.msi", "netflow-vm-agent.exe")
+FILES = ("netflow-app.test.exe", "NetFlow.msi")
 if len(RUN_ID) != 32 or any(c not in "0123456789abcdef" for c in RUN_ID):
     raise ValueError("invalid run ID")
 RESULTS.mkdir(parents=True, exist_ok=True)
@@ -55,6 +55,8 @@ def desktop_ready(conn):
 
 def start_media_from_desktop(conn, drive):
     """Start only our fixed executable; no shell or guest command is used."""
+    if len(drive) != 1 or drive not in "DEFGHIJKLMNOPQRSTUVWXYZ":
+        raise ValueError("invalid optical drive letter")
     # An unsuccessful drive attempt can leave both an error dialog and the
     # Run dialog open. Close both before trying the next fixed path.
     for _ in range(3):
@@ -65,9 +67,9 @@ def start_media_from_desktop(conn, drive):
     # single-CPU guest. Clear its history only after it has opened.
     time.sleep(4)
     monitor_command(conn, "sendkey ctrl-a 100")
-    command = drive + r":\netflow-vm-agent.exe"
+    command = drive + r":\netflow-app.test.exe -test.run TestWindowsVMRunner -test.timeout 15m"
     for char in command:
-        key = {":": "shift-semicolon", "\\": "backslash", ".": "dot", "-": "minus"}.get(char, char)
+        key = {":": "shift-semicolon", "\\": "backslash", ".": "dot", "-": "minus", " ": "spc"}.get(char, char)
         if len(key) == 1 and key.isupper():
             key = "shift-" + key.lower()
         monitor_command(conn, "sendkey " + key + " 75")

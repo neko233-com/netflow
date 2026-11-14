@@ -36,6 +36,44 @@ func (a *App) agentProfiles() (agent.ProfileList, error) {
 	return result, nil
 }
 
+func (a *App) agentProfileSettings(id string) (agent.ProfileSettings, error) {
+	if a.profiles == nil || id == "" || len(id) > 256 {
+		return agent.ProfileSettings{}, errors.New("invalid profile id")
+	}
+	catalog, err := a.profiles.Load()
+	if err != nil {
+		return agent.ProfileSettings{}, errors.New("profile catalog could not be read")
+	}
+	for _, item := range catalog.Items {
+		if item.UID != id {
+			continue
+		}
+		return agent.ProfileSettings{ProfileID: item.UID, Name: profile.SafeDisplayName(item), Description: item.Description, Type: item.Type, Active: item.UID == catalog.Current,
+			UserAgent: item.Option.UserAgent, Timeout: item.Option.TimeoutSeconds, Interval: item.Option.UpdateInterval, AutoUpdate: item.Option.AllowAutoUpdate,
+			UseCoreProxy: item.Option.UseClashProxy, UseSystemProxy: item.Option.UseSystemProxy, AllowInsecure: item.Option.AcceptInvalid}, nil
+	}
+	return agent.ProfileSettings{}, errors.New("profile not found")
+}
+
+func (a *App) agentUpdateProfileSettings(in agent.ProfileSettingsPatch) (agent.ProfileSettings, error) {
+	if a.profiles == nil || in.ProfileID == "" || len(in.ProfileID) > 256 {
+		return agent.ProfileSettings{}, errors.New("invalid profile id")
+	}
+	if a.profileUpdates[in.ProfileID] {
+		return agent.ProfileSettings{}, errors.New("profile update is in progress")
+	}
+	patch := profile.MetadataPatch{Name: in.Name, Description: in.Description, UserAgent: in.UserAgent, Timeout: in.Timeout, Interval: in.Interval,
+		AutoUpdate: in.AutoUpdate, UseCoreProxy: in.UseCoreProxy, UseSystemProxy: in.UseSystemProxy, AllowInsecure: in.AllowInsecure}
+	if _, err := a.profiles.PatchMetadata(in.ProfileID, patch); err != nil {
+		return agent.ProfileSettings{}, err
+	}
+	if a.model != nil {
+		a.loadProfiles()
+		a.refreshHome()
+	}
+	return a.agentProfileSettings(in.ProfileID)
+}
+
 func (a *App) pruneProfileJobs(now time.Time) {
 	for id, record := range a.profileJobs {
 		if !record.completedAt.IsZero() && now.Sub(record.completedAt) >= profileJobRetention {
@@ -150,7 +188,7 @@ func profileImportForm(input agent.ProfileImportArgs) (ui.ProfileForm, error) {
 	if len(input.URL) > 8192 || !ui.ValidSubscriptionURL(input.URL) || strings.ContainsAny(input.URL, "\r\n\x00") {
 		return ui.ProfileForm{}, errors.New("invalid subscription URL")
 	}
-	if len(input.Name) > 256 || strings.ContainsAny(input.Name, "\r\n\x00") || len(input.UserAgent) > 512 || strings.ContainsAny(input.UserAgent, "\r\n\x00") {
+	if len(input.Name) > 256 || strings.ContainsAny(input.Name, "\r\n\x00") || len(input.Description) > 2048 || strings.ContainsRune(input.Description, '\x00') || len(input.UserAgent) > 512 || strings.ContainsAny(input.UserAgent, "\r\n\x00") {
 		return ui.ProfileForm{}, errors.New("invalid profile name or user agent")
 	}
 	if input.Timeout == 0 {
@@ -162,5 +200,5 @@ func profileImportForm(input agent.ProfileImportArgs) (ui.ProfileForm, error) {
 	if input.Timeout < 1 || input.Timeout > 300 || input.Interval < 1 || input.Interval > 43200 {
 		return ui.ProfileForm{}, errors.New("invalid profile timeout or update interval")
 	}
-	return ui.ProfileForm{Type: "remote", URL: input.URL, Name: input.Name, UA: input.UserAgent, Timeout: input.Timeout, Interval: input.Interval, Auto: input.AutoUpdate, Clash: input.UseCoreProxy}, nil
+	return ui.ProfileForm{Type: "remote", URL: input.URL, Name: input.Name, Desc: input.Description, UA: input.UserAgent, Timeout: input.Timeout, Interval: input.Interval, Auto: input.AutoUpdate, Clash: input.UseCoreProxy, SysProxy: input.UseSystemProxy, Insecure: input.AllowInsecure}, nil
 }

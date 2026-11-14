@@ -102,7 +102,7 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 
 CLI 还提供 `version`、`diagnostics`、`groups`、`rules [偏移 [数量]]`、`select <组> <节点>`、`mode <rule|global|direct>`、`use-profile <订阅 ID>` 和 `close-connection <连接 ID>`。`version` 无需运行桌面程序；其余操作有对应的 `netflow_` MCP 工具。设置页、CLI 和 MCP 的诊断摘要仅包含版本、平台、运行状态及计数，不包含订阅地址、配置目录、错误原文、令牌或连接详情。切换节点、模式、订阅及关闭连接会直接改变运行状态；关闭不存在的连接会返回 `closed: false`。规则覆写仍需要先预览再应用。
 
-GUI 和无界面模式都可通过 `kernel-options` 查看显式内核覆写，并通过 `kernel-option <名称> <值>` 修改：`allow-lan`、`ipv6`、`unified-delay` 接受 `true` 或 `false`；`log-level`、`tun-stack` 接受对应内核值；`mixed-port`、`socks-port`、`http-port` 接受端口数字。值为 `inherit` 时删除对应覆写并跟随订阅；未列出的字段也表示继承，而非当前生效值。对应 MCP 工具为 `netflow_kernel_options` 和 `netflow_set_kernel_option`，后者使用 `name`、相应的 `bool_value` / `string_value` / `port_value`，或 `inherit: true`。修改前校验，失败时尝试恢复原设置；修改可能重载内核、中断连接或改变监听范围。虚拟网卡切换中会拒绝修改；若选项文件被外部修改，会保留该文件并要求检查后重启。
+GUI 和无界面模式都可通过 `kernel-options` 查看显式内核覆写及运行中内核报告的生效值，并通过 `kernel-option <名称> <值>` 修改：`allow-lan`、`ipv6`、`unified-delay` 接受 `true` 或 `false`；`log-level`、`tun-stack` 接受对应内核值；`mixed-port`、`socks-port`、`http-port` 接受端口数字。值为 `inherit` 时删除对应覆写并跟随订阅；`overrides` 中未列出的字段表示继承，`effective` 不包含 TUN 协议栈且内核停止时省略。对应 MCP 工具为 `netflow_kernel_options` 和 `netflow_set_kernel_option`，后者使用 `name`、相应的 `bool_value` / `string_value` / `port_value`，或 `inherit: true`。修改前校验，失败时尝试恢复原设置；修改可能重载内核、中断连接或改变监听范围。虚拟网卡切换中会拒绝修改；若选项文件被外部修改，会保留该文件并要求检查后重启。
 
 ```powershell
 & $agent kernel-options
@@ -120,6 +120,15 @@ GUI 或无界面实例运行时，`profiles` 可列出订阅；`import-profile` 
 ```
 
 导入和更新是后台任务，均通过 `profile-job-status` 查询；订阅 ID 在导入成功后返回。导入时名称、描述与下载选项和目录条目一起提交；无法确认回滚时，失败任务可能返回需要检查的订阅 ID。删除共享文件的订阅时保留其他订阅仍引用的文件；文件删除失败时尝试恢复目录。异常终止或外部并发修改仍可能留下部分状态，应检查后再重试；当前订阅不能删除。同一订阅的并发 Agent 更新会合并，GUI 与 Agent 不会同时更新同一订阅。默认不自动更新；JSON 可指定 `auto_update`、`update_interval_minutes`、`timeout_seconds`、`user_agent` 和 `use_core_proxy`，要求内核代理时不可用会失败，不回退到直连。任务错误和列表不包含订阅 URL 字段，默认名称不包含 URL 凭据或查询参数；自定义名称仍可能包含用户自行填写的敏感信息。完成的任务最多保留十分钟，容量不足时可能提前清理，程序退出后任务记录丢失。对应 MCP 工具为 `netflow_profiles`、`netflow_import_profile`、`netflow_update_profile`、`netflow_profile_job_status` 和 `netflow_delete_profile`。
+
+`profile-settings <订阅 ID>` 查看名称、描述和下载选项；`profile-settings-set` 从标准输入读取包含 `profile_id` 与待修改字段的 JSON，只修改指定字段，不改变订阅 URL。例如：
+
+```powershell
+& $agent profile-settings '<订阅 ID>'
+'{"profile_id":"<订阅 ID>","user_agent":"NetFlow","timeout_seconds":30,"auto_update":false}' | & $agent profile-settings-set
+```
+
+对应 MCP 工具为 `netflow_profile_settings` 和 `netflow_update_profile_settings`。新建或修改远程订阅时可显式设置 `use_system_proxy` 和 `allow_insecure`；后者会跳过该订阅的 TLS 证书验证。选项在后续下载时生效，下载进行中不能修改同一订阅。详情不返回订阅 URL，但用户填写的名称、描述及 User-Agent 可能自行包含敏感信息。
 
 `providers` 列出当前代理与规则集合；`update-provider <proxy|rule> <名称>` 发起后台更新，返回 `job_id`，再用 `provider-job-status <job_id>` 查询 `pending`、`succeeded` 或 `failed`。对应 MCP 工具为 `netflow_providers`、`netflow_update_provider` 和 `netflow_provider_job_status`。重复提交同一订阅中仍在进行的同一更新会返回同一个任务；任务启动前如果活动订阅已切换，会失败而不会更新另一个订阅。完成的任务最多保留十分钟，容量不足时较旧的完成任务可能提前清理；程序退出后任务记录不保留。任务错误不会暴露订阅 URL 或凭据。
 

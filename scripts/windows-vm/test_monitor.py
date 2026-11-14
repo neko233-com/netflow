@@ -45,6 +45,13 @@ commands.clear()
 scope["start_media_from_desktop"](None, "D")
 if commands[:5] != ["sendkey esc 100"] * 3 + ["sendkey meta_l-r 100", "sendkey ctrl-a 100"] or commands[-1] != "sendkey ret 100" or not all(command.startswith("sendkey ") for command in commands):
     raise AssertionError("unexpected media bootstrap input")
+if commands.count("sendkey spc 75") != 4:
+    raise AssertionError("missing fixed verifier arguments")
+try:
+    scope["start_media_from_desktop"](None, "D;bad")
+    raise AssertionError("invalid media drive accepted")
+except ValueError:
+    pass
 scope["monitor_command"], scope["time"] = original_monitor, time
 screen.unlink()
 

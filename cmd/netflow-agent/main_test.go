@@ -105,6 +105,34 @@ func TestKernelOptionCLI(t *testing.T) {
 	}
 }
 
+func TestProfileSettingsCLIReadsPatchFromStdin(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		if method == "profile-settings" {
+			return agent.ProfileSettings{ProfileID: "profile", Name: "test"}, nil
+		}
+		var in agent.ProfileSettingsPatch
+		if method != "profile-settings-set" || json.Unmarshal(raw, &in) != nil || in.ProfileID != "profile" || in.Timeout == nil || *in.Timeout != 25 {
+			return nil, errors.New("unexpected profile settings request")
+		}
+		return agent.ProfileSettings{ProfileID: in.ProfileID, Name: "test", Timeout: *in.Timeout}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	var output bytes.Buffer
+	if err := run([]string{"--config-dir", dir, "profile-settings", "profile"}, strings.NewReader(""), &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config-dir", dir, "profile-settings-set"}, strings.NewReader(`{"profile_id":"profile","timeout_seconds":25}`), &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config-dir", dir, "profile-settings-set"}, strings.NewReader(`{"profile_id":"profile","unknown":1}`), &output); err == nil {
+		t.Fatal("unknown patch field accepted")
+	}
+}
+
 func TestWebDAVCLIReadsCredentialsFromStdinWithoutEcho(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {

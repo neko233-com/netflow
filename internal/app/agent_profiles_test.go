@@ -80,8 +80,8 @@ func TestProfileJobLimitsDeduplicationAndSecretRedaction(t *testing.T) {
 }
 
 func TestProfileImportValidation(t *testing.T) {
-	form, err := profileImportForm(agent.ProfileImportArgs{URL: "https://example.invalid/sub?token=secret", UseCoreProxy: true})
-	if err != nil || form.Timeout != 60 || form.Interval != 1440 || !form.Clash || form.Auto {
+	form, err := profileImportForm(agent.ProfileImportArgs{URL: "https://example.invalid/sub?token=secret", Description: "test", UseCoreProxy: true, UseSystemProxy: true, AllowInsecure: true})
+	if err != nil || form.Timeout != 60 || form.Interval != 1440 || !form.Clash || !form.SysProxy || !form.Insecure || form.Desc != "test" || form.Auto {
 		t.Fatalf("unexpected import defaults: %+v %v", form, err)
 	}
 	for _, input := range []agent.ProfileImportArgs{{URL: "file:///secret"}, {URL: "https://example.invalid", Timeout: 301}, {URL: "https://example.invalid", UserAgent: "bad\nheader"}} {

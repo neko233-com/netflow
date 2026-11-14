@@ -12,6 +12,16 @@ import (
 func TestMCPRequestsTUN(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := Start(dir, func(_ context.Context, method string, args json.RawMessage) (any, error) {
+		if method == "profile-settings" {
+			return ProfileSettings{ProfileID: "profile", Name: "test"}, nil
+		}
+		if method == "profile-settings-set" {
+			var in ProfileSettingsPatch
+			if json.Unmarshal(args, &in) != nil || in.ProfileID != "profile" || in.AutoUpdate == nil || !*in.AutoUpdate {
+				t.Error("incorrect profile settings request")
+			}
+			return ProfileSettings{ProfileID: "profile", Name: "test", AutoUpdate: true}, nil
+		}
 		if method == "kernel-options" {
 			return KernelOptionsResult{}, nil
 		}
@@ -71,6 +81,8 @@ func TestMCPRequestsTUN(t *testing.T) {
 	for _, call := range []*mcp.CallToolParams{
 		{Name: "netflow_kernel_options", Arguments: map[string]any{}},
 		{Name: "netflow_set_kernel_option", Arguments: map[string]any{"name": "ipv6", "bool_value": true}},
+		{Name: "netflow_profile_settings", Arguments: map[string]any{"profile_id": "profile"}},
+		{Name: "netflow_update_profile_settings", Arguments: map[string]any{"profile_id": "profile", "auto_update": true}},
 	} {
 		result, err := cs.CallTool(ctx, call)
 		if err != nil || result.IsError {

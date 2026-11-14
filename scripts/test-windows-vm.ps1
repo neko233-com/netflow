@@ -62,9 +62,11 @@ try {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot "windows-vm/$name") -Destination (Join-Path $context $name) -Force
     }
     $env:GOOS='windows'; $env:GOARCH='amd64'
-    go build -p 1 '-ldflags=-H=windowsgui' -o (Join-Path $payload 'netflow-vm-agent.exe') ./cmd/netflow-vm-agent
-    if ($LASTEXITCODE -ne 0) { throw 'Could not build guest agent' }
-    go test -p 1 '-tags=integration,with_gvisor,no_tailscale' -c -o (Join-Path $payload 'netflow-app.test.exe') ./internal/app
+    # Older runs included a separate unsigned bootstrapper. The verifier now
+    # runs from the same optical-media test executable as the integration test.
+    $obsoleteAgent = Join-Path $payload 'netflow-vm-agent.exe'
+    if (Test-Path -LiteralPath $obsoleteAgent -PathType Leaf) { Remove-Item -LiteralPath $obsoleteAgent }
+    go test -p 1 '-tags=integration,with_gvisor,no_tailscale' '-ldflags=-H=windowsgui' -c -o (Join-Path $payload 'netflow-app.test.exe') ./internal/app
     if ($LASTEXITCODE -ne 0) { throw 'Could not build Windows integration test' }
     Remove-Item Env:GOOS,Env:GOARCH
     $version = (Get-Content -Raw mygo.json | ConvertFrom-Json).version

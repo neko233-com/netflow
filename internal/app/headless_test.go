@@ -20,6 +20,7 @@ import (
 	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/sysproxy"
 	"github.com/neko233-com/netflow/internal/tun"
+	"github.com/neko233-com/netflow/internal/ui"
 )
 
 func TestHeadlessDispatcherSerializesAndStops(t *testing.T) {
@@ -139,7 +140,7 @@ func TestHeadlessAgentRewriteAndGracefulShutdown(t *testing.T) {
 		t.Fatalf("headless inherited options: %+v %v", options, err)
 	}
 	enabled := true
-	if err := client.Call(context.Background(), "kernel-option", agent.KernelOptionArgs{Name: "ipv6", BoolValue: &enabled}, &options); err != nil || options.Overrides.IPv6 == nil || !*options.Overrides.IPv6 {
+	if err := client.Call(context.Background(), "kernel-option", agent.KernelOptionArgs{Name: "ipv6", BoolValue: &enabled}, &options); err != nil || options.Overrides.IPv6 == nil || !*options.Overrides.IPv6 || options.Effective == nil || !options.Effective.IPv6 {
 		t.Fatalf("headless option update: %+v %v", options, err)
 	}
 	options = agent.KernelOptionsResult{}
@@ -184,6 +185,8 @@ func TestHeadlessAgentRewriteAndGracefulShutdown(t *testing.T) {
 func TestHeadlessAgentManagesSubscriptions(t *testing.T) {
 	config := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\nipv6: false\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
 	var hold atomic.Bool
+	var lastUserAgent atomic.Value
+	lastUserAgent.Store("")
 	started, release := make(chan struct{}, 1), make(chan struct{})
 	var releaseOnce sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -191,6 +194,7 @@ func TestHeadlessAgentManagesSubscriptions(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		lastUserAgent.Store(r.Header.Get("User-Agent"))
 		if hold.Load() {
 			select {
 			case started <- struct{}{}:
@@ -261,6 +265,18 @@ func TestHeadlessAgentManagesSubscriptions(t *testing.T) {
 	if strings.Contains(string(encoded), "synthetic-secret") || strings.Contains(string(encoded), server.URL) {
 		t.Fatal("profile list leaked URL")
 	}
+	var settings agent.ProfileSettings
+	if err := client.Call(context.Background(), "profile-settings", agent.ProfileArgs{ProfileID: first.ProfileID}, &settings); err != nil || settings.Name != "first" || !settings.Active {
+		t.Fatalf("profile settings: %+v %v", settings, err)
+	}
+	ua, description, timeout := "NetFlow-agent-test", "description", 25
+	if err := client.Call(context.Background(), "profile-settings-set", agent.ProfileSettingsPatch{ProfileID: first.ProfileID, UserAgent: &ua, Description: &description, Timeout: &timeout}, &settings); err != nil || settings.UserAgent != ua || settings.Description != description || settings.Timeout != timeout {
+		t.Fatalf("profile settings patch: %+v %v", settings, err)
+	}
+	encoded, _ = json.Marshal(settings)
+	if strings.Contains(string(encoded), "synthetic-secret") || strings.Contains(string(encoded), server.URL) {
+		t.Fatal("profile settings leaked URL")
+	}
 	var job agent.ProfileJob
 	hold.Store(true)
 	if err := client.Call(context.Background(), "update-profile", agent.ProfileArgs{ProfileID: first.ProfileID}, &job); err != nil {
@@ -270,6 +286,17 @@ func TestHeadlessAgentManagesSubscriptions(t *testing.T) {
 	case <-started:
 	case <-time.After(10 * time.Second):
 		t.Fatal("profile update did not start")
+	}
+	if err := client.Call(context.Background(), "profile-settings-set", agent.ProfileSettingsPatch{ProfileID: first.ProfileID, UserAgent: &ua}, &settings); err == nil {
+		t.Fatal("settings changed during download")
+	}
+	var guiEditErr, guiDeleteErr error
+	a.runOnMain(func() {
+		guiEditErr = a.saveProfileMetadata(ui.ProfileForm{UID: first.ProfileID, Name: "edited"})
+		guiDeleteErr = a.DeleteProfile(first.ProfileID)
+	})
+	if guiEditErr == nil || !strings.Contains(guiEditErr.Error(), "正在更新") || guiDeleteErr == nil || !strings.Contains(guiDeleteErr.Error(), "正在更新") {
+		t.Fatalf("GUI changes were not blocked during download: edit=%v delete=%v", guiEditErr, guiDeleteErr)
 	}
 	var duplicate agent.ProfileJob
 	if err := client.Call(context.Background(), "update-profile", agent.ProfileArgs{ProfileID: first.ProfileID}, &duplicate); err != nil || duplicate.JobID != job.JobID {
@@ -284,6 +311,9 @@ func TestHeadlessAgentManagesSubscriptions(t *testing.T) {
 	releaseOnce.Do(func() { close(release) })
 	if job = wait(job); job.State != "succeeded" {
 		t.Fatalf("update: %+v", job)
+	}
+	if got := lastUserAgent.Load(); got != ua {
+		t.Fatalf("updated user agent not used: %v", got)
 	}
 	if err := client.Call(context.Background(), "delete-profile", agent.ProfileArgs{ProfileID: first.ProfileID}, nil); err == nil {
 		t.Fatal("active profile was deleted")

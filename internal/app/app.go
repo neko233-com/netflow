@@ -1210,6 +1210,9 @@ func (a *App) saveProfileMetadata(form ui.ProfileForm) error {
 	if a.profiles == nil {
 		return errors.New("订阅存储不可用")
 	}
+	if a.profileUpdates[form.UID] {
+		return errors.New("订阅正在更新，请完成后再修改设置")
+	}
 	var options *profile.CatalogOption
 	if form.Type == "remote" {
 		options = &profile.CatalogOption{AllowAutoUpdate: form.Auto, UpdateInterval: form.Interval,
@@ -1438,6 +1441,9 @@ func (a *App) finishProfileImport(previous, uid string) error {
 func (a *App) DeleteProfile(uid string) error {
 	if a.profiles == nil {
 		return errors.New("订阅存储不可用")
+	}
+	if a.profileUpdates[uid] {
+		return errors.New("订阅正在更新，请完成后再删除")
 	}
 	var old rewrite.State
 	var revision uint64

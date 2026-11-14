@@ -140,6 +140,16 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		if callErr = decodeStrict(args, &input); callErr == nil {
 			value, callErr = a.agentProfiles()
 		}
+	case "profile-settings":
+		var input agent.ProfileArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentProfileSettings(input.ProfileID)
+		}
+	case "profile-settings-set":
+		var input agent.ProfileSettingsPatch
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentUpdateProfileSettings(input)
+		}
 	case "import-profile":
 		var input agent.ProfileImportArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {

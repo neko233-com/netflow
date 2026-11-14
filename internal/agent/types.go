@@ -18,6 +18,19 @@ type Profile struct {
 // active subscription and do not necessarily reflect its effective values.
 type KernelOptionsResult struct {
 	Overrides kernelopts.Options `json:"overrides"`
+	Effective *KernelEffective   `json:"effective,omitempty"`
+}
+
+// KernelEffective is an allowlisted live-kernel snapshot without paths or secrets.
+type KernelEffective struct {
+	Mode         string `json:"mode"`
+	AllowLAN     bool   `json:"allow_lan"`
+	IPv6         bool   `json:"ipv6"`
+	UnifiedDelay bool   `json:"unified_delay"`
+	LogLevel     string `json:"log_level"`
+	MixedPort    int    `json:"mixed_port"`
+	SOCKSPort    int    `json:"socks_port"`
+	HTTPPort     int    `json:"http_port"`
 }
 
 type KernelOptionArgs struct {
@@ -33,13 +46,46 @@ type ProfileList struct {
 }
 
 type ProfileImportArgs struct {
-	URL          string `json:"url" jsonschema:"HTTP or HTTPS subscription URL, which may contain credentials"`
-	Name         string `json:"name,omitempty" jsonschema:"optional display name"`
-	UserAgent    string `json:"user_agent,omitempty" jsonschema:"optional HTTP user agent"`
-	Timeout      int    `json:"timeout_seconds,omitempty" jsonschema:"download timeout from 1 to 300 seconds, default 60"`
-	Interval     int    `json:"update_interval_minutes,omitempty" jsonschema:"automatic update interval from 1 to 43200 minutes, default 1440"`
-	AutoUpdate   bool   `json:"auto_update,omitempty" jsonschema:"enable periodic updates"`
-	UseCoreProxy bool   `json:"use_core_proxy,omitempty" jsonschema:"download through the running core; never fall back to direct"`
+	URL            string `json:"url" jsonschema:"HTTP or HTTPS subscription URL, which may contain credentials"`
+	Name           string `json:"name,omitempty" jsonschema:"optional display name"`
+	Description    string `json:"description,omitempty" jsonschema:"optional user-provided description"`
+	UserAgent      string `json:"user_agent,omitempty" jsonschema:"optional HTTP user agent"`
+	Timeout        int    `json:"timeout_seconds,omitempty" jsonschema:"download timeout from 1 to 300 seconds, default 60"`
+	Interval       int    `json:"update_interval_minutes,omitempty" jsonschema:"automatic update interval from 1 to 43200 minutes, default 1440"`
+	AutoUpdate     bool   `json:"auto_update,omitempty" jsonschema:"enable periodic updates"`
+	UseCoreProxy   bool   `json:"use_core_proxy,omitempty" jsonschema:"download through the running core; never fall back to direct"`
+	UseSystemProxy bool   `json:"use_system_proxy,omitempty" jsonschema:"use the manual system proxy when core proxy is not selected"`
+	AllowInsecure  bool   `json:"allow_insecure,omitempty" jsonschema:"explicitly allow untrusted TLS certificates for this subscription"`
+}
+
+// ProfileSettings omits the subscription URL and internal file paths. User
+// supplied names, descriptions and user agents may themselves be sensitive.
+type ProfileSettings struct {
+	ProfileID      string `json:"profile_id"`
+	Name           string `json:"name"`
+	Description    string `json:"description,omitempty"`
+	Type           string `json:"type"`
+	Active         bool   `json:"active"`
+	UserAgent      string `json:"user_agent,omitempty"`
+	Timeout        int    `json:"timeout_seconds,omitempty"`
+	Interval       int    `json:"update_interval_minutes,omitempty"`
+	AutoUpdate     bool   `json:"auto_update"`
+	UseCoreProxy   bool   `json:"use_core_proxy"`
+	UseSystemProxy bool   `json:"use_system_proxy"`
+	AllowInsecure  bool   `json:"allow_insecure"`
+}
+
+type ProfileSettingsPatch struct {
+	ProfileID      string  `json:"profile_id" jsonschema:"existing profile id"`
+	Name           *string `json:"name,omitempty" jsonschema:"optional replacement display name"`
+	Description    *string `json:"description,omitempty" jsonschema:"optional replacement description"`
+	UserAgent      *string `json:"user_agent,omitempty" jsonschema:"optional replacement user agent"`
+	Timeout        *int    `json:"timeout_seconds,omitempty" jsonschema:"download timeout from 1 to 300 seconds"`
+	Interval       *int    `json:"update_interval_minutes,omitempty" jsonschema:"automatic update interval from 1 to 43200 minutes"`
+	AutoUpdate     *bool   `json:"auto_update,omitempty" jsonschema:"enable periodic updates"`
+	UseCoreProxy   *bool   `json:"use_core_proxy,omitempty" jsonschema:"use the running core for downloads"`
+	UseSystemProxy *bool   `json:"use_system_proxy,omitempty" jsonschema:"use the manual system proxy if core proxy is not selected"`
+	AllowInsecure  *bool   `json:"allow_insecure,omitempty" jsonschema:"explicitly allow untrusted TLS certificates"`
 }
 
 type ProfileJob struct {

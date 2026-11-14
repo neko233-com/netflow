@@ -24,7 +24,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags := flag.NewFlagSet("netflow-agent", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, kernel-options, kernel-option NAME VALUE|inherit, update-geo, tun on|off, profiles, import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, webdav-config, webdav-clear, webdav-save|webdav-list|webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
+		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, kernel-options, kernel-option NAME VALUE|inherit, update-geo, tun on|off, profiles, profile-settings ID, profile-settings-set (JSON stdin), import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, webdav-config, webdav-clear, webdav-save|webdav-list|webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -107,7 +107,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	case "help":
 		flags.Usage()
 		return nil
-	case "diagnostics", "shutdown", "kernel-options", "kernel-option", "update-geo", "groups", "profiles", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "webdav-config", "webdav-save", "webdav-clear", "webdav-list", "webdav-upload", "webdav-restore", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
+	case "diagnostics", "shutdown", "kernel-options", "kernel-option", "update-geo", "groups", "profiles", "profile-settings", "profile-settings-set", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "webdav-config", "webdav-save", "webdav-clear", "webdav-list", "webdav-upload", "webdav-restore", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
 		method := flags.Arg(0)
 		stdin := input
 		var input any
@@ -205,18 +205,23 @@ func run(args []string, input io.Reader, output io.Writer) error {
 				return errors.New("restore-create requires absolute archive and new directory paths")
 			}
 			input = agent.RestoreArgs{Archive: flags.Arg(1), Destination: flags.Arg(2)}
-		case "import-profile":
+		case "import-profile", "profile-settings-set":
 			if flags.NArg() != 1 {
-				return errors.New("import-profile reads one JSON object from stdin")
+				return fmt.Errorf("%s reads one JSON object from stdin", method)
 			}
 			body, err := io.ReadAll(io.LimitReader(stdin, (1<<20)+1))
 			if err != nil || len(body) > 1<<20 {
 				return errors.New("invalid or oversized profile input")
 			}
-			var value agent.ProfileImportArgs
+			var value any
+			if method == "import-profile" {
+				value = &agent.ProfileImportArgs{}
+			} else {
+				value = &agent.ProfileSettingsPatch{}
+			}
 			dec := json.NewDecoder(bytes.NewReader(body))
 			dec.DisallowUnknownFields()
-			if err := dec.Decode(&value); err != nil {
+			if err := dec.Decode(value); err != nil {
 				return err
 			}
 			var extra any
@@ -249,7 +254,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 			if err != nil {
 				return err
 			}
-		case "use-profile", "update-profile", "delete-profile":
+		case "use-profile", "update-profile", "delete-profile", "profile-settings":
 			if flags.NArg() != 2 {
 				return fmt.Errorf("%s requires a profile ID", method)
 			}

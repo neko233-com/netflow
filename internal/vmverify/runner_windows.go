@@ -1,8 +1,8 @@
 //go:build windows
 
-// netflow-vm-agent runs only inside the disposable Windows validation guest.
+// Package vmverify runs only inside the disposable Windows validation guest.
 // It verifies a fixed test executable and MSI on read-only QEMU media.
-package main
+package vmverify
 
 import (
 	"bytes"
@@ -69,10 +69,10 @@ func getManifest() (manifest, error) {
 	if err = dec.Decode(&m); err != nil {
 		return m, err
 	}
-	if !validHex(m.ID, 32) || len(m.Files) != 3 || len(m.Expected) != 3 {
+	if !validHex(m.ID, 32) || len(m.Files) != 2 || len(m.Expected) != 3 {
 		return m, errors.New("invalid manifest")
 	}
-	for _, name := range []string{"netflow-app.test.exe", "NetFlow.msi", "netflow-vm-agent.exe"} {
+	for _, name := range []string{"netflow-app.test.exe", "NetFlow.msi"} {
 		f, ok := m.Files[name]
 		if !ok || !validHex(f.SHA256, 64) || f.Size <= 0 || f.Size > maxArtifact {
 			return m, errors.New("invalid artifact metadata")
@@ -132,7 +132,7 @@ func verifyMedia(root string, m manifest) error {
 	if err != nil || string(id) != m.ID {
 		return errors.New("validation media identity mismatch")
 	}
-	for _, name := range []string{"netflow-app.test.exe", "NetFlow.msi", "netflow-vm-agent.exe"} {
+	for _, name := range []string{"netflow-app.test.exe", "NetFlow.msi"} {
 		a := m.Files[name]
 		sum, size, err := digestFile(filepath.Join(root, name))
 		if err != nil || sum != a.SHA256 || size != a.Size {
@@ -268,7 +268,9 @@ func disposableGuest() bool {
 	}
 	return count == 1 && matches
 }
-func main() {
+
+// Run starts the isolated guest verifier; it refuses non-QEMU and multi-disk guests.
+func Run() {
 	if !qemuGuest() {
 		return
 	}

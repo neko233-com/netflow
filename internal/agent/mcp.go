@@ -29,7 +29,7 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "diagnostics", nil, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "netflow_kernel_options", Description: "Read explicit kernel overrides; omitted settings inherit the active subscription.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_kernel_options", Description: "Read explicit kernel overrides and an allowlisted live-kernel snapshot. Omitted overrides inherit the active subscription.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, KernelOptionsResult, error) {
 			var out KernelOptionsResult
 			err := client.Call(ctx, "kernel-options", nil, &out)
@@ -81,6 +81,18 @@ func NewMCP(client Client) *mcp.Server {
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, ProfileList, error) {
 			var out ProfileList
 			err := client.Call(ctx, "profiles", nil, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_profile_settings", Description: "Read user-provided profile metadata and download options without the subscription URL. Names, descriptions and user agents can themselves contain sensitive text.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in ProfileArgs) (*mcp.CallToolResult, ProfileSettings, error) {
+			var out ProfileSettings
+			err := client.Call(ctx, "profile-settings", in, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_update_profile_settings", Description: "Update selected profile metadata or remote download options without changing its subscription URL. New options affect future downloads; enabling insecure TLS or a proxy is explicit."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in ProfileSettingsPatch) (*mcp.CallToolResult, ProfileSettings, error) {
+			var out ProfileSettings
+			err := client.Call(ctx, "profile-settings-set", in, &out)
 			return nil, out, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_webdav_config", Description: "Read whether WebDAV credentials are saved and account-protected storage is available. Never returns credential values.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},

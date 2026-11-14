@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -41,12 +42,24 @@ import (
 	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/tun"
 	"github.com/neko233-com/netflow/internal/validation"
+	"github.com/neko233-com/netflow/internal/vmverify"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
 //go:embed testdata/GeoIP2-Country-Test.mmdb
 var vmGeoFixture []byte
+
+// The verifier runs only when explicitly selected on the optical test medium.
+// vmverify repeats the QEMU and single-disk checks before any system changes.
+func TestWindowsVMRunner(t *testing.T) {
+	run := flag.Lookup("test.run")
+	executable, err := os.Executable()
+	if run == nil || run.Value.String() != "TestWindowsVMRunner" || err != nil || !strings.EqualFold(filepath.Base(executable), "netflow-app.test.exe") {
+		t.Skip("requires explicit optical-media verifier invocation")
+	}
+	vmverify.Run()
+}
 
 func vmCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 	c := exec.CommandContext(ctx, name, args...)
@@ -302,11 +315,16 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatalf("headless TUN did not start: %+v", status)
 	}
 	var options agent.KernelOptionsResult
-	if output, err := call("kernel-option", "log-level", "warning"); err != nil || json.Unmarshal(output, &options) != nil || options.Overrides.LogLevel == nil || *options.Overrides.LogLevel != "warning" {
+	if output, err := call("kernel-options"); err != nil || json.Unmarshal(output, &options) != nil || options.Effective == nil {
+		t.Fatalf("headless CLI missing effective options: %s %v", output, err)
+	}
+	previousLogLevel := options.Effective.LogLevel
+	options = agent.KernelOptionsResult{}
+	if output, err := call("kernel-option", "log-level", "warning"); err != nil || json.Unmarshal(output, &options) != nil || options.Overrides.LogLevel == nil || *options.Overrides.LogLevel != "warning" || options.Effective == nil || options.Effective.LogLevel != "warning" {
 		t.Fatalf("headless CLI could not set kernel option: %s %v", output, err)
 	}
 	options = agent.KernelOptionsResult{}
-	if output, err := call("kernel-option", "log-level", "inherit"); err != nil || json.Unmarshal(output, &options) != nil || options.Overrides.LogLevel != nil {
+	if output, err := call("kernel-option", "log-level", "inherit"); err != nil || json.Unmarshal(output, &options) != nil || options.Overrides.LogLevel != nil || options.Effective == nil || options.Effective.LogLevel != previousLogLevel {
 		t.Fatalf("headless CLI could not restore inherited option: %s %v", output, err)
 	}
 	if output, err := call("kernel-option", "mixed-port", "0"); err == nil {
@@ -355,6 +373,11 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatalf("headless process has %d visible windows", windows)
 	}
 	var downloads atomic.Int32
+	var lastUserAgent atomic.Value
+	lastUserAgent.Store("")
+	var holdDownload atomic.Bool
+	downloadStarted, releaseDownload := make(chan struct{}, 1), make(chan struct{})
+	var releaseDownloadOnce sync.Once
 	redirectHeaders := make(chan [2]string, 1)
 	subscription := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/subscription" && r.URL.Path != "/" && r.URL.Path != "/redirect-target" {
@@ -364,10 +387,23 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		if r.URL.Path == "/redirect-target" {
 			redirectHeaders <- [2]string{r.Header.Get("Referer"), r.Header.Get("Authorization")}
 		}
+		lastUserAgent.Store(r.Header.Get("User-Agent"))
+		if r.URL.Path == "/subscription" && holdDownload.Load() {
+			select {
+			case downloadStarted <- struct{}{}:
+			default:
+			}
+			select {
+			case <-releaseDownload:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		downloads.Add(1)
 		_, _ = io.WriteString(w, "mixed-port: 0\nport: 0\nsocks-port: 0\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n")
 	}))
 	defer subscription.Close()
+	defer releaseDownloadOnce.Do(func() { close(releaseDownload) })
 	redirectTarget.Store(subscription.URL + "/subscription")
 	waitJob := func(job agent.ProfileJob) agent.ProfileJob {
 		t.Helper()
@@ -431,7 +467,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	t.Log("installed headless Agent did not forward subscription credentials to a different origin")
 	importProfile := func(path string) agent.ProfileJob {
 		t.Helper()
-		body, _ := json.Marshal(agent.ProfileImportArgs{URL: subscription.URL + path + "?token=synthetic-secret", Name: "headless-test"})
+		body, _ := json.Marshal(agent.ProfileImportArgs{URL: subscription.URL + path + "?token=synthetic-secret", Name: "headless-test", Description: "initial description"})
 		c, done := context.WithTimeout(context.Background(), 30*time.Second)
 		command := vmCommand(c, agentExe, "--config-dir", dir, "import-profile")
 		command.Stdin = strings.NewReader(string(body))
@@ -447,15 +483,52 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if profileJob.State != "succeeded" || profileJob.ProfileID == "" {
 		t.Fatalf("headless profile import: %+v", profileJob)
 	}
+	var profileSettings agent.ProfileSettings
+	if output, err := call("profile-settings", profileJob.ProfileID); err != nil || strings.Contains(string(output), "synthetic-secret") || json.Unmarshal(output, &profileSettings) != nil || profileSettings.Description != "initial description" {
+		t.Fatal("headless CLI did not read safe profile settings")
+	}
+	updatedUA, updatedDescription := "NetFlow-vm-agent", "updated description"
+	settingsArgs, _ := json.Marshal(agent.ProfileSettingsPatch{ProfileID: profileJob.ProfileID, UserAgent: &updatedUA, Description: &updatedDescription})
+	settingsCtx, settingsCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	settingsCommand := vmCommand(settingsCtx, agentExe, "--config-dir", dir, "profile-settings-set")
+	settingsCommand.Stdin = strings.NewReader(string(settingsArgs))
+	settingsOutput, settingsErr := settingsCommand.CombinedOutput()
+	settingsCancel()
+	if settingsErr != nil || strings.Contains(string(settingsOutput), "synthetic-secret") || json.Unmarshal(settingsOutput, &profileSettings) != nil || profileSettings.UserAgent != updatedUA || profileSettings.Description != updatedDescription {
+		t.Fatal("headless CLI could not update profile settings safely")
+	}
 	beforeUpdate := downloads.Load()
+	holdDownload.Store(true)
 	payload, err := call("update-profile", profileJob.ProfileID)
 	var updateJob agent.ProfileJob
 	if err != nil || json.Unmarshal(payload, &updateJob) != nil {
 		t.Fatalf("headless profile update request failed: %s %v", payload, err)
 	}
+	select {
+	case <-downloadStarted:
+	case <-time.After(15 * time.Second):
+		t.Fatal("headless profile download did not start")
+	}
+	settingsCtx, settingsCancel = context.WithTimeout(context.Background(), 30*time.Second)
+	settingsCommand = vmCommand(settingsCtx, agentExe, "--config-dir", dir, "profile-settings-set")
+	settingsCommand.Stdin = strings.NewReader(string(settingsArgs))
+	if output, err := settingsCommand.CombinedOutput(); err == nil {
+		settingsCancel()
+		t.Fatalf("profile settings changed during download: %s", output)
+	}
+	settingsCancel()
+	if output, err := call("delete-profile", profileJob.ProfileID); err == nil {
+		t.Fatalf("profile was deleted during download: %s", output)
+	}
+	holdDownload.Store(false)
+	releaseDownloadOnce.Do(func() { close(releaseDownload) })
 	if updateJob = waitJob(updateJob); updateJob.State != "succeeded" || downloads.Load() <= beforeUpdate {
 		t.Fatalf("headless profile update: %+v", updateJob)
 	}
+	if got := lastUserAgent.Load(); got != updatedUA {
+		t.Fatalf("installed profile update ignored changed User-Agent: %v", got)
+	}
+	t.Log("installed headless CLI edited subscription metadata, blocked changes during download and used its new options")
 	if payload, err := call("delete-profile", profileJob.ProfileID); err != nil {
 		t.Fatalf("headless profile delete failed: %s %v", payload, err)
 	}

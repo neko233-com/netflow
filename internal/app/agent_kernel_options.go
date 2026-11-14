@@ -15,7 +15,14 @@ func (a *App) agentKernelOptions() (agent.KernelOptionsResult, error) {
 	if err := a.kernelOptions.CheckCurrent(); err != nil {
 		return agent.KernelOptionsResult{}, err
 	}
-	return agent.KernelOptionsResult{Overrides: a.kernelOptions.Snapshot()}, nil
+	result := agent.KernelOptionsResult{Overrides: a.kernelOptions.Snapshot()}
+	if a.core != nil {
+		status := a.core.Status()
+		if status.Running {
+			result.Effective = &agent.KernelEffective{Mode: status.Mode, AllowLAN: status.AllowLAN, IPv6: status.IPv6, UnifiedDelay: status.UnifiedDelay, LogLevel: status.LogLevel, MixedPort: status.MixedPort, SOCKSPort: status.SOCKSPort, HTTPPort: status.HTTPPort}
+		}
+	}
+	return result, nil
 }
 
 func (a *App) agentSetKernelOption(input agent.KernelOptionArgs) (agent.KernelOptionsResult, error) {
@@ -83,5 +90,5 @@ func (a *App) agentSetKernelOption(input agent.KernelOptionArgs) (agent.KernelOp
 	if err := a.applyKernelOptions(next); err != nil {
 		return agent.KernelOptionsResult{}, err
 	}
-	return agent.KernelOptionsResult{Overrides: a.kernelOptions.Snapshot()}, nil
+	return a.agentKernelOptions()
 }
