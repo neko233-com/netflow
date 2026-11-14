@@ -24,14 +24,19 @@ function Assert-NetFlowSigningOptions([string]$Thumbprint, [string]$TimestampUrl
     return $true
 }
 
+function Assert-NetFlowSigningCertificate($cert) {
+    $now = Get-Date
+    if (-not $cert.HasPrivateKey -or $cert.NotBefore -gt $now -or $cert.NotAfter -le $now) { throw 'Signing certificate is expired, not yet valid, or lacks a private key' }
+    # PowerShell's certificate provider exposes ObjectId as a string, not Oid.
+    $codeSigning = @($cert.EnhancedKeyUsageList | Where-Object { $_.ObjectId -eq '1.3.6.1.5.5.7.3.3' })
+    if ($codeSigning.Count -eq 0) { throw 'Signing certificate does not allow code signing' }
+}
+
 function New-NetFlowSigningConfig([string]$Thumbprint, [string]$TimestampUrl, [string]$Store) {
     if ($Store -notin @('CurrentUser', 'LocalMachine')) { throw 'Invalid signing certificate store' }
     $null = Assert-NetFlowSigningOptions $Thumbprint $TimestampUrl $true
     $cert = Get-Item -LiteralPath "Cert:\$Store\My\$Thumbprint" -ErrorAction Stop
-    $now = Get-Date
-    if (-not $cert.HasPrivateKey -or $cert.NotBefore -gt $now -or $cert.NotAfter -le $now) { throw 'Signing certificate is expired, not yet valid, or lacks a private key' }
-    $codeSigning = @($cert.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.3' })
-    if ($codeSigning.Count -eq 0) { throw 'Signing certificate does not allow code signing' }
+    Assert-NetFlowSigningCertificate $cert
     $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
     try {
         $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::Online

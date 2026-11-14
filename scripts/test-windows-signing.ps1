@@ -33,6 +33,9 @@ $temp = Join-Path $build ('signing-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temp | Out-Null
 $rsa = $null
 $cert = $null
+$noKey = $null
+$wrongUsage = $null
+$expired = $null
 try {
     $rsa = [System.Security.Cryptography.RSA]::Create(2048)
     $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=NetFlow synthetic signing test', $rsa, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
@@ -40,6 +43,14 @@ try {
     $null = $eku.Add([System.Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.3'))
     $request.CertificateExtensions.Add([System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($eku, $false))
     $cert = $request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddMinutes(-5), [DateTimeOffset]::UtcNow.AddDays(1))
+    Assert-NetFlowSigningCertificate $cert
+    $noKey = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($cert.RawData)
+    Expect-NetFlowFailure { Assert-NetFlowSigningCertificate $noKey } 'Certificate without a private key was accepted'
+    $otherRequest = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=NetFlow wrong usage', $rsa, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $wrongUsage = $otherRequest.CreateSelfSigned([DateTimeOffset]::UtcNow.AddMinutes(-5), [DateTimeOffset]::UtcNow.AddDays(1))
+    Expect-NetFlowFailure { Assert-NetFlowSigningCertificate $wrongUsage } 'Certificate without code-signing usage was accepted'
+    $expired = $request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-2), [DateTimeOffset]::UtcNow.AddDays(-1))
+    Expect-NetFlowFailure { Assert-NetFlowSigningCertificate $expired } 'Expired certificate was accepted'
     $pfx = Join-Path $temp 'synthetic.pfx'
     # This password protects a throwaway synthetic key only; no user key is used.
     $password = 'netflow-synthetic-test-only'
@@ -58,11 +69,21 @@ try {
         $signature = Get-AuthenticodeSignature -LiteralPath $copy
         if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $cert.Thumbprint) { throw 'Synthetic signature was not recorded' }
         if ($signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid) { throw 'Synthetic certificate unexpectedly trusted' }
+        if ([IO.Path]::GetExtension($copy) -eq '.exe') {
+            & python -c 'import sys; sys.path.insert(0,sys.argv[1]); from pathlib import Path; from package_release import check_pe,check_tun_build_tags; p=Path(sys.argv[2]); check_pe(p); check_tun_build_tags(p)' $PSScriptRoot $copy
+            if ($LASTEXITCODE -ne 0) { throw 'Signing broke executable packaging checks' }
+        } else {
+            & python -c 'import sys; from pathlib import Path; assert Path(sys.argv[1]).read_bytes()[:8] == bytes.fromhex("d0cf11e0a1b11ae1")' $copy
+            if ($LASTEXITCODE -ne 0) { throw 'Signing broke MSI packaging checks' }
+        }
         $config = [pscustomobject]@{ Thumbprint = $cert.Thumbprint; Tool = $tool }
         Expect-NetFlowFailure { Assert-NetFlowSignedFile $config $copy } 'Untimestamped, untrusted artifact accepted'
     }
     Write-Output 'Signing options and real untrusted EXE/MSI signature rejection passed'
 } finally {
+    if ($null -ne $expired) { $expired.Dispose() }
+    if ($null -ne $wrongUsage) { $wrongUsage.Dispose() }
+    if ($null -ne $noKey) { $noKey.Dispose() }
     if ($null -ne $cert) { $cert.Dispose() }
     if ($null -ne $rsa) { $rsa.Dispose() }
     if (Test-Path -LiteralPath $temp) {
