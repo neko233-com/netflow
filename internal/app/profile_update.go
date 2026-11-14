@@ -100,6 +100,8 @@ func (a *App) updateProfileDataWithURL(uid, expectedURL, nextURL string, body []
 	return a.updateProfileDataWithSource(uid, expectedURL, nextURL, body, headers, nil)
 }
 
+var errScriptUpdateReviewRequired = errors.New("已启用的 Verge 脚本绑定当前订阅；请在脚本对话框预览订阅更新并应用，或先关闭脚本再更新")
+
 func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body []byte, headers http.Header, source *profileSourceSnapshot) error {
 	if a.tunBusy {
 		return errors.New("虚拟网卡正在切换，请稍后重试")
@@ -137,7 +139,7 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 		if nextURL != expectedURL {
 			return errors.New("已启用的 Verge 脚本绑定当前订阅；请预览新链接并单独应用")
 		}
-		return errors.New("已启用的 Verge 脚本绑定当前订阅；请在脚本对话框预览订阅更新并应用，或先关闭脚本再更新")
+		return errScriptUpdateReviewRequired
 	}
 	// A disabled script can still be the previous rollback target. Preserve
 	// its original subscription and metadata before updating that file.
@@ -250,6 +252,8 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 	if err = a.profiles.SaveIfUnchanged(f, snapshot); err != nil {
 		return rollback(err)
 	}
+	delete(a.profileAutoRetry, uid)
+	delete(a.profileAutoReview, uid)
 	a.loadProfiles()
 	if active {
 		a.loadGroups()

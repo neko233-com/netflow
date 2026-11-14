@@ -160,7 +160,7 @@ func (a *App) agentStatus() (agent.Status, error) {
 	if source, ok := a.core.(interface{ CacheWarning() string }); ok {
 		out.ProviderCacheWarning = source.CacheWarning()
 	}
-	profilePage, profileErr := profilePage(catalog, out.ActiveProfile, agent.PageArgs{})
+	profilePage, profileErr := profilePage(catalog, out.ActiveProfile, agent.PageArgs{}, a.profileAutoReview)
 	out.ProfilesTotal = len(catalog.Items)
 	out.ProfilesTruncated = profileErr != nil || profilePage.NextOffset < len(catalog.Items)
 	if profileErr != nil {

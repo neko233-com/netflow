@@ -1931,6 +1931,41 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if err != nil || !strings.Contains(string(out), "local-script.netflow-test.example") {
 			t.Fatalf("script rules not active: %s %v", out, err)
 		}
+		setAuto := func(enabled bool) {
+			c, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+			defer cancel()
+			cmd := vmCommand(c, agentExe, "--config-dir", migrationTarget, "profile-settings-set")
+			input, e := json.Marshal(map[string]any{"profile_id": status.ActiveProfile, "auto_update": enabled, "update_interval_minutes": 1})
+			if e != nil {
+				t.Fatal(e)
+			}
+			cmd.Stdin = bytes.NewReader(input)
+			output, e := cmd.CombinedOutput()
+			if e != nil {
+				t.Fatalf("set automatic update failed: %s %v", output, e)
+			}
+		}
+		setAuto(true)
+		deadline := time.Now().Add(100 * time.Second)
+		reviewRequired := false
+		for time.Now().Before(deadline) {
+			out, err = callMigration("profiles")
+			var profiles agent.ProfileList
+			if err == nil && json.Unmarshal(out, &profiles) == nil {
+				for _, item := range profiles.Profiles {
+					if item.ID == status.ActiveProfile && item.VergeAutoUpdateReview {
+						reviewRequired = true
+					}
+				}
+			}
+			if reviewRequired {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if !reviewRequired {
+			t.Fatal("automatic script update did not report review required")
+		}
 		out, err = callMigration("verge-script-update-preview", status.ActiveProfile)
 		if err != nil || strings.Contains(string(out), "synthetic-secret") || json.Unmarshal(out, &script) != nil || script.PreviewID == "" || script.Operation != "update-subscription" {
 			t.Fatalf("TUN subscription update preview failed: %s %v", out, err)
@@ -1939,6 +1974,12 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if err != nil || json.Unmarshal(out, &applied) != nil || !applied.Applied || !applied.Active {
 			t.Fatalf("TUN subscription update apply failed: %s %v", out, err)
 		}
+		out, err = callMigration("profiles")
+		var afterReview agent.ProfileList
+		if err != nil || json.Unmarshal(out, &afterReview) != nil || len(afterReview.Profiles) == 0 || afterReview.Profiles[0].VergeAutoUpdateReview {
+			t.Fatal("automatic review flag was not cleared after apply", err)
+		}
+		setAuto(false)
 		out, err = callMigration("rules")
 		if err != nil || !strings.Contains(string(out), "updated-subscription.netflow-test.example") || !strings.Contains(string(out), "local-script.netflow-test.example") {
 			t.Fatalf("updated subscription or script rule missing: %s %v", out, err)
@@ -1958,7 +1999,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		urlCtx, urlCancel := context.WithTimeout(context.Background(), 90*time.Second)
 		urlCommand := vmCommand(urlCtx, agentExe, "--config-dir", migrationTarget, "verge-script-url-preview")
 		replacementURL := subscriptionServer.URL + "/replacement?token=replacement-secret"
-		urlInput, marshalErr := json.Marshal(agent.VergeScriptUpdateArgs{ProfileID: status.ActiveProfile, URL: replacementURL})
+		urlInput, marshalErr := json.Marshal(agent.VergeScriptUpdateArgs{ProfileID: status.ActiveProfile, URL: &replacementURL})
 		if marshalErr != nil {
 			urlCancel()
 			t.Fatal(marshalErr)

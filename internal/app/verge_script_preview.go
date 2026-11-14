@@ -68,7 +68,7 @@ func (a *App) previewVergeScriptUpdateAsync(id string, done func(agent.VergeScri
 }
 
 func (a *App) previewVergeScriptURLAsync(id, url string, done func(agent.VergeScriptPreview, error)) func() {
-	return a.previewVergeScriptOperationAsync("verge-script-update-preview", agent.VergeScriptUpdateArgs{ProfileID: id, URL: url}, done)
+	return a.previewVergeScriptOperationAsync("verge-script-update-preview", agent.VergeScriptUpdateArgs{ProfileID: id, URL: &url}, done)
 }
 
 func (a *App) previewVergeScriptOperationAsync(method string, in any, done func(agent.VergeScriptPreview, error)) func() {

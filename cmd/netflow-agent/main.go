@@ -463,7 +463,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 		method := flags.Arg(0)
 		if method == "verge-script-url-preview" {
 			args := request.(*agent.VergeScriptUpdateArgs)
-			if strings.TrimSpace(args.ProfileID) == "" || strings.TrimSpace(args.URL) == "" {
+			if strings.TrimSpace(args.ProfileID) == "" || args.URL == nil || strings.TrimSpace(*args.URL) == "" {
 				return errors.New("profile_id and url are required")
 			}
 			method = "verge-script-update-preview"

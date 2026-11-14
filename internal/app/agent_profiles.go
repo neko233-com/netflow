@@ -25,12 +25,13 @@ func (a *App) agentProfiles() (agent.ProfileList, error) {
 	return a.agentProfilesPage(agent.PageArgs{})
 }
 
-func profilePage(catalog profile.File, active string, in agent.PageArgs) (agent.ProfileList, error) {
+func profilePage(catalog profile.File, active string, in agent.PageArgs, review map[string]bool) (agent.ProfileList, error) {
 	items := make([]agent.Profile, 0, len(catalog.Items))
 	for _, item := range catalog.Items {
 		entry := agent.Profile{ID: item.UID, Name: profile.SafeDisplayName(item), Active: item.UID == active, VergeArchive: item.Option.VergeArchive != "" && item.Option.VergeUID != "", VergeScriptRollback: item.Option.VergeScriptPrevious != nil}
 		if approval := item.Option.VergeScriptApproval; approval != nil {
 			entry.VergeGlobalScript, entry.VergeProfileScript = approval.Global, approval.Profile
+			entry.VergeAutoUpdateReview = review[item.UID] && item.Option.AllowAutoUpdate && (approval.Global || approval.Profile)
 		}
 		items = append(items, entry)
 	}
@@ -50,7 +51,7 @@ func (a *App) agentProfilesPage(in agent.PageArgs) (agent.ProfileList, error) {
 	if err != nil {
 		return result, errors.New("profile catalog could not be read")
 	}
-	return profilePage(catalog, catalog.Current, in)
+	return profilePage(catalog, catalog.Current, in, a.profileAutoReview)
 }
 
 func (a *App) agentProfileSettings(id string) (agent.ProfileSettings, error) {

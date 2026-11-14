@@ -95,6 +95,7 @@ type App struct {
 	probeStop           chan struct{}
 	profileAutoStop     chan struct{}
 	profileAutoRetry    map[string]time.Time
+	profileAutoReview   map[string]bool
 	profileUpdates      map[string]bool
 	shortcuts           shortcutRegistrar
 	hotkeys             map[string]hotkeyBinding
@@ -369,6 +370,7 @@ func (a *App) loadProfiles() {
 			item.Option.VergeScriptGlobal, item.Option.VergeScriptProfile = approval.Global, approval.Profile
 		}
 		item.Option.VergeScriptHistory = it.Option.VergeScriptPrevious != nil
+		item.Option.VergeAutoUpdateReview = a.profileAutoReview[it.UID] && it.Option.AllowAutoUpdate && it.Option.VergeScriptApproval != nil
 		for _, sel := range it.Selected {
 			item.Selected = append(item.Selected, ui.ProfileSelected{Name: sel.Name, Now: sel.Now})
 		}
@@ -1545,6 +1547,10 @@ func (a *App) DeleteProfile(uid string) error {
 				err = errors.Join(err, fmt.Errorf("restore profile rules: %w", restoreErr))
 			}
 		}
+	}
+	if err == nil {
+		delete(a.profileAutoRetry, uid)
+		delete(a.profileAutoReview, uid)
 	}
 	a.loadProfiles()
 	return err

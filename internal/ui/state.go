@@ -170,24 +170,25 @@ type ProfileItem struct {
 
 // ProfileOption is the extra menu and the remote form.
 type ProfileOption struct {
-	UpdateInterval     int
-	UseSystemProxy     bool
-	UseClashProxy      bool
-	AcceptInvalid      bool
-	AllowAutoUpdate    bool
-	Rules              string
-	Proxies            string
-	Groups             string
-	Merge              string
-	Script             string
-	UserAgent          string
-	TimeoutSeconds     int
-	DNSEnabled         bool
-	DNSOverride        string
-	HasVergeArchive    bool
-	VergeScriptGlobal  bool
-	VergeScriptProfile bool
-	VergeScriptHistory bool
+	UpdateInterval        int
+	UseSystemProxy        bool
+	UseClashProxy         bool
+	AcceptInvalid         bool
+	AllowAutoUpdate       bool
+	Rules                 string
+	Proxies               string
+	Groups                string
+	Merge                 string
+	Script                string
+	UserAgent             string
+	TimeoutSeconds        int
+	DNSEnabled            bool
+	DNSOverride           string
+	HasVergeArchive       bool
+	VergeScriptGlobal     bool
+	VergeScriptProfile    bool
+	VergeScriptHistory    bool
+	VergeAutoUpdateReview bool
 }
 
 // ProfileForm is the create/edit dialog draft.

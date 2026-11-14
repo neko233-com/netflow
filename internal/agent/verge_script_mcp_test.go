@@ -39,7 +39,7 @@ func TestVergeScriptMCPPreviewAndPaging(t *testing.T) {
 			return VergeScriptPreview{PreviewID: "p", Operation: "rollback"}, nil
 		case "verge-script-update-preview":
 			var in VergeScriptUpdateArgs
-			if json.Unmarshal(raw, &in) != nil || in.ProfileID != "sub" || (in.URL != "" && in.URL != "https://example.test/?token=secret") {
+			if json.Unmarshal(raw, &in) != nil || in.ProfileID != "sub" || (in.URL != nil && *in.URL != "https://example.test/?token=secret") {
 				return nil, errors.New("bad update preview")
 			}
 			return VergeScriptPreview{PreviewID: "p", Operation: "update-subscription"}, nil

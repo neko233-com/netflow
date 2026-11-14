@@ -9,13 +9,14 @@ import (
 )
 
 type Profile struct {
-	ID                  string `json:"id"`
-	Name                string `json:"name"`
-	Active              bool   `json:"active"`
-	VergeArchive        bool   `json:"verge_archive_linked,omitempty"`
-	VergeGlobalScript   bool   `json:"verge_global_script_enabled,omitempty"`
-	VergeProfileScript  bool   `json:"verge_profile_script_enabled,omitempty"`
-	VergeScriptRollback bool   `json:"verge_script_rollback_available,omitempty"`
+	ID                    string `json:"id"`
+	Name                  string `json:"name"`
+	Active                bool   `json:"active"`
+	VergeArchive          bool   `json:"verge_archive_linked,omitempty"`
+	VergeGlobalScript     bool   `json:"verge_global_script_enabled,omitempty"`
+	VergeProfileScript    bool   `json:"verge_profile_script_enabled,omitempty"`
+	VergeScriptRollback   bool   `json:"verge_script_rollback_available,omitempty"`
+	VergeAutoUpdateReview bool   `json:"verge_auto_update_review_required,omitempty"`
 }
 
 // KernelOptionsResult contains explicit overrides; omitted fields inherit the
@@ -108,8 +109,8 @@ type ProfileURLArgs struct {
 // VergeScriptUpdateArgs optionally previews a replacement URL without exposing
 // credentials in command-line arguments or preview results.
 type VergeScriptUpdateArgs struct {
-	ProfileID string `json:"profile_id" jsonschema:"existing remote profile id"`
-	URL       string `json:"url,omitempty" jsonschema:"optional replacement HTTP or HTTPS subscription URL; may contain credentials"`
+	ProfileID string  `json:"profile_id" jsonschema:"existing remote profile id"`
+	URL       *string `json:"url,omitempty" jsonschema:"optional replacement HTTP or HTTPS subscription URL; may contain credentials"`
 }
 
 type ProfileJob struct {

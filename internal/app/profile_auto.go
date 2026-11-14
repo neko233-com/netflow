@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"time"
 
 	"github.com/neko233-com/netflow/internal/profile"
@@ -25,6 +26,7 @@ func (a *App) startProfileAuto() {
 	}
 	a.profileAutoStop = make(chan struct{})
 	a.profileAutoRetry = make(map[string]time.Time)
+	a.profileAutoReview = make(map[string]bool)
 	stop := a.profileAutoStop
 	go func() {
 		profileTicker := time.NewTicker(time.Minute)
@@ -62,10 +64,19 @@ func (a *App) autoUpdateOne(now time.Time) {
 		a.updateProfileAsync(uid, func(err error) {
 			a.model.ProfileBusy = false
 			if err != nil {
+				if errors.Is(err, errScriptUpdateReviewRequired) {
+					if a.profileAutoReview == nil {
+						a.profileAutoReview = make(map[string]bool)
+					}
+					a.profileAutoReview[uid] = true
+					a.loadProfiles()
+				}
 				a.profileAutoRetry[uid] = time.Now().Add(autoRetryDelay)
 				a.model.Notice = "订阅自动更新失败：" + name + "：" + err.Error()
 			} else {
 				delete(a.profileAutoRetry, uid)
+				delete(a.profileAutoReview, uid)
+				a.loadProfiles()
 				a.model.Notice = "订阅已自动更新：" + name
 			}
 		})

@@ -293,6 +293,14 @@ func (m *Model) profileItem(c *mygoui.Context, pal Palette, i int) {
 				desc = URLHost(p.URL)
 			}
 			mygoui.Text(c, desc).FontSize(14).TextColor(pal.TextMuted)
+			if p.Option.VergeAutoUpdateReview {
+				if textButton(c, pal, "自动更新有变化，需预览", "预览更新", "verge-auto-review-"+p.UID) {
+					m.openVergeScriptPreview(p.UID)
+					if m.VergeScriptPreview.Open {
+						m.startVergeScriptUpdatePreview()
+					}
+				}
+			}
 			if p.Total > 0 {
 				mygoui.Row(c).FillWidth().Children(func() {
 					mygoui.Text(c, FormatTraffic(p.Used)+"/"+FormatTraffic(p.Total)).FontSize(14).Grow(1)

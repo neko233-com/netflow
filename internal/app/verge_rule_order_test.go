@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appconfig"
@@ -161,11 +162,17 @@ func TestImportedVergeRulesRunBeforeScriptsAndRemainSeparateFromAgent(t *testing
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
 				defer server.Close()
 				newURL := server.URL + "/sub?token=new-secret"
-				badArgs, _ := json.Marshal(agent.VergeScriptUpdateArgs{ProfileID: id, URL: "ftp://invalid.test/?token=bad-secret"})
+				badURL := "ftp://invalid.test/?token=bad-secret"
+				badArgs, _ := json.Marshal(agent.VergeScriptUpdateArgs{ProfileID: id, URL: &badURL})
 				if _, err := a.dispatchAgent(context.Background(), "verge-script-update-preview", badArgs); err == nil || strings.Contains(err.Error(), "bad-secret") {
 					t.Fatal("invalid replacement URL was accepted or exposed", err)
 				}
-				args, _ := json.Marshal(agent.VergeScriptUpdateArgs{ProfileID: id, URL: newURL})
+				blank := "  "
+				blankArgs, _ := json.Marshal(agent.VergeScriptUpdateArgs{ProfileID: id, URL: &blank})
+				if _, err := a.dispatchAgent(context.Background(), "verge-script-update-preview", blankArgs); err == nil {
+					t.Fatal("explicit blank replacement URL was accepted")
+				}
+				args, _ := json.Marshal(agent.VergeScriptUpdateArgs{ProfileID: id, URL: &newURL})
 				value, err := a.dispatchAgent(context.Background(), "verge-script-update-preview", args)
 				if err != nil {
 					t.Fatal("replacement preview failed", err)
@@ -222,6 +229,48 @@ func TestImportedVergeRulesRunBeforeScriptsAndRemainSeparateFromAgent(t *testing
 				afterCatalog, err = a.profiles.Load()
 				if err != nil || afterCatalog.Items[0].URL != oldURL {
 					t.Fatal("rollback did not restore original URL", err)
+				}
+				autoCatalog, autoSnapshot, err := a.profiles.LoadForUpdate()
+				if err != nil {
+					t.Fatal(err)
+				}
+				autoCatalog.Items[0].URL = newURL
+				autoCatalog.Items[0].Updated = time.Time{}
+				autoCatalog.Items[0].Option.AllowAutoUpdate = true
+				if err := a.profiles.SaveIfUnchanged(autoCatalog, autoSnapshot); err != nil {
+					t.Fatal(err)
+				}
+				a.profileAutoRetry = make(map[string]time.Time)
+				queue := make(chan func(), 1)
+				a.dispatch = func(fn func()) { queue <- fn }
+				a.autoUpdateOne(time.Now())
+				select {
+				case fn := <-queue:
+					fn()
+				case <-time.After(10 * time.Second):
+					t.Fatal("automatic update did not finish")
+				}
+				a.dispatch = func(fn func()) { fn() }
+				list, err := a.agentProfiles()
+				if err != nil || len(list.Profiles) != 1 || !list.Profiles[0].VergeAutoUpdateReview || len(a.model.Profiles) != 1 || !a.model.Profiles[0].Option.VergeAutoUpdateReview {
+					t.Fatal("automatic update review was not exposed", err)
+				}
+				effective, err = a.core.EffectiveConfig()
+				if err != nil || bytes.Contains(effective, []byte("DOMAIN,new-sub.test,DIRECT")) {
+					t.Fatal("automatic update bypassed review", err)
+				}
+				updateArgs, _ := json.Marshal(agent.ProfileArgs{ProfileID: id})
+				value, err = a.dispatchAgent(context.Background(), "verge-script-update-preview", updateArgs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				apply, _ = json.Marshal(agent.ApplyArgs{ProposalID: value.(agent.VergeScriptPreview).PreviewID})
+				if _, err := a.dispatchAgent(context.Background(), "verge-script-apply", apply); err != nil {
+					t.Fatal(err)
+				}
+				list, err = a.agentProfiles()
+				if err != nil || list.Profiles[0].VergeAutoUpdateReview {
+					t.Fatal("review flag survived successful apply", err)
 				}
 			}
 		})

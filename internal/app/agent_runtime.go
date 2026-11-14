@@ -201,8 +201,11 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var update *vergeSubscriptionUpdate
 		var err error
 		if updating {
-			nextURL := strings.TrimSpace(updateRequest.URL)
-			replacing := nextURL != ""
+			replacing := updateRequest.URL != nil
+			nextURL := ""
+			if replacing {
+				nextURL = strings.TrimSpace(*updateRequest.URL)
+			}
 			if replacing && (len(nextURL) > 8192 || strings.ContainsAny(nextURL, "\r\n\x00") || !profile.ValidURL(nextURL)) {
 				return nil, errors.New("invalid replacement subscription URL")
 			}

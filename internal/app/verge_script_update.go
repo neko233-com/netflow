@@ -157,6 +157,8 @@ func (a *App) finishVergeSubscriptionUpdate(ctx context.Context, ready vergeScri
 			}
 		}
 	}
+	delete(a.profileAutoReview, d.target)
+	delete(a.profileAutoRetry, d.target)
 	return active && d.status.Running, nil
 }
 

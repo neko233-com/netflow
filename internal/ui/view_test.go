@@ -511,6 +511,27 @@ func TestScriptBoundProfileURLChangeOpensPreview(t *testing.T) {
 	}
 }
 
+func TestProfileAutoReviewButtonStartsPreview(t *testing.T) {
+	m := NewModel(demoHome())
+	m.Router.Replace("/profile")
+	m.Profiles = []ProfileItem{{UID: "profile", Name: "test", URL: "https://example.test/sub", Type: "remote", Option: ProfileOption{VergeScriptGlobal: true, VergeAutoUpdateReview: true}}}
+	m.Hooks.PreviewVergeScriptAsync = func(agent.VergeScriptPreviewArgs, func(agent.VergeScriptPreview, error)) func() { return func() {} }
+	m.Hooks.VergeScriptPreviewRules = func(agent.PreviewRulesArgs) (agent.PreviewRulesResult, error) { return agent.PreviewRulesResult{}, nil }
+	called := false
+	m.Hooks.PreviewVergeScriptUpdateAsync = func(id string, done func(agent.VergeScriptPreview, error)) func() {
+		called = id == "profile"
+		done(agent.VergeScriptPreview{PreviewID: "review", Operation: "update-subscription"}, nil)
+		return func() {}
+	}
+	tt := mygoui.NewTester(m.View, WindowWidth, WindowHeight)
+	if err := tt.Click("verge-auto-review-profile"); err != nil {
+		t.Fatal(err)
+	}
+	if !called || !m.VergeScriptPreview.Open || m.VergeScriptPreview.PreviewID != "review" {
+		t.Fatal("automatic update review was not opened")
+	}
+}
+
 func TestProfileMenuRemoteHasExtraItems(t *testing.T) {
 	m := DemoModel()
 	m.Hooks.ChangeProfileURLAsync = func(string, string, func(error)) {}
