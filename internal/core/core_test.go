@@ -328,6 +328,16 @@ func TestReloadWhenStopped(t *testing.T) {
 	}
 }
 
+func TestProviderUpdatesRejectChangedProfileBeforeLookup(t *testing.T) {
+	c := New()
+	c.SetProfileID("new")
+	for _, update := range []func(string, string) error{c.UpdateProxyProviderForProfile, c.UpdateRuleProviderForProfile} {
+		if err := update("provider", "old"); err == nil || !strings.Contains(err.Error(), "profile changed") {
+			t.Fatalf("changed profile accepted: %v", err)
+		}
+	}
+}
+
 func freePort(t *testing.T) int {
 	t.Helper()
 	var held []net.PacketConn

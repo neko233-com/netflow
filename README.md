@@ -44,6 +44,8 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 
 CLI 还提供 `version`、`diagnostics`、`groups`、`rules [偏移 [数量]]`、`select <组> <节点>`、`mode <rule|global|direct>`、`use-profile <订阅 ID>` 和 `close-connection <连接 ID>`。`version` 无需运行桌面程序；其余操作有对应的 `netflow_` MCP 工具。设置页、CLI 和 MCP 的诊断摘要仅包含版本、平台、运行状态及计数，不包含订阅地址、配置目录、错误原文、令牌或连接详情。切换节点、模式、订阅及关闭连接会直接改变运行状态；关闭不存在的连接会返回 `closed: false`。规则覆写仍需要先预览再应用。
 
+`providers` 列出当前代理与规则集合；`update-provider <proxy|rule> <名称>` 发起后台更新，返回 `job_id`，再用 `provider-job-status <job_id>` 查询 `pending`、`succeeded` 或 `failed`。对应 MCP 工具为 `netflow_providers`、`netflow_update_provider` 和 `netflow_provider_job_status`。重复提交同一订阅中仍在进行的同一更新会返回同一个任务；任务启动前如果活动订阅已切换，会失败而不会更新另一个订阅。完成的任务最多保留十分钟，容量不足时较旧的完成任务可能提前清理；程序退出后任务记录不保留。任务错误不会暴露订阅 URL 或凭据。
+
 `update-geo` 和 MCP 的 `netflow_update_geodata` 可发起与设置页相同的 GeoData 更新。请求返回后通过 `status` 中的 `geo_pending`、`geo_error` 和 `geo_restart_required` 跟踪结果；下载完成后仍需退出并重新启动程序。`provider_cache_warning` 报告特权内核集合缓存未能安全回写的情况。
 
 ## Clash Verge 迁移

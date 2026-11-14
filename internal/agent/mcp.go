@@ -59,6 +59,24 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "groups", nil, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_providers", Description: "List active proxy and rule providers without their URLs or local paths.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, ProviderList, error) {
+			var out ProviderList
+			err := client.Call(ctx, "providers", nil, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_update_provider", Description: "Start an asynchronous update for a named proxy or rule provider in the active profile. Poll netflow_provider_job_status using the returned job_id. A profile change before the job starts causes it to fail."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args ProviderUpdateArgs) (*mcp.CallToolResult, ProviderJob, error) {
+			var out ProviderJob
+			err := client.Call(ctx, "update-provider", args, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_provider_job_status", Description: "Read an asynchronous provider update job. Completed jobs are kept for up to ten minutes, subject to capacity.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args ProviderJobArgs) (*mcp.CallToolResult, ProviderJob, error) {
+			var out ProviderJob
+			err := client.Call(ctx, "provider-job-status", args, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_rules", Description: "Read a page of active kernel rules in evaluation order.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in RulesArgs) (*mcp.CallToolResult, RulesResult, error) {
 		var out RulesResult
 		err := client.Call(ctx, "rules", in, &out)

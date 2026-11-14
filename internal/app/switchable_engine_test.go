@@ -27,6 +27,8 @@ type switchTestEngine struct {
 	starts, stops, subscribes, unsubscribes int
 	onStart                                 func()
 	warning                                 string
+	proxyProviders                          []core.ProxyProvider
+	ruleProviders                           []rules.Provider
 	transform                               func([]byte, string) ([]byte, error)
 }
 
@@ -53,7 +55,8 @@ func (e *switchTestEngine) Group(name string) (core.ProxyGroup, error) {
 }
 func (e *switchTestEngine) Select(_, name string) error          { e.selection = name; return nil }
 func (e *switchTestEngine) Selected(string) (string, error)      { return e.selection, nil }
-func (e *switchTestEngine) ProxyProviders() []core.ProxyProvider { return nil }
+func (e *switchTestEngine) ProxyProviders() []core.ProxyProvider { return e.proxyProviders }
+func (e *switchTestEngine) RuleProviders() []rules.Provider      { return e.ruleProviders }
 func (e *switchTestEngine) Rules() []rules.Item                  { return nil }
 func (e *switchTestEngine) Reload() error {
 	if e.onReload != nil {

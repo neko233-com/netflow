@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,5 +166,39 @@ func TestGeoUpdateCommandUsesBridge(t *testing.T) {
 	var result agent.GeoResult
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil || !result.Accepted || !result.Pending {
 		t.Fatalf("unexpected response: %s %v", output.String(), err)
+	}
+}
+
+func TestProviderCommandsUseBridge(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		switch method {
+		case "providers":
+			return agent.ProviderList{Proxy: []agent.ProviderInfo{{Name: "nodes"}}}, nil
+		case "update-provider":
+			var input agent.ProviderUpdateArgs
+			if json.Unmarshal(raw, &input) != nil || input.Kind != "rule" || input.Name != "sites" {
+				t.Error("wrong provider arguments")
+			}
+			return agent.ProviderJob{JobID: "0123456789abcdef0123456789abcdef", State: "pending"}, nil
+		case "provider-job-status":
+			return agent.ProviderJob{State: "succeeded"}, nil
+		default:
+			return nil, errors.New("unexpected method")
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	for _, args := range [][]string{{"providers"}, {"update-provider", "rule", "sites"}, {"provider-job-status", "0123456789abcdef0123456789abcdef"}} {
+		var out bytes.Buffer
+		if err := run(append([]string{"--config-dir", dir}, args...), bytes.NewReader(nil), &out); err != nil || !json.Valid(out.Bytes()) {
+			t.Fatalf("%v: %s %v", args, out.String(), err)
+		}
+	}
+	var out bytes.Buffer
+	if err := run([]string{"--config-dir", dir, "update-provider", "invalid", "name"}, bytes.NewReader(nil), &out); err == nil {
+		t.Fatal("invalid kind accepted")
 	}
 }

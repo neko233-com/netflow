@@ -195,7 +195,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(verge, "sets"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	for name, contents := range map[string]string{"nodes.yaml": "proxies: [{name: migrated-provider-node, type: direct}]\n", "rules.yaml": "payload: ['+.blocked.netflow-test.example']\n"} {
+	for name, contents := range map[string]string{"nodes.yaml": "proxies: [{name: migrated-provider-node, type: direct}]\n", "bad.yaml": "proxies: [{name: fallback, type: direct}]\n", "rules.yaml": "payload: ['+.blocked.netflow-test.example']\n"} {
 		if err := os.WriteFile(filepath.Join(verge, "sets", name), []byte(contents), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -215,8 +215,8 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	}
 	for name, contents := range map[string]string{
 		"p2.yaml":    "prepend: [{name: new, type: socks5, server: 127.0.0.1, port: 2}]\ndelete: [old]\n",
-		"g1.yaml":    "append: [{name: Extra, type: select, proxies: [DIRECT]}, {name: FromSet, type: select, use: [imported]}]\n",
-		"m1.yaml":    "profile: {store-selected: true}\nproxy-providers:\n  imported: {type: file, path: ./sets/nodes.yaml, health-check: {enable: false}}\nrule-providers:\n  blocked: {type: file, behavior: domain, format: yaml, path: ./sets/rules.yaml}\n",
+		"g1.yaml":    "append: [{name: Extra, type: select, proxies: [DIRECT]}, {name: FromSet, type: select, use: [imported, remote, bad]}]\n",
+		"m1.yaml":    "profile: {store-selected: true}\nproxy-providers:\n  imported: {type: file, path: ./sets/nodes.yaml, health-check: {enable: false}}\n  remote: {type: http, url: 'http://10.233.42.1:18765/v1/provider.yaml', path: ./sets/remote.yaml, interval: 3600, health-check: {enable: false}}\n  bad: {type: http, url: 'http://10.233.42.1:18765/v1/missing?token=synthetic-secret', path: ./sets/bad.yaml, interval: 3600, health-check: {enable: false}}\nrule-providers:\n  blocked: {type: file, behavior: domain, format: yaml, path: ./sets/rules.yaml}\n",
 		"Merge.yaml": "profile: {store-fake-ip: false}\n",
 	} {
 		if err := os.WriteFile(filepath.Join(verge, "profiles", name), []byte(contents), 0600); err != nil {
@@ -338,6 +338,64 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if err != nil || !status.TUN {
 			t.Fatalf("migrated TUN failed: %+v %v", status, err)
 		}
+		out, err = callMigration("providers")
+		var providers agent.ProviderList
+		if err != nil || json.Unmarshal(out, &providers) != nil {
+			t.Fatalf("provider list failed: %s %v", out, err)
+		}
+		remoteFound := false
+		for _, p := range providers.Proxy {
+			if p.Name == "remote" && p.Vehicle == "HTTP" {
+				remoteFound = true
+			}
+		}
+		if !remoteFound {
+			t.Fatalf("remote provider missing: %s", out)
+		}
+		if strings.Contains(string(out), "10.233.42.1") {
+			t.Fatal("provider listing exposed its URL")
+		}
+		if out, err := callMigration("update-provider", "proxy", "missing"); err == nil {
+			t.Fatalf("unknown provider update accepted: %s", out)
+		}
+		out, err = callMigration("update-provider", "proxy", "remote")
+		var job agent.ProviderJob
+		if err != nil || json.Unmarshal(out, &job) != nil || job.JobID == "" {
+			t.Fatalf("provider job failed to start: %s %v", out, err)
+		}
+		deadline = time.Now().Add(45 * time.Second)
+		for time.Now().Before(deadline) {
+			out, err = callMigration("provider-job-status", job.JobID)
+			if err == nil {
+				err = json.Unmarshal(out, &job)
+			}
+			if err == nil && job.State != "pending" {
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		if err != nil || job.State != "succeeded" {
+			t.Fatalf("provider job did not succeed: %+v %v", job, err)
+		}
+		out, err = callMigration("update-provider", "proxy", "bad")
+		if err != nil || json.Unmarshal(out, &job) != nil || job.JobID == "" {
+			t.Fatalf("failing provider job did not start: %s %v", out, err)
+		}
+		deadline = time.Now().Add(45 * time.Second)
+		for time.Now().Before(deadline) {
+			out, err = callMigration("provider-job-status", job.JobID)
+			if err == nil {
+				err = json.Unmarshal(out, &job)
+			}
+			if err == nil && job.State != "pending" {
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		if err != nil || job.State != "failed" || job.Error == "" || strings.Contains(string(out), "synthetic-secret") || strings.Contains(string(out), "10.233.42.1") {
+			t.Fatalf("provider failure was not safely reported: %+v %v", job, err)
+		}
+		t.Log("installed Agent listed and updated a migrated HTTP provider while TUN was active")
 		out, err = callMigration("groups")
 		if err != nil || !strings.Contains(string(out), "migrated-provider-node") {
 			t.Fatalf("migrated provider unavailable in TUN: %s %v", out, err)

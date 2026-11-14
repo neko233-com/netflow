@@ -167,10 +167,22 @@ func (c *Core) RuleProviders() []rules.Provider {
 
 // UpdateRuleProvider updates one rule provider.
 func (c *Core) UpdateRuleProvider(name string) error {
+	return c.updateRuleProvider(name, nil)
+}
+
+func (c *Core) UpdateRuleProviderForProfile(name, profileID string) error {
+	return c.updateRuleProvider(name, &profileID)
+}
+
+func (c *Core) updateRuleProvider(name string, expected *string) error {
 	if c == nil {
 		return errors.New("core is nil")
 	}
 	c.mu.Lock()
+	if expected != nil && c.profileID != *expected {
+		c.mu.Unlock()
+		return ErrProviderProfileChanged
+	}
 	running := c.running
 	var p P.RuleProvider
 	if running {

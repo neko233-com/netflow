@@ -18,6 +18,19 @@ func TestMCPRequestsTUN(t *testing.T) {
 		if method == "update-geo" {
 			return GeoResult{Accepted: true, Pending: true}, nil
 		}
+		if method == "providers" {
+			return ProviderList{Proxy: []ProviderInfo{{Name: "nodes", Vehicle: "HTTP", Count: 2}}, Rule: []ProviderInfo{}}, nil
+		}
+		if method == "update-provider" {
+			var in ProviderUpdateArgs
+			if json.Unmarshal(args, &in) != nil || in.Kind != "proxy" || in.Name != "nodes" {
+				t.Error("incorrect provider request")
+			}
+			return ProviderJob{JobID: "0123456789abcdef0123456789abcdef", State: "pending"}, nil
+		}
+		if method == "provider-job-status" {
+			return ProviderJob{JobID: "0123456789abcdef0123456789abcdef", State: "succeeded"}, nil
+		}
 		var in TunArgs
 		if method != "tun" || json.Unmarshal(args, &in) != nil || in.Enabled == nil || *in.Enabled {
 			t.Error("incorrect TUN request")
@@ -66,5 +79,17 @@ func TestMCPRequestsTUN(t *testing.T) {
 	var geo GeoResult
 	if err != nil || json.Unmarshal(data, &geo) != nil || !geo.Accepted || !geo.Pending {
 		t.Fatalf("unexpected GeoData result: %s %v", data, err)
+	}
+	result, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "netflow_providers", Arguments: map[string]any{}})
+	if err != nil || result.IsError {
+		t.Fatalf("provider list failed: %v %+v", err, result)
+	}
+	result, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "netflow_update_provider", Arguments: map[string]any{"kind": "proxy", "name": "nodes"}})
+	if err != nil || result.IsError {
+		t.Fatalf("provider update failed: %v %+v", err, result)
+	}
+	result, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "netflow_provider_job_status", Arguments: map[string]any{"job_id": "0123456789abcdef0123456789abcdef"}})
+	if err != nil || result.IsError {
+		t.Fatalf("provider job failed: %v %+v", err, result)
 	}
 }

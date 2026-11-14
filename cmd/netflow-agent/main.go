@@ -23,7 +23,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags := flag.NewFlagSet("netflow-agent", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: version, status, diagnostics, update-geo, tun on|off, groups, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH")
+		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: version, status, diagnostics, update-geo, tun on|off, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -77,11 +77,11 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	case "help":
 		flags.Usage()
 		return nil
-	case "diagnostics", "update-geo", "groups", "rules", "select", "mode", "use-profile", "close-connection", "tun":
+	case "diagnostics", "update-geo", "groups", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
 		method := flags.Arg(0)
 		var input any
 		switch method {
-		case "diagnostics", "update-geo", "groups":
+		case "diagnostics", "update-geo", "groups", "providers":
 			if flags.NArg() != 1 {
 				return fmt.Errorf("%s takes no arguments", method)
 			}
@@ -104,6 +104,16 @@ func run(args []string, input io.Reader, output io.Writer) error {
 				}
 			}
 			input = q
+		case "update-provider":
+			if flags.NArg() != 3 || (flags.Arg(1) != "proxy" && flags.Arg(1) != "rule") || flags.Arg(2) == "" {
+				return errors.New("update-provider requires proxy|rule and a provider name")
+			}
+			input = agent.ProviderUpdateArgs{Kind: flags.Arg(1), Name: flags.Arg(2)}
+		case "provider-job-status":
+			if flags.NArg() != 2 || flags.Arg(1) == "" {
+				return errors.New("provider-job-status requires a job ID")
+			}
+			input = agent.ProviderJobArgs{JobID: flags.Arg(1)}
 		case "select":
 			if flags.NArg() != 3 {
 				return errors.New("select requires GROUP and NODE")

@@ -117,6 +117,31 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		}
 	case "groups":
 		value, callErr = a.agentGroups()
+	case "providers":
+		var input agent.Empty
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentProviders()
+		}
+	case "update-provider":
+		var input agent.ProviderUpdateArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if a.probeSlots == nil || a.probeStop == nil {
+				callErr = errors.New("provider updates are not ready")
+				break
+			}
+			value, callErr = a.beginProviderJob(input, time.Now(), func(kind, name string, done func(error)) {
+				if kind == "proxy" {
+					a.updateProxyProviderAsync(name, done)
+				} else {
+					a.updateRuleProviderAsync(name, done)
+				}
+			})
+		}
+	case "provider-job-status":
+		var input agent.ProviderJobArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.getProviderJob(input.JobID, time.Now())
+		}
 	case "rules":
 		var input agent.RulesArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {

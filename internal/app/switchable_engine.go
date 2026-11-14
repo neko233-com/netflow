@@ -123,6 +123,17 @@ func (s *switchableEngine) UpdateRuleProvider(n string) error {
 	defer s.mu.RUnlock()
 	return s.active.UpdateRuleProvider(n)
 }
+func (s *switchableEngine) UpdateRuleProviderForProfile(name, profileID string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if engine, ok := s.active.(interface{ UpdateRuleProviderForProfile(string, string) error }); ok {
+		return engine.UpdateRuleProviderForProfile(name, profileID)
+	}
+	if s.active.ProfileID() != profileID {
+		return core.ErrProviderProfileChanged
+	}
+	return s.active.UpdateRuleProvider(name)
+}
 func (s *switchableEngine) Group(n string) (core.ProxyGroup, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -137,6 +148,17 @@ func (s *switchableEngine) UpdateProxyProvider(n string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.active.UpdateProxyProvider(n)
+}
+func (s *switchableEngine) UpdateProxyProviderForProfile(name, profileID string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if engine, ok := s.active.(interface{ UpdateProxyProviderForProfile(string, string) error }); ok {
+		return engine.UpdateProxyProviderForProfile(name, profileID)
+	}
+	if s.active.ProfileID() != profileID {
+		return core.ErrProviderProfileChanged
+	}
+	return s.active.UpdateProxyProvider(name)
 }
 func (s *switchableEngine) TestDelay(g, n, u string, d time.Duration) (int, error) {
 	s.mu.RLock()

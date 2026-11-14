@@ -87,6 +87,33 @@ func TestSlowCacheReadDoesNotCloseTransport(t *testing.T) {
 	close(slow.release)
 }
 
+func TestQueuedProviderUpdateRejectsChangedProfile(t *testing.T) {
+	left, right := net.Pipe()
+	defer right.Close()
+	c, err := NewClient(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetProfileID("old")
+	c.applyMu.Lock()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() { close(started); done <- c.UpdateProxyProviderForProfile("nodes", "old") }()
+	<-started
+	c.SetProfileID("new")
+	c.applyMu.Unlock()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "profile changed") {
+			t.Fatalf("changed profile accepted: %v", err)
+		}
+	case <-time.After(time.Second):
+		_ = right.Close()
+		t.Fatal("update reached the worker after the profile changed")
+	}
+}
+
 func TestClientAddsWorkerDetailOnlyForTransportErrors(t *testing.T) {
 	left, right := net.Pipe()
 	server := rpc.NewServer()

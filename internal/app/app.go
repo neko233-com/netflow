@@ -92,6 +92,7 @@ type App struct {
 	geoLastError     string
 	geoRestart       bool
 	providerWarning  string
+	providerJobs     map[string]providerJobRecord
 	localCoreFactory func() coreEngine
 }
 

@@ -1,9 +1,11 @@
 package app
 
 import (
+	"errors"
 	"time"
 
 	"github.com/egoist/mygo"
+	"github.com/neko233-com/netflow/internal/core"
 )
 
 // Network probes run outside the native event loop, with a small shared
@@ -75,7 +77,7 @@ func (a *App) updateProxyProviderAsync(name string, done func(error)) {
 			return
 		}
 		defer func() { <-slots }()
-		err := a.core.UpdateProxyProvider(name)
+		err := a.updateProviderForProfile("proxy", name, profileID)
 		mygo.RunOnMain(func() {
 			if err == nil && a.core.ProfileID() == profileID {
 				a.loadGroups()
@@ -91,6 +93,7 @@ func (a *App) updateProxyProviderAsync(name string, done func(error)) {
 
 func (a *App) updateRuleProviderAsync(name string, done func(error)) {
 	slots, stop := a.probeSlots, a.probeStop
+	profileID := a.core.ProfileID()
 	go func() {
 		select {
 		case slots <- struct{}{}:
@@ -98,7 +101,7 @@ func (a *App) updateRuleProviderAsync(name string, done func(error)) {
 			return
 		}
 		defer func() { <-slots }()
-		err := a.core.UpdateRuleProvider(name)
+		err := a.updateProviderForProfile("rule", name, profileID)
 		mygo.RunOnMain(func() {
 			done(err)
 			if a.win != nil {
@@ -106,4 +109,26 @@ func (a *App) updateRuleProviderAsync(name string, done func(error)) {
 			}
 		})
 	}()
+}
+
+func (a *App) updateProviderForProfile(kind, name, profileID string) error {
+	if kind == "proxy" {
+		if engine, ok := a.core.(interface{ UpdateProxyProviderForProfile(string, string) error }); ok {
+			return engine.UpdateProxyProviderForProfile(name, profileID)
+		}
+		if a.core.ProfileID() != profileID {
+			return core.ErrProviderProfileChanged
+		}
+		return a.core.UpdateProxyProvider(name)
+	}
+	if kind == "rule" {
+		if engine, ok := a.core.(interface{ UpdateRuleProviderForProfile(string, string) error }); ok {
+			return engine.UpdateRuleProviderForProfile(name, profileID)
+		}
+		if a.core.ProfileID() != profileID {
+			return core.ErrProviderProfileChanged
+		}
+		return a.core.UpdateRuleProvider(name)
+	}
+	return errors.New("unknown provider kind")
 }

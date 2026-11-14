@@ -20,6 +20,8 @@ type ProxyProvider struct {
 	Count         int
 }
 
+var ErrProviderProfileChanged = errors.New("active profile changed before provider update")
+
 // Group returns the current resolved members, including provider-backed nodes.
 func (c *Core) Group(name string) (ProxyGroup, error) {
 	if c == nil {
@@ -70,10 +72,22 @@ func (c *Core) ProxyProviders() []ProxyProvider {
 }
 
 func (c *Core) UpdateProxyProvider(name string) error {
+	return c.updateProxyProvider(name, nil)
+}
+
+func (c *Core) UpdateProxyProviderForProfile(name, profileID string) error {
+	return c.updateProxyProvider(name, &profileID)
+}
+
+func (c *Core) updateProxyProvider(name string, expected *string) error {
 	if c == nil {
 		return errors.New("core is nil")
 	}
 	c.mu.Lock()
+	if expected != nil && c.profileID != *expected {
+		c.mu.Unlock()
+		return ErrProviderProfileChanged
+	}
 	running := c.running
 	var p P.ProxyProvider
 	if running {

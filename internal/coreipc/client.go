@@ -289,13 +289,22 @@ func (c *Client) RuleProviders() []rules.Provider {
 	return out.Items
 }
 func (c *Client) UpdateRuleProvider(name string) error {
+	return c.updateRuleProvider(name, nil)
+}
+func (c *Client) UpdateRuleProviderForProfile(name, profileID string) error {
+	return c.updateRuleProvider(name, &profileID)
+}
+func (c *Client) updateRuleProvider(name string, expected *string) error {
 	c.applyMu.Lock()
 	defer c.applyMu.Unlock()
+	if expected != nil && c.ProfileID() != *expected {
+		return core.ErrProviderProfileChanged
+	}
 	if err := c.call("UpdateRuleProvider", Name{name}, &Empty{}, 2*time.Minute); err != nil {
 		return err
 	}
 	if err := c.syncProviderCaches(); err != nil {
-		return fmt.Errorf("provider updated; one or more caches were not persisted: %w", err)
+		return fmt.Errorf("%w: %v", ErrProviderCacheSync, err)
 	}
 	return nil
 }
@@ -305,13 +314,22 @@ func (c *Client) ProxyProviders() []core.ProxyProvider {
 	return out.Items
 }
 func (c *Client) UpdateProxyProvider(name string) error {
+	return c.updateProxyProvider(name, nil)
+}
+func (c *Client) UpdateProxyProviderForProfile(name, profileID string) error {
+	return c.updateProxyProvider(name, &profileID)
+}
+func (c *Client) updateProxyProvider(name string, expected *string) error {
 	c.applyMu.Lock()
 	defer c.applyMu.Unlock()
+	if expected != nil && c.ProfileID() != *expected {
+		return core.ErrProviderProfileChanged
+	}
 	if err := c.call("UpdateProxyProvider", Name{name}, &Empty{}, 2*time.Minute); err != nil {
 		return err
 	}
 	if err := c.syncProviderCaches(); err != nil {
-		return fmt.Errorf("provider updated; one or more caches were not persisted: %w", err)
+		return fmt.Errorf("%w: %v", ErrProviderCacheSync, err)
 	}
 	return nil
 }

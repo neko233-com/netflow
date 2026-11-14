@@ -24,6 +24,8 @@ type cacheState struct {
 	isolated bool
 }
 
+var ErrProviderCacheSync = errors.New("provider updated; one or more caches were not persisted")
+
 func newCacheState(files []StageFile, isolated bool) cacheState {
 	state := cacheState{base: make(map[string][32]byte), known: make(map[string]string), running: true, isolated: isolated}
 	for _, f := range files {

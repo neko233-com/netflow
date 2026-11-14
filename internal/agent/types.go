@@ -151,3 +151,31 @@ type GeoResult struct {
 	Accepted bool `json:"accepted"`
 	Pending  bool `json:"pending"`
 }
+
+// Provider summaries deliberately omit provider URLs and local file paths.
+type ProviderInfo struct {
+	Name     string `json:"name"`
+	Vehicle  string `json:"vehicle"`
+	Behavior string `json:"behavior,omitempty"`
+	Count    int    `json:"count"`
+}
+type ProviderList struct {
+	Proxy []ProviderInfo `json:"proxy"`
+	Rule  []ProviderInfo `json:"rule"`
+}
+type ProviderUpdateArgs struct {
+	Kind string `json:"kind" jsonschema:"proxy or rule"`
+	Name string `json:"name" jsonschema:"provider name"`
+}
+type ProviderJobArgs struct {
+	JobID string `json:"job_id" jsonschema:"provider update job id"`
+}
+type ProviderJob struct {
+	JobID     string    `json:"job_id"`
+	Kind      string    `json:"kind"`
+	Name      string    `json:"name"`
+	ProfileID string    `json:"profile_id,omitempty"`
+	State     string    `json:"state"`
+	Error     string    `json:"error,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
