@@ -1677,6 +1677,79 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	t.Fatal("busy-provider test did not restore networking")
 }
 
+func vmHeadlessStartupCancellation(t *testing.T, appExe string) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var enteredOnce, canceledOnce sync.Once
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enteredOnce.Do(func() { close(entered) })
+		select {
+		case <-r.Context().Done():
+			canceledOnce.Do(func() { close(canceled) })
+		case <-release:
+		}
+	}))
+	defer provider.Close()
+	defer close(release)
+	dir := t.TempDir()
+	config := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\nproxy-providers:\n  uncached: {type: http, url: '" + provider.URL + "', path: providers/startup-vm.yaml, interval: 3600, health-check: {enable: false}}\nrules: ['MATCH,DIRECT']\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	process := vmCommand(ctx, appExe, "--headless", "--tun=false", "--parent-stdin")
+	process.Env = append(os.Environ(), "NETFLOW_CONFIG_DIR="+dir)
+	pipe, err := process.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- process.Wait() }()
+	stopped := false
+	defer func() {
+		_ = pipe.Close()
+		if !stopped {
+			_ = process.Process.Kill()
+			<-finished
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(20 * time.Second):
+		t.Fatal("headless startup provider did not begin")
+	}
+	if err := pipe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("parent disconnect did not cancel startup download")
+	}
+	select {
+	case err := <-finished:
+		stopped = true
+		if err != nil {
+			t.Fatalf("headless startup exit: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("headless startup remained blocked after parent disconnect")
+	}
+	routes, dns, err := vmNetworkSnapshot()
+	if err != nil || !reflect.DeepEqual(routes, beforeRoutes) || !reflect.DeepEqual(dns, beforeDNS) {
+		t.Fatalf("startup cancellation changed networking: %v", err)
+	}
+	t.Log("headless parent disconnect canceled uncached provider before Agent startup")
+}
+
 func vmHeadlessUncachedShutdown(t *testing.T, agentExe string) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -2874,6 +2947,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	t.Log("installed headless CLI activated TUN, applied a rewrite without visible windows, and restored networking on shutdown")
 	vmProviderBusyTUN(t, agentExe)
 	vmHeadlessUncachedShutdown(t, agentExe)
+	vmHeadlessStartupCancellation(t, filepath.Join(install, "NetFlow.exe"))
 	vmHeadlessParentExit(t, agentExe, backupTarget)
 	t.Log("headless child restored networking after its CLI launcher was forcibly terminated")
 	vmGUIAutoStartTUN(t, filepath.Join(install, "NetFlow.exe"), agentExe, backupTarget)

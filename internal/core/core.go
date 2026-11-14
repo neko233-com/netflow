@@ -78,6 +78,7 @@ type applyProvider interface{ PauseUpdates() }
 type pendingApply struct {
 	interrupted bool
 	providers   []applyProvider
+	ctx         context.Context
 }
 
 // SetInterruptCheck is configured before the worker starts serving requests.
@@ -100,10 +101,26 @@ func (c *Core) InterruptApply() {
 	}
 }
 
+// interruptApplyIfCurrent prevents a late cancellation from affecting a later
+// start or reload after the original operation has already finished.
+func (c *Core) interruptApplyIfCurrent(op *pendingApply) {
+	c.applyStateMu.Lock()
+	if c.applying != op {
+		c.applyStateMu.Unlock()
+		return
+	}
+	op.interrupted = true
+	providers := append([]applyProvider(nil), op.providers...)
+	c.applyStateMu.Unlock()
+	for _, p := range providers {
+		p.PauseUpdates()
+	}
+}
+
 func (c *Core) applyInterrupted(op *pendingApply) bool {
 	c.applyStateMu.Lock()
 	defer c.applyStateMu.Unlock()
-	return op.interrupted || c.stopping.Load() > 0 || (c.interruptCheck != nil && c.interruptCheck())
+	return op.interrupted || op.ctx.Err() != nil || c.stopping.Load() > 0 || (c.interruptCheck != nil && c.interruptCheck())
 }
 
 func (c *Core) registerApplyProviders(op *pendingApply, providers ...P.Provider) bool {
@@ -113,7 +130,7 @@ func (c *Core) registerApplyProviders(op *pendingApply, providers ...P.Provider)
 			op.providers = append(op.providers, p)
 		}
 	}
-	interrupted := op.interrupted || c.stopping.Load() > 0 || (c.interruptCheck != nil && c.interruptCheck())
+	interrupted := op.interrupted || op.ctx.Err() != nil || c.stopping.Load() > 0 || (c.interruptCheck != nil && c.interruptCheck())
 	if interrupted {
 		op.interrupted = true
 	}
@@ -185,11 +202,23 @@ func (c *Core) StageFakeIPState(state *mihomodns.FakeIPState) error {
 }
 
 // Start loads config.yaml from homeDir (writing DefaultConfig when the
-// file is absent) and applies it with hub.Parse. homeDir becomes
+// file is absent) and applies it through mihomo. homeDir becomes
 // mihomo's configuration directory for this process.
 func (c *Core) Start(homeDir string) error {
+	return c.StartContext(context.Background(), homeDir)
+}
+
+// StartContext cancels initial provider downloads when startup is canceled.
+// Cancellation after a successful return does not stop the running core.
+func (c *Core) StartContext(ctx context.Context, homeDir string) error {
 	if c == nil {
 		return errors.New("core is nil")
+	}
+	if ctx == nil {
+		return errors.New("start context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if homeDir == "" {
 		return errors.New("config dir is empty")
@@ -204,8 +233,8 @@ func (c *Core) Start(homeDir string) error {
 	C.SetHomeDir(homeDir)
 	C.SetConfig(filepath.Join(homeDir, configFileName))
 
-	if err := c.apply(); err != nil {
-		if errors.Is(err, context.Canceled) {
+	if err := c.apply(ctx); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			closeProviders()
 		}
 		releaseListeners()
@@ -230,7 +259,7 @@ func (c *Core) Reload() error {
 	}
 	c.stopProbes()
 	c.probeContext, c.stopProbes = context.WithCancel(context.Background())
-	return c.apply()
+	return c.apply(context.Background())
 }
 
 // Stop closes listeners, the external controller and provider update
@@ -368,11 +397,22 @@ func (c *Core) ResolveIconHost(ctx context.Context, host string) ([]netip.Addr, 
 	return active.LookupIP(ctx, host)
 }
 
-func (c *Core) apply() error {
-	op := &pendingApply{}
+func (c *Core) apply(ctx context.Context) error {
+	op := &pendingApply{ctx: ctx}
 	c.applyStateMu.Lock()
 	c.applying = op
 	c.applyStateMu.Unlock()
+	if ctx.Done() != nil {
+		finished := make(chan struct{})
+		defer close(finished)
+		go func() {
+			select {
+			case <-ctx.Done():
+				c.interruptApplyIfCurrent(op)
+			case <-finished:
+			}
+		}()
+	}
 	defer func() {
 		c.applyStateMu.Lock()
 		if c.applying == op {
@@ -381,6 +421,9 @@ func (c *Core) apply() error {
 		c.applyStateMu.Unlock()
 	}()
 	if c.applyInterrupted(op) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return context.Canceled
 	}
 	defer func() { c.pendingFakeIP = nil }()
@@ -425,6 +468,9 @@ func (c *Core) apply() error {
 		pending = append(pending, p)
 	}
 	if c.registerApplyProviders(op, pending...) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return context.Canceled
 	}
 	if c.pendingFakeIP == nil {
@@ -452,6 +498,9 @@ func (c *Core) apply() error {
 		hub.ApplyConfigWithRestoredFakeIP(safeConfig)
 	}
 	if c.applyInterrupted(op) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return context.Canceled
 	}
 	actual := executor.GetGeneral()

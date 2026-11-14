@@ -106,9 +106,16 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 	defer lock.Close()
 	a.headless = true
 	a.headlessRecovery = opt.AllowStopped
-	if err := a.Prepare(); err != nil {
+	if err := a.prepare(ctx); err != nil {
 		_ = a.core.Stop()
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
+	}
+	if ctx.Err() != nil {
+		_ = a.core.Stop()
+		return nil
 	}
 	if a.core == nil || (!a.core.Status().Running && !opt.AllowStopped) {
 		if a.core != nil {

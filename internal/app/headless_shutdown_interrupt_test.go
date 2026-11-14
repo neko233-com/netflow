@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -107,5 +108,63 @@ func TestHeadlessShutdownInterruptsUncachedProviderReload(t *testing.T) {
 				t.Fatal("interrupted mode change was not rolled back")
 			}
 		})
+	}
+}
+
+func TestHeadlessContextCancelsUncachedProviderStartup(t *testing.T) {
+	t.Setenv("CI", "1")
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var enteredOnce, canceledOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enteredOnce.Do(func() { close(entered) })
+		select {
+		case <-r.Context().Done():
+			canceledOnce.Do(func() { close(canceled) })
+		case <-release:
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+	dir := t.TempDir()
+	config := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\nproxy-providers:\n  uncached: {type: http, url: '" + server.URL + "', path: providers/uncached.yaml, interval: 3600, health-check: {enable: false}}\nrules: ['MATCH,DIRECT']\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	engine := core.New()
+	a := New(Options{Dirs: appdir.Fixed(dir), Proxy: sysproxy.NewMemory(), TUN: tun.NewMemory(), Core: engine})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() { finished <- a.RunHeadless(ctx, HeadlessOptions{}) }()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("provider startup did not begin")
+	}
+	cancel()
+	select {
+	case <-canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("startup cancellation did not cancel provider")
+	}
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatalf("canceled startup: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled startup did not finish")
+	}
+	if engine.Status().Running {
+		t.Fatal("canceled startup left core running")
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "agent"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "endpoint-") {
+			t.Fatalf("agent endpoint unexpectedly exists: %s", entry.Name())
+		}
 	}
 }

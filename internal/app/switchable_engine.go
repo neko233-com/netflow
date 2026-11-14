@@ -70,6 +70,22 @@ func (s *switchableEngine) Start(dir string) error {
 	defer s.mu.RUnlock()
 	return s.active.Start(dir)
 }
+func (s *switchableEngine) StartContext(ctx context.Context, dir string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if engine, ok := s.active.(interface {
+		StartContext(context.Context, string) error
+	}); ok {
+		return engine.StartContext(ctx, dir)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if ctx.Done() != nil {
+		return errors.New("kernel does not support cancellable startup")
+	}
+	return s.active.Start(dir)
+}
 func (s *switchableEngine) Reload() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

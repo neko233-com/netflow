@@ -171,6 +171,16 @@ func New(opt Options) *App {
 // Prepare loads settings, starts the kernel in dir, and builds the home
 // snapshot. The window is created separately so tests can stop here.
 func (a *App) Prepare() error {
+	return a.prepare(context.Background())
+}
+
+func (a *App) prepare(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("prepare context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dir, err := a.dirs.ConfigDir()
 	if err != nil {
 		return err
@@ -272,14 +282,28 @@ func (a *App) Prepare() error {
 	if err := a.installCurrentProfile(); err != nil {
 		a.model.Notice = err.Error()
 	}
-	startErr := a.core.Start(dir)
+	startCore := func() error {
+		if engine, ok := a.core.(interface {
+			StartContext(context.Context, string) error
+		}); ok {
+			return engine.StartContext(ctx, dir)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if ctx.Done() != nil {
+			return errors.New("kernel does not support cancellable startup")
+		}
+		return a.core.Start(dir)
+	}
+	startErr := startCore()
 	if startErr != nil && a.settings.TUN {
 		a.settings.TUN, settings.TUN = false, false
 		if a.tun != nil {
 			_ = a.tun.Set(false)
 		}
 		saveErr := a.store.Save(a.settings)
-		fallbackErr := a.core.Start(dir)
+		fallbackErr := startCore()
 		if fallbackErr == nil {
 			a.model.Notice = "虚拟网卡启动失败，已退回关闭状态: " + startErr.Error()
 			if saveErr != nil {
