@@ -43,6 +43,9 @@ matching build and the owned virtual disk. A stale or unrecorded release is
 rejected; bump the version before rebuilding. This is a consistency check,
 not a digital signature, and the Docker image still needs host-side Go,
 Python, MyGo dependencies and WiX to build a missing release.
+Automatic memory selection uses 4 GB for a fresh Windows installation and
+3 GB for an existing guest; `-GuestMemory 3G` or `-GuestMemory 4G` overrides
+it. The container limit is 1 GB higher than the guest memory setting.
 
 The Windows background worker icon is generated from `resources/icon.ico`:
 `windres --input scripts/netflow-worker.rc --input-format rc --output-format coff --target pe-x86-64 --output cmd/netflow-kernel-worker/icon_windows_amd64.syso`.

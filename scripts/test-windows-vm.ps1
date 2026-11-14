@@ -1,7 +1,14 @@
-param([int]$TimeoutMinutes = 45, [switch]$TestPolicyOnly, [switch]$VerifyBootRetry)
+param([int]$TimeoutMinutes = 45, [switch]$TestPolicyOnly, [switch]$VerifyBootRetry, [ValidateSet('auto', '3G', '4G')][string]$GuestMemory = 'auto')
 $ErrorActionPreference = 'Stop'
 function Test-NetFlowBootRetry([int]$Attempt, [bool]$HasResult, [string]$Log) {
     return $Attempt -lt 2 -and -not $HasResult -and $Log.Contains('Timeout while waiting for QEMU to boot the machine, terminating...')
+}
+function Select-NetFlowMemory([string]$Requested, [string]$DiskState) {
+    if ($Requested -eq '3G' -or $Requested -eq '4G') { return $Requested }
+    if ($Requested -ne 'auto') { throw 'Invalid guest memory selection' }
+    if ($DiskState -eq 'reused') { return '3G' }
+    if ($DiskState -eq 'fresh') { return '4G' }
+    throw 'Invalid guest disk state'
 }
 function Protect-NetFlowDiagnostic([string]$Log, [string[]]$Secrets = @()) {
     $safe = [regex]::Replace($Log, '(?i)https?://[^\s"\\<>]+', '[URL redacted]')
@@ -18,6 +25,10 @@ if ($TestPolicyOnly) {
     $message = 'Timeout while waiting for QEMU to boot the machine, terminating...'
     if (-not (Test-NetFlowBootRetry 1 $false $message)) { throw 'Expected one boot retry' }
     if ((Test-NetFlowBootRetry 2 $false $message) -or (Test-NetFlowBootRetry 1 $true $message) -or (Test-NetFlowBootRetry 1 $false 'unrelated failure')) { throw 'Unsafe boot retry decision' }
+    if ((Select-NetFlowMemory 'auto' 'fresh') -ne '4G' -or (Select-NetFlowMemory 'auto' 'reused') -ne '3G' -or (Select-NetFlowMemory '4G' '') -ne '4G' -or (Select-NetFlowMemory '3G' '') -ne '3G') { throw 'Incorrect guest memory selection' }
+    $invalidStateRejected = $false
+    try { Select-NetFlowMemory 'auto' 'invalid' | Out-Null } catch { $invalidStateRejected = $_.Exception.Message -eq 'Invalid guest disk state' }
+    if (-not $invalidStateRejected) { throw 'Invalid disk state accepted' }
     $redacted = Protect-NetFlowDiagnostic 'failure https://example.invalid/path?token=synthetic-secret guest-password retained' @('guest-password')
     if ($redacted.Contains('synthetic-secret') -or $redacted.Contains('guest-password') -or -not $redacted.Contains('retained')) { throw 'Diagnostic redaction failed' }
     Write-Output 'Boot retry policy passed'
@@ -103,7 +114,15 @@ try {
     $guestPassword = [guid]::NewGuid().ToString('N') + 'Aa1!'
     $testEnv = @()
     if ($VerifyBootRetry) { $testEnv = @('-e', 'NETFLOW_TEST_BOOT_FAILURE=1') }
-    docker run -d --name $container --label "$label=1" --cpus=1 --memory=5g --device=/dev/kvm --mount "type=volume,source=$volume,target=/storage" --mount "type=bind,source=$payload,target=/payload,readonly" -e "NETFLOW_RUN_ID=$runID" -e USERNAME=NetFlowTest -e "PASSWORD=$guestPassword" @testEnv netflow-windows-vm:local | Out-Null
+    $selectedMemory = $GuestMemory
+    if ($selectedMemory -eq 'auto') {
+        $diskState = (& docker run --rm --network none --cpus=1 --memory=64m --mount "type=volume,source=$volume,target=/storage,readonly" --entrypoint sh netflow-windows-vm:local -c 'if test -f /storage/windows.system || test -f /storage/windows.boot; then printf reused; else printf fresh; fi' | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $diskState -notin @('reused', 'fresh')) { throw 'Could not inspect the owned guest disk state' }
+        $selectedMemory = Select-NetFlowMemory 'auto' $diskState
+    }
+    $containerMemory = if ($selectedMemory -eq '3G') { '4g' } else { '5g' }
+    Write-Output "Windows guest memory: $selectedMemory; container limit: $containerMemory"
+    docker run -d --name $container --label "$label=1" --cpus=1 "--memory=$containerMemory" --device=/dev/kvm --mount "type=volume,source=$volume,target=/storage" --mount "type=bind,source=$payload,target=/payload,readonly" -e "NETFLOW_RUN_ID=$runID" -e "RAM_SIZE=$selectedMemory" -e USERNAME=NetFlowTest -e "PASSWORD=$guestPassword" @testEnv netflow-windows-vm:local | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not start Windows validation guest' }
     $guestStarted = $true
     $until = (Get-Date).AddMinutes($TimeoutMinutes)
