@@ -217,6 +217,18 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "group-nodes", in, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_test_proxy_delay", Description: "Start a bounded latency test through a specific node in a proxy group. This makes a network request to the supplied or saved test URL; it does not change routing. Poll netflow_delay_job_status."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in DelayArgs) (*mcp.CallToolResult, DelayJob, error) {
+			var out DelayJob
+			err := client.Call(ctx, "delay-test", in, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_delay_job_status", Description: "Read an in-memory latency test result without returning the test URL. Results expire after ten minutes.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in DelayJobArgs) (*mcp.CallToolResult, DelayJob, error) {
+			var out DelayJob
+			err := client.Call(ctx, "delay-job-status", in, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_profiles", Description: "Page profile IDs, user-controlled names and active state without subscription URLs. Use next_offset; the catalog can change.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in PageArgs) (*mcp.CallToolResult, ProfileList, error) {
 			var out ProfileList

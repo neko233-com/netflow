@@ -357,6 +357,12 @@ func (c *Client) TestDelay(group, node, url string, timeout time.Duration) (int,
 		return 0, errors.New("测速超时时间无效")
 	}
 	err := c.call("TestDelay", Delay{group, node, url, timeout}, &out, timeout+15*time.Second)
+	if err == nil && out.Canceled {
+		return 0, context.Canceled
+	}
+	if err == nil && out.TimedOut {
+		return 0, context.DeadlineExceeded
+	}
 	return out.Milliseconds, err
 }
 func (c *Client) SubscribeLogs(fn func(string, string)) func() {

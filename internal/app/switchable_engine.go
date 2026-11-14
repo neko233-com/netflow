@@ -28,6 +28,7 @@ type switchableEngine struct {
 	nextLog      uint64
 	logs         map[uint64]*engineLogSubscription
 	cacheWarning string
+	generation   uint64
 }
 
 func newSwitchableEngine(active coreEngine) *switchableEngine {
@@ -187,8 +188,16 @@ func (s *switchableEngine) UpdateProxyProviderForProfile(name, profileID string)
 }
 func (s *switchableEngine) TestDelay(g, n, u string, d time.Duration) (int, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.active.TestDelay(g, n, u, d)
+	active, generation := s.active, s.generation
+	s.mu.RUnlock()
+	ms, err := active.TestDelay(g, n, u, d)
+	s.mu.RLock()
+	changed := s.generation != generation
+	s.mu.RUnlock()
+	if changed {
+		return 0, errors.New("内核切换期间测速结果已失效，请重新测速")
+	}
+	return ms, err
 }
 func (s *switchableEngine) SubscribeLogs(fn func(string, string)) func() {
 	s.mu.Lock()
@@ -222,20 +231,25 @@ func (s *switchableEngine) startLogs() {
 // replace is a transaction: if starting the new engine fails, undo the staged
 // settings and restart the previous engine. before and undo run under the same
 // lock as all engine calls and must not themselves call this wrapper.
-func (s *switchableEngine) replace(next coreEngine, before func() error, commit func() error, undo func() error) error {
+func (s *switchableEngine) replace(next coreEngine, before func() error, commit func() error, undo func() error) (result error) {
 	if next == nil {
 		return errors.New("new kernel is unavailable")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	switched := false
 	defer func() {
 		if !switched {
 			if c, ok := next.(interface{ Close() error }); ok {
-				_ = c.Close()
+				if err := c.Close(); err != nil {
+					result = errors.Join(result, fmt.Errorf("无法关闭未使用的新内核: %w", err))
+				}
 			}
 		}
 	}()
+	if !s.mu.TryLock() {
+		return errors.New("内核正忙，请等待网络操作完成后重试")
+	}
+	defer s.mu.Unlock()
+	s.generation++
 	old := s.active
 	status := old.Status()
 	if !status.Running || status.ConfigDir == "" {

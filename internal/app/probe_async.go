@@ -29,6 +29,10 @@ func (a *App) probeSiteAsync(url string, done func(int, error)) {
 }
 
 func (a *App) testProxyAsync(group, name, url string, timeout time.Duration, done func(int, error)) {
+	a.testProxyForProfileAsync(group, name, url, timeout, a.core.ProfileID(), done)
+}
+
+func (a *App) testProxyForProfileAsync(group, name, url string, timeout time.Duration, profileID string, done func(int, error)) {
 	slots, stop := a.probeSlots, a.probeStop
 	go func() {
 		select {
@@ -37,8 +41,20 @@ func (a *App) testProxyAsync(group, name, url string, timeout time.Duration, don
 			return
 		}
 		defer func() { <-slots }()
-		ms, err := a.core.TestDelay(group, name, url, timeout)
+		var ms int
+		var err error
+		if a.core.ProfileID() != profileID {
+			err = errors.New("active profile changed before the test began")
+		} else {
+			ms, err = a.core.TestDelay(group, name, url, timeout)
+			if a.core.ProfileID() != profileID {
+				ms, err = 0, errors.New("active profile changed during the test")
+			}
+		}
 		a.runOnMain(func() {
+			if a.core.ProfileID() != profileID {
+				ms, err = 0, errors.New("active profile changed during the test")
+			}
 			done(ms, err)
 			if a.win != nil {
 				a.win.Invalidate()

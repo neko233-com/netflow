@@ -4,19 +4,15 @@ import (
 	"context"
 	"errors"
 	"net"
-	"net/url"
-	"strings"
 	"time"
+
+	"github.com/neko233-com/netflow/internal/delay"
 )
 
-const defaultDelayURL = "https://cp.cloudflare.com/generate_204"
+const defaultDelayURL = delay.DefaultURL
 
 func validDelayURL(raw string) bool {
-	if len(raw) > 2048 || strings.TrimSpace(raw) != raw || strings.Contains(raw, "#") {
-		return false
-	}
-	u, err := url.ParseRequestURI(raw)
-	return err == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https") && u.User == nil && u.Fragment == ""
+	return delay.ValidURL(raw)
 }
 
 func (m *Model) delayTimeoutMS() int {

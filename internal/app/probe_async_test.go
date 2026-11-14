@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +14,8 @@ type delayCaptureEngine struct {
 	coreEngine
 	request chan time.Duration
 }
+
+func (e delayCaptureEngine) ProfileID() string { return "profile" }
 
 func TestDelayPreferencesPersistToSettingsFile(t *testing.T) {
 	dir := t.TempDir()
@@ -71,5 +74,37 @@ func TestAsyncDelayPassesConfiguredTimeout(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("probe did not complete")
+	}
+}
+
+type changedProfileDelayEngine struct {
+	coreEngine
+	profile atomic.Value
+	called  atomic.Bool
+}
+
+func (e *changedProfileDelayEngine) ProfileID() string { return e.profile.Load().(string) }
+func (e *changedProfileDelayEngine) TestDelay(_, _, _ string, _ time.Duration) (int, error) {
+	e.called.Store(true)
+	return 42, nil
+}
+
+func TestQueuedDelayDoesNotProbeAfterProfileChange(t *testing.T) {
+	engine := &changedProfileDelayEngine{}
+	engine.profile.Store("old")
+	slots := make(chan struct{}, 1)
+	slots <- struct{}{}
+	a := &App{core: engine, probeSlots: slots, probeStop: make(chan struct{}), dispatch: func(f func()) { f() }}
+	result := make(chan error, 1)
+	a.testProxyForProfileAsync("group", "node", "https://example.test", time.Second, "old", func(_ int, err error) { result <- err })
+	engine.profile.Store("new")
+	<-slots
+	select {
+	case err := <-result:
+		if err == nil || engine.called.Load() {
+			t.Fatal("queued probe ran under a different profile")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued probe did not complete")
 	}
 }

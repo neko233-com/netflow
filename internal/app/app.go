@@ -107,6 +107,7 @@ type App struct {
 	geoRestart          bool
 	providerWarning     string
 	providerJobs        map[string]providerJobRecord
+	delayJobs           map[string]delayJobRecord
 	profileJobs         map[string]profileJobRecord
 	backupJobs          map[string]backupJobRecord
 	backupBusy          bool

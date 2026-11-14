@@ -64,6 +64,8 @@ type Core struct {
 	effective         []byte
 	disableController bool
 	pendingFakeIP     *mihomodns.FakeIPState
+	probeContext      context.Context
+	stopProbes        context.CancelFunc
 }
 
 // SetTransformer installs an in-memory transformation; the original config
@@ -149,6 +151,7 @@ func (c *Core) Start(homeDir string) error {
 	}
 	c.running = true
 	c.dir = homeDir
+	c.probeContext, c.stopProbes = context.WithCancel(context.Background())
 	return nil
 }
 
@@ -163,6 +166,8 @@ func (c *Core) Reload() error {
 	if !c.running {
 		return errors.New("core is not running")
 	}
+	c.stopProbes()
+	c.probeContext, c.stopProbes = context.WithCancel(context.Background())
 	return c.apply()
 }
 
@@ -177,6 +182,8 @@ func (c *Core) Stop() error {
 	if !c.running {
 		return nil
 	}
+	c.stopProbes()
+	c.stopProbes, c.probeContext = nil, nil
 	closeProviders()
 	releaseListeners()
 	c.running = false

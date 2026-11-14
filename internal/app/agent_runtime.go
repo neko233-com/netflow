@@ -582,6 +582,20 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		if callErr = decodeStrict(args, &input); callErr == nil {
 			value, callErr = a.agentGroupNodes(input)
 		}
+	case "delay-test":
+		var input agent.DelayArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if a.probeSlots == nil || a.probeStop == nil {
+				callErr = errors.New("latency tests are not ready")
+			} else {
+				value, callErr = a.beginDelayJob(input, time.Now(), a.testProxyForProfileAsync)
+			}
+		}
+	case "delay-job-status":
+		var input agent.DelayJobArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.getDelayJob(input.JobID, time.Now())
+		}
 	case "profiles":
 		var input agent.PageArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {

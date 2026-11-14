@@ -542,6 +542,28 @@ type ProviderUpdateArgs struct {
 type ProviderJobArgs struct {
 	JobID string `json:"job_id" jsonschema:"provider update job id"`
 }
+
+type DelayArgs struct {
+	Group     string `json:"group" jsonschema:"proxy group containing the node"`
+	Node      string `json:"node" jsonschema:"node name in that group"`
+	URL       string `json:"url,omitempty" jsonschema:"optional HTTP or HTTPS test URL; defaults to the saved GUI setting"`
+	TimeoutMS int    `json:"timeout_ms,omitempty" jsonschema:"optional timeout from 100 to 60000 milliseconds; defaults to the saved GUI setting"`
+}
+
+type DelayJobArgs struct {
+	JobID string `json:"job_id" jsonschema:"latency test job id"`
+}
+
+type DelayJob struct {
+	JobID     string    `json:"job_id"`
+	Group     string    `json:"group"`
+	Node      string    `json:"node"`
+	ProfileID string    `json:"profile_id,omitempty"`
+	State     string    `json:"state"`
+	DelayMS   int       `json:"delay_ms,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
 type ProviderJob struct {
 	JobID     string    `json:"job_id"`
 	Kind      string    `json:"kind"`

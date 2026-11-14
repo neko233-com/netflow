@@ -295,6 +295,90 @@ func vmAgentChainRoundTrip(t *testing.T, agentExe, dir string) {
 	t.Log("installed CLI previewed, applied and disconnected a provider chain in the TUN worker")
 }
 
+func vmLatencyRoundTrip(t *testing.T, agentExe, dir string) {
+	t.Helper()
+	entered, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slow" {
+			close(entered)
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	defer close(release)
+	call := func(input string, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		defer cancel()
+		cmd := vmCommand(ctx, agentExe, append([]string{"--config-dir", dir}, args...)...)
+		if input != "" {
+			cmd.Stdin = strings.NewReader(input)
+		}
+		return cmd.CombinedOutput()
+	}
+	start := func(path string, timeout int) agent.DelayJob {
+		input, _ := json.Marshal(agent.DelayArgs{Group: "Select", Node: "DIRECT", URL: server.URL + path, TimeoutMS: timeout})
+		out, err := call(string(input), "delay-test")
+		var job agent.DelayJob
+		if err != nil || json.Unmarshal(out, &job) != nil || job.JobID == "" {
+			t.Fatalf("installed latency test: %s %v", out, err)
+		}
+		return job
+	}
+	poll := func(job agent.DelayJob) agent.DelayJob {
+		deadline := time.Now().Add(35 * time.Second)
+		for job.State == "pending" && time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+			out, err := call("", "delay-job-status", job.JobID)
+			if err != nil || json.Unmarshal(out, &job) != nil {
+				t.Fatalf("installed latency status: %s %v", out, err)
+			}
+		}
+		return job
+	}
+	job := poll(start("/ok", 5000))
+	if job.State != "succeeded" || job.DelayMS < 1 {
+		t.Fatalf("installed latency result: %+v", job)
+	}
+	job = start("/slow", 60000)
+	select {
+	case <-entered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("slow latency test did not start")
+	}
+	started := time.Now()
+	if out, err := call("", "tun", "off"); err != nil {
+		t.Fatalf("TUN off during latency test: %s %v", out, err)
+	}
+	if elapsed := time.Since(started); elapsed >= 35*time.Second {
+		t.Fatalf("TUN off waited for latency timeout: %v", elapsed)
+	}
+	job = poll(job)
+	if job.State != "canceled" && job.State != "failed" {
+		t.Fatalf("in-flight latency result not canceled or discarded: %+v", job)
+	}
+	if out, err := call("", "tun", "on"); err != nil {
+		t.Fatalf("TUN restore after latency test: %s %v", out, err)
+	}
+	deadline := time.Now().Add(90 * time.Second)
+	var status agent.Status
+	for time.Now().Before(deadline) {
+		out, err := call("", "status")
+		if err == nil && json.Unmarshal(out, &status) == nil && status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !status.TUN || status.TUNPending {
+		t.Fatalf("TUN did not restart: %+v", status)
+	}
+	t.Log("installed CLI tested a node and stopped TUN during an in-flight 60-second latency request")
+}
+
 func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -414,6 +498,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatalf("headless TUN did not start: %+v", status)
 	}
 	vmAgentChainRoundTrip(t, agentExe, dir)
+	vmLatencyRoundTrip(t, agentExe, dir)
 	var connectionPage agent.ConnectionsResult
 	if output, err := call("connections", "0", "1"); err != nil || json.Unmarshal(output, &connectionPage) != nil || connectionPage.NextOffset > connectionPage.Total {
 		t.Fatalf("installed headless connection page failed: %s %v", output, err)

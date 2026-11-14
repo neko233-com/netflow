@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appconfig"
@@ -74,6 +75,84 @@ func (e *switchTestEngine) SubscribeLogs(func(string, string)) func() {
 }
 func (e *switchTestEngine) Close() error         { e.closed = true; return nil }
 func (e *switchTestEngine) CacheWarning() string { return e.warning }
+
+type blockedDelayEngine struct {
+	*switchTestEngine
+	started chan struct{}
+	release chan struct{}
+}
+
+func (e *blockedDelayEngine) TestDelay(_, _, _ string, _ time.Duration) (int, error) {
+	close(e.started)
+	<-e.release
+	return 42, nil
+}
+
+func TestHandoffDoesNotWaitForDelayAndRejectsOldResult(t *testing.T) {
+	old := &blockedDelayEngine{switchTestEngine: &switchTestEngine{running: true, dir: "config"}, started: make(chan struct{}), release: make(chan struct{})}
+	next := &switchTestEngine{}
+	s := newSwitchableEngine(old)
+	result := make(chan error, 1)
+	go func() { _, err := s.TestDelay("", "DIRECT", "https://example.test", time.Minute); result <- err }()
+	<-old.started
+	handoff := make(chan error, 1)
+	go func() { handoff <- s.replace(next, nil, nil, nil) }()
+	select {
+	case err := <-handoff:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		close(old.release)
+		t.Fatal("kernel handoff waited for network probe")
+	}
+	close(old.release)
+	if err := <-result; err == nil {
+		t.Fatal("result from replaced kernel was accepted")
+	}
+	if !next.running || !old.closed {
+		t.Fatal("handoff did not complete")
+	}
+}
+
+type blockedProviderEngine struct {
+	*switchTestEngine
+	started chan struct{}
+	release chan struct{}
+}
+
+func (e *blockedProviderEngine) UpdateProxyProvider(string) error {
+	close(e.started)
+	<-e.release
+	return nil
+}
+
+func TestBusyProviderRejectsHandoffWithoutWaiting(t *testing.T) {
+	old := &blockedProviderEngine{switchTestEngine: &switchTestEngine{running: true, dir: "config"}, started: make(chan struct{}), release: make(chan struct{})}
+	s := newSwitchableEngine(old)
+	finished := make(chan error, 1)
+	go func() { finished <- s.UpdateProxyProvider("provider") }()
+	<-old.started
+	next := &switchTestEngine{}
+	handoff := make(chan error, 1)
+	go func() { handoff <- s.replace(next, nil, nil, nil) }()
+	select {
+	case err := <-handoff:
+		if err == nil || !next.closed || !old.running {
+			t.Fatal("busy handoff did not preserve old kernel and close the unused one")
+		}
+	case <-time.After(2 * time.Second):
+		close(old.release)
+		t.Fatal("handoff waited for provider update")
+	}
+	close(old.release)
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.replace(&switchTestEngine{}, nil, nil, nil); err != nil {
+		t.Fatalf("handoff after update: %v", err)
+	}
+}
 
 func TestHandoffPreservesProviderCacheWarning(t *testing.T) {
 	old := &switchTestEngine{running: true, dir: t.TempDir(), warning: "cache conflict"}

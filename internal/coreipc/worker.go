@@ -44,7 +44,11 @@ type Delay struct {
 	Group, Node, URL string
 	Timeout          time.Duration
 }
-type DelayResult struct{ Milliseconds int }
+type DelayResult struct {
+	Milliseconds int
+	Canceled     bool
+	TimedOut     bool
+}
 type BoolResult struct{ Value bool }
 type TextResult struct{ Value string }
 type TextListResult struct{ Values []string }
@@ -343,6 +347,14 @@ func (w *Worker) UpdateProxyProvider(in Name, out *Empty) error {
 }
 func (w *Worker) TestDelay(in Delay, out *DelayResult) (err error) {
 	out.Milliseconds, err = w.kernel.TestDelay(in.Group, in.Node, in.URL, in.Timeout)
+	if errors.Is(err, context.Canceled) {
+		out.Canceled = true
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		out.TimedOut = true
+		return nil
+	}
 	return
 }
 func (w *Worker) Logs(in LogQuery, out *Logs) error {

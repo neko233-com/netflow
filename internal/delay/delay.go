@@ -4,9 +4,25 @@
 // any other negative value has not been tested.
 package delay
 
+import (
+	"net/url"
+	"strings"
+)
+
 // DefaultTimeout is the latency budget in milliseconds when the caller
 // does not pass one (DEFAULT_DELAY_TIMEOUT).
 const DefaultTimeout = 10000
+
+const DefaultURL = "https://cp.cloudflare.com/generate_204"
+
+// ValidURL accepts explicit HTTP(S) targets without embedded credentials or fragments.
+func ValidURL(raw string) bool {
+	if len(raw) > 2048 || strings.TrimSpace(raw) != raw || strings.Contains(raw, "#") {
+		return false
+	}
+	u, err := url.ParseRequestURI(raw)
+	return err == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https") && u.User == nil && u.Fragment == ""
+}
 
 // Testing is the in-flight sentinel.
 const TestingSample = -2

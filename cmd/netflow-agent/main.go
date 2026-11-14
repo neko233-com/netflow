@@ -26,7 +26,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags := flag.NewFlagSet("netflow-agent", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, kernel-options, kernel-option NAME VALUE|inherit, update-geo, tun on|off, profiles, profile-settings ID, profile-settings-set|profile-url-set (JSON stdin), import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, rewrite-history, clear-rewrite-history, preview|rollback-preview (JSON stdin), chain-status, chain-preview (JSON stdin), chain-apply ID, chain-cancel-preview ID, chain-disconnect, preview-rules ID before|after [OFFSET [LIMIT]], cancel-preview ID, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, backup-on-change on|off, backup-webdav on|off, webdav-config, webdav-clear, webdav-save|webdav-list|webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
+		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, kernel-options, kernel-option NAME VALUE|inherit, update-geo, tun on|off, profiles, profile-settings ID, profile-settings-set|profile-url-set (JSON stdin), import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, delay-test (JSON stdin), delay-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, rewrite-history, clear-rewrite-history, preview|rollback-preview (JSON stdin), chain-status, chain-preview (JSON stdin), chain-apply ID, chain-cancel-preview ID, chain-disconnect, preview-rules ID before|after [OFFSET [LIMIT]], cancel-preview ID, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, backup-on-change on|off, backup-webdav on|off, webdav-config, webdav-clear, webdav-save|webdav-list|webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
 		fmt.Fprintln(output, "tun-autostart [on|off] sets the GUI startup preference; connections, profiles and groups accept [OFFSET [LIMIT]]; group-nodes GROUP and provider-page proxy|rule accept [OFFSET [LIMIT]]")
 		fmt.Fprintln(output, "verge-script-preview (JSON stdin), verge-script-update-preview PROFILE, verge-script-url-preview (JSON stdin), verge-script-rollback-preview PROFILE, verge-script-apply ID, verge-script-preview-rules|verge-script-preview-config ID before|after [OFFSET [LIMIT]], verge-script-preview-cancel ID, verge-script-cache-prune; config contains private data")
 	}
@@ -111,7 +111,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	case "help":
 		flags.Usage()
 		return nil
-	case "chain-status", "chain-disconnect", "chain-apply", "chain-cancel-preview", "verge-script-preview-cancel", "verge-script-apply", "verge-script-rollback-preview", "verge-script-update-preview", "verge-script-cache-prune", "diagnostics", "shutdown", "rewrite-history", "clear-rewrite-history", "preview-rules", "verge-script-preview-rules", "verge-script-preview-config", "kernel-options", "kernel-option", "update-geo", "groups", "group-nodes", "profiles", "profile-settings", "profile-settings-set", "profile-url-set", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "backup-on-change", "backup-webdav", "webdav-config", "webdav-save", "webdav-clear", "webdav-list", "webdav-upload", "webdav-restore", "providers", "provider-page", "update-provider", "provider-job-status", "rules", "connections", "select", "mode", "use-profile", "close-connection", "tun", "tun-autostart":
+	case "chain-status", "chain-disconnect", "chain-apply", "chain-cancel-preview", "verge-script-preview-cancel", "verge-script-apply", "verge-script-rollback-preview", "verge-script-update-preview", "verge-script-cache-prune", "diagnostics", "shutdown", "rewrite-history", "clear-rewrite-history", "preview-rules", "verge-script-preview-rules", "verge-script-preview-config", "kernel-options", "kernel-option", "update-geo", "groups", "group-nodes", "profiles", "profile-settings", "profile-settings-set", "profile-url-set", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "backup-on-change", "backup-webdav", "webdav-config", "webdav-save", "webdav-clear", "webdav-list", "webdav-upload", "webdav-restore", "providers", "provider-page", "update-provider", "provider-job-status", "delay-test", "delay-job-status", "rules", "connections", "select", "mode", "use-profile", "close-connection", "tun", "tun-autostart":
 		method := flags.Arg(0)
 		stdin := input
 		var input any
@@ -231,6 +231,30 @@ func run(args []string, input io.Reader, output io.Writer) error {
 				return errors.New("update-provider requires proxy|rule and a provider name")
 			}
 			input = agent.ProviderUpdateArgs{Kind: flags.Arg(1), Name: flags.Arg(2)}
+		case "delay-test":
+			if flags.NArg() != 1 {
+				return errors.New("delay-test reads one JSON object from stdin")
+			}
+			body, err := io.ReadAll(io.LimitReader(stdin, 8193))
+			if err != nil || len(body) > 8192 {
+				return errors.New("invalid or oversized latency test input")
+			}
+			var value agent.DelayArgs
+			dec := json.NewDecoder(bytes.NewReader(body))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&value); err != nil {
+				return errors.New("invalid latency test input")
+			}
+			var extra any
+			if dec.Decode(&extra) != io.EOF {
+				return errors.New("unexpected trailing JSON")
+			}
+			input = value
+		case "delay-job-status":
+			if flags.NArg() != 2 || flags.Arg(1) == "" {
+				return errors.New("delay-job-status requires a job ID")
+			}
+			input = agent.DelayJobArgs{JobID: flags.Arg(1)}
 		case "provider-job-status":
 			if flags.NArg() != 2 || flags.Arg(1) == "" {
 				return errors.New("provider-job-status requires a job ID")

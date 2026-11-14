@@ -30,6 +30,7 @@ func (c *Core) TestDelay(group, name, rawURL string, timeout time.Duration) (int
 		c.mu.Unlock()
 		return 0, errors.New("内核未运行")
 	}
+	ctx, cancel := context.WithTimeout(c.probeContext, timeout)
 	var proxy C.Proxy
 	if group != "" {
 		if parent := tunnel.Proxies()[group]; parent != nil {
@@ -47,11 +48,10 @@ func (c *Core) TestDelay(group, name, rawURL string, timeout time.Duration) (int
 		proxy = tunnel.Proxies()[name]
 	}
 	c.mu.Unlock()
+	defer cancel()
 	if proxy == nil {
 		return 0, fmt.Errorf("找不到节点 %s", name)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 	ms, err := proxy.URLTest(ctx, rawURL, nil)
 	if err != nil {
 		return 0, err
