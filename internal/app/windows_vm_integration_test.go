@@ -1946,9 +1946,9 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 			}
 		}
 		setAuto(true)
-		deadline := time.Now().Add(100 * time.Second)
+		reviewDeadline := time.Now().Add(100 * time.Second)
 		reviewRequired := false
-		for time.Now().Before(deadline) {
+		for time.Now().Before(reviewDeadline) {
 			out, err = callMigration("profiles")
 			var profiles agent.ProfileList
 			if err == nil && json.Unmarshal(out, &profiles) == nil {
