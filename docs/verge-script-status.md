@@ -10,6 +10,8 @@
 
 合成会恢复由 NetFlow 管理的端口、模式、TUN、监听器和控制接口等字段，这些字段的脚本修改不会生效。缓存按元数据和内容摘要核对，订阅、存档、名称或缓存变化时拒绝加载；缓存包含订阅数据，会随配置备份。脚本输出和更新时保留的私有订阅文件各自最多 128 项、256 MiB；可在脚本对话框中清理未引用文件，或使用 `verge-script-cache-prune` / MCP `netflow_prune_verge_script_cache`；当前和上一份设置引用的文件会保留。清理过程中检测到配置变化会停止，外部进程在最终检查后的并发修改仍有短暂竞争窗口。已启用脚本的远程订阅可下载并预览更新，复用当前批准的脚本选择，离线校验后须另行应用；上一份订阅文件和脚本设置可一起预览回滚。自动更新和更换链接仍不会自动重新批准脚本。当前只保留上一份设置，回滚时所需的原输入和缓存仍必须可用；存档不可用时可预览关闭脚本及存档数据扩展。订阅更新与失败恢复可能留下未引用的私有文件，可按需清理。
 
+关闭脚本后更新订阅或更换链接时，会保留上一份脚本设置所需的订阅文件、名称、链接和流量信息，以便预览回滚；保留的旧链接及备份可能包含凭据。旧版产生的历史记录未包含链接或名称时，回滚沿用当前值。
+
 在订阅卡片右键菜单中选择“预览 Verge 脚本”，可勾选脚本、分页查看并单独应用；全不选可关闭脚本。已启用脚本的远程订阅可选择“按已启用脚本预览订阅更新”。CLI 的 `verge-script-preview` 从标准输入读取 `{"profile_id":"订阅ID","global":true,"profile":true}`，返回的 ID 可用于 `verge-script-apply ID`；`verge-script-update-preview PROFILE` 下载并预览订阅更新，`verge-script-rollback-preview PROFILE` 预览上一份设置。`verge-script-preview-rules` 和 `verge-script-preview-config` 分别按规则和 UTF-8 字节分页，后者必须使用上一页的 `next_offset`。MCP 提供 `netflow_preview_verge_script`、`netflow_preview_verge_subscription_update`、`netflow_apply_verge_script`、`netflow_preview_verge_script_rollback`、规则和配置分页及取消工具。全局脚本按所选订阅单独批准，并非对所有订阅一次性生效。
 
 迁入规则存储为 NetFlow 订阅规则并在脚本后应用，与原 Verge 的部分脚本观察顺序不同；Agent 的连接、订阅和全局规则也在脚本后应用。自动订阅更新、更多脚本 API、并发关闭和崩溃恢复仍需扩大兼容与真实环境验证，不能声称与 Verge 完全等价。

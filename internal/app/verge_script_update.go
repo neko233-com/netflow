@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/neko233-com/netflow/internal/migration"
 	"github.com/neko233-com/netflow/internal/profile"
@@ -63,6 +64,21 @@ func (a *App) finishVergeSubscriptionUpdate(ctx context.Context, ready vergeScri
 		return false, scriptpreview.ErrSourcesChanged
 	}
 	item := &catalog.Items[index]
+	nextURL := update.snapshot.URL
+	if nextURL == "" {
+		// Snapshots created by 0.2.91 did not record the unchanged URL.
+		nextURL = item.URL
+	}
+	if !profile.ValidURL(nextURL) || (update.snapshot.File == "" && nextURL != item.URL) {
+		return false, scriptpreview.ErrSourcesChanged
+	}
+	nextName := update.snapshot.Name
+	if nextName == "" {
+		nextName = item.Name
+	}
+	if len(nextName) > 256 || strings.ContainsAny(nextName, "\r\n\x00") || (update.snapshot.File == "" && nextName != item.Name) {
+		return false, scriptpreview.ErrSourcesChanged
+	}
 	oldBody, oldPath, err := readProfileFile(a.dir, item.File)
 	if err != nil || d.hashes[oldPath] != sha256.Sum256(oldBody) {
 		return false, scriptpreview.ErrSourcesChanged
@@ -91,12 +107,12 @@ func (a *App) finishVergeSubscriptionUpdate(ctx context.Context, ready vergeScri
 		}
 	}
 	d.hashes[path] = retainedHash
-	previous := &scriptmeta.Previous{VergeExtensions: item.Option.VergeExtensions, Subscription: &scriptmeta.SubscriptionSnapshot{File: item.File, Updated: item.Updated, Used: item.Used, Total: item.Total, Expire: item.Expire}}
+	previous := &scriptmeta.Previous{VergeExtensions: item.Option.VergeExtensions, Subscription: &scriptmeta.SubscriptionSnapshot{File: item.File, URL: item.URL, Name: item.Name, Updated: item.Updated, Used: item.Used, Total: item.Total, Expire: item.Expire}}
 	if item.Option.VergeScriptApproval != nil {
 		copy := *item.Option.VergeScriptApproval
 		previous.Approval = &copy
 	}
-	item.File, item.Updated, item.Used, item.Total, item.Expire = nextFile, update.snapshot.Updated, update.snapshot.Used, update.snapshot.Total, update.snapshot.Expire
+	item.File, item.URL, item.Name, item.Updated, item.Used, item.Total, item.Expire = nextFile, nextURL, nextName, update.snapshot.Updated, update.snapshot.Used, update.snapshot.Total, update.snapshot.Expire
 	item.Option.VergeScriptPrevious, item.Option.VergeScriptApproval, item.Option.VergeExtensions = previous, ready.approval, ready.extensions
 	if err := ctx.Err(); err != nil {
 		return false, err

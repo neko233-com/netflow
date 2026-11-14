@@ -32,6 +32,8 @@ type Previous struct {
 // may contain credentials and must remain private to the configuration root.
 type SubscriptionSnapshot struct {
 	File    string    `json:"file"`
+	URL     string    `json:"url,omitempty"`
+	Name    string    `json:"name,omitempty"`
 	Updated time.Time `json:"updated,omitempty"`
 	Used    int64     `json:"used,omitempty"`
 	Total   int64     `json:"total,omitempty"`

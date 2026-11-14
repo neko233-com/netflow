@@ -31,13 +31,17 @@ func (a *App) prepareVergeScriptCommit(ctx context.Context, proposal vergeScript
 	}
 	d, p := proposal.draft, proposal.prepared
 	candidateBase := d.base
+	candidateName := d.item.Name
 	if proposal.update != nil {
 		candidateBase = profile.EnsureMixedPort(proposal.update.body, 7897)
+		if proposal.update.snapshot.Name != "" {
+			candidateName = proposal.update.snapshot.Name
+		}
 	}
 	if sha256.Sum256(p.Effective) != p.EffectiveSHA256 || (d.status.Running && d.target == d.active && sha256.Sum256(p.Baseline) != sha256.Sum256(d.activeEffective)) {
 		return empty, scriptpreview.ErrSourcesChanged
 	}
-	if err := p.Candidate.CheckCurrent(ctx, a.dir, candidateBase, d.item.Name, p.Candidate.Selection, p.Candidate.Clock); err != nil {
+	if err := p.Candidate.CheckCurrent(ctx, a.dir, candidateBase, candidateName, p.Candidate.Selection, p.Candidate.Clock); err != nil {
 		if ctx.Err() != nil {
 			return empty, ctx.Err()
 		}
@@ -63,7 +67,7 @@ func (a *App) prepareVergeScriptCommit(ctx context.Context, proposal vergeScript
 			extensions = false
 		}
 	} else {
-		value, err := scriptapproval.Store(ctx, a.dir, p.Candidate, candidateBase, d.item.Name)
+		value, err := scriptapproval.Store(ctx, a.dir, p.Candidate, candidateBase, candidateName)
 		if err != nil {
 			return empty, err
 		}
@@ -73,7 +77,7 @@ func (a *App) prepareVergeScriptCommit(ctx context.Context, proposal vergeScript
 	var sources map[string][32]byte
 	var err error
 	if approval != nil {
-		resolved, resolveErr := scriptapproval.ResolveSnapshot(ctx, a.dir, *approval, candidateBase, d.item.Name, d.item.Option.VergeArchive, d.item.Option.VergeUID)
+		resolved, resolveErr := scriptapproval.ResolveSnapshot(ctx, a.dir, *approval, candidateBase, candidateName, d.item.Option.VergeArchive, d.item.Option.VergeUID)
 		if resolveErr != nil || !bytes.Equal(resolved.Body, p.Candidate.Body) {
 			return empty, scriptpreview.ErrSourcesChanged
 		}
@@ -118,8 +122,12 @@ func (a *App) finishVergeScriptCommit(ctx context.Context, ready vergeScriptComm
 	}
 	p, d := ready.proposal.prepared, ready.proposal.draft
 	candidateBase := d.base
+	candidateName := d.item.Name
 	if ready.proposal.update != nil {
 		candidateBase = profile.EnsureMixedPort(ready.proposal.update.body, 7897)
+		if ready.proposal.update.snapshot.Name != "" {
+			candidateName = ready.proposal.update.snapshot.Name
+		}
 	}
 	if !ready.proposal.expires.After(time.Now()) {
 		return false, errors.New("script preview expired; preview again")
@@ -136,7 +144,7 @@ func (a *App) finishVergeScriptCommit(ctx context.Context, ready vergeScriptComm
 	if err := a.checkAgentSources(d.hashes); err != nil {
 		return false, scriptpreview.ErrSourcesChanged
 	}
-	if err := p.Candidate.CheckCurrent(ctx, a.dir, candidateBase, d.item.Name, p.Candidate.Selection, p.Candidate.Clock); err != nil {
+	if err := p.Candidate.CheckCurrent(ctx, a.dir, candidateBase, candidateName, p.Candidate.Selection, p.Candidate.Clock); err != nil {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}

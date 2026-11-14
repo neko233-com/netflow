@@ -211,7 +211,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			if err == nil {
 				metadata := draft.item
 				profile.ApplySubscriptionUserInfo(&metadata, response.headers)
-				update = &vergeSubscriptionUpdate{body: response.body, snapshot: scriptmeta.SubscriptionSnapshot{Updated: time.Now().UTC().Truncate(time.Second), Used: metadata.Used, Total: metadata.Total, Expire: metadata.Expire}}
+				update = &vergeSubscriptionUpdate{body: response.body, snapshot: scriptmeta.SubscriptionSnapshot{URL: metadata.URL, Name: metadata.Name, Updated: time.Now().UTC().Truncate(time.Second), Used: metadata.Used, Total: metadata.Total, Expire: metadata.Expire}}
 			}
 		} else if rollback {
 			prepared, err = a.prepareVergeScriptRollback(ctx, draft)

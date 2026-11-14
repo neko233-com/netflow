@@ -1959,6 +1959,58 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if err != nil || strings.Contains(string(out), "local-script.netflow-test.example") {
 			t.Fatalf("script rollback left rules active: %s %v", out, err)
 		}
+		// Normal updates must also accept providers supplied by Verge data
+		// extensions, while retaining the disabled script's rollback source.
+		out, err = callMigration("update-profile", status.ActiveProfile)
+		var updateJob agent.ProfileJob
+		if err != nil || json.Unmarshal(out, &updateJob) != nil || updateJob.JobID == "" {
+			t.Fatalf("ordinary migrated subscription update did not start: %s %v", out, err)
+		}
+		deadline = time.Now().Add(60 * time.Second)
+		for time.Now().Before(deadline) {
+			out, err = callMigration("profile-job-status", updateJob.JobID)
+			if err != nil || json.Unmarshal(out, &updateJob) != nil {
+				t.Fatalf("subscription update job failed: %s %v", out, err)
+			}
+			if updateJob.State != "running" && updateJob.State != "pending" {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		if updateJob.State != "succeeded" {
+			t.Fatalf("ordinary migrated subscription update failed: %+v", updateJob)
+		}
+		out, err = callMigration("rules")
+		if err != nil || !strings.Contains(string(out), "updated-subscription.netflow-test.example") || strings.Contains(string(out), "local-script.netflow-test.example") {
+			t.Fatalf("ordinary migrated subscription update produced wrong rules: %s %v", out, err)
+		}
+		out, err = callMigration("verge-script-rollback-preview", status.ActiveProfile)
+		if err != nil || json.Unmarshal(out, &script) != nil || script.PreviewID == "" {
+			t.Fatalf("disabled script rollback preview failed: %s %v", out, err)
+		}
+		out, err = callMigration("verge-script-apply", script.PreviewID)
+		if err != nil || json.Unmarshal(out, &applied) != nil || !applied.Applied {
+			t.Fatalf("disabled script rollback failed: %s %v", out, err)
+		}
+		out, err = callMigration("rules")
+		if err != nil || strings.Contains(string(out), "updated-subscription.netflow-test.example") || !strings.Contains(string(out), "local-script.netflow-test.example") {
+			t.Fatalf("disabled script rollback did not restore old subscription: %s %v", out, err)
+		}
+		disableCtx, disableCancel = context.WithTimeout(context.Background(), 90*time.Second)
+		disableCommand = vmCommand(disableCtx, agentExe, "--config-dir", migrationTarget, "verge-script-preview")
+		disableCommand.Stdin = strings.NewReader(`{"global":false,"profile":false}`)
+		out, err = disableCommand.CombinedOutput()
+		disableCancel()
+		if err != nil || json.Unmarshal(out, &script) != nil || script.Operation != "disable" {
+			t.Fatalf("second script disable preview failed: %s %v", out, err)
+		}
+		if out, err = callMigration("verge-script-apply", script.PreviewID); err != nil {
+			t.Fatalf("second script disable failed: %s %v", out, err)
+		}
+		out, err = callMigration("status")
+		if err != nil || json.Unmarshal(out, &status) != nil || !status.TUN {
+			t.Fatalf("ordinary update or rollback changed TUN status: %s %v", out, err)
+		}
 		t.Log("installed Agent previewed, applied and rolled back migrated scripts with TUN active")
 		out, err = callMigration("providers")
 		var providers agent.ProviderList

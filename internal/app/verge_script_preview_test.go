@@ -483,6 +483,67 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 		if bytes.Contains(current, []byte("DOMAIN,profile.test,DIRECT")) != (step == 1) {
 			t.Fatal("disable/enable output incorrect")
 		}
+		if step == 0 {
+			beforeChange, beforeBytes, err := a.profiles.LoadForUpdate()
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldItem := beforeChange.Items[0]
+			oldConfig, err := safepath.ReadFile(dir, "config.yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			nextBody := bytes.Replace(oldConfig, []byte("MATCH,DIRECT"), []byte("DOMAIN,disabled-update.test,DIRECT"), 1)
+			nextURL := subscription.URL + "/replacement?token=synthetic-next"
+			if err := a.updateProfileDataWithURL(oldItem.UID, oldItem.URL, nextURL, nextBody, nil); err != nil {
+				t.Fatal("disabled script profile update failed", err)
+			}
+			updated, updatedSnapshot, err := a.profiles.LoadForUpdate()
+			if err != nil || updated.Items[0].File == oldItem.File || updated.Items[0].Option.VergeScriptPrevious == nil || updated.Items[0].Option.VergeScriptPrevious.Subscription == nil {
+				t.Fatal("disabled script rollback source was not retained", err)
+			}
+			updated.Items[0].Name = "renamed while scripts disabled"
+			if err := a.profiles.SaveIfUnchanged(updated, updatedSnapshot); err != nil {
+				t.Fatal(err)
+			}
+			input, _ := json.Marshal(agent.ProfileArgs{ProfileID: oldItem.UID})
+			for n := 0; n < 2; n++ {
+				value, err := a.dispatchAgent(context.Background(), "verge-script-rollback-preview", input)
+				if err != nil {
+					t.Fatal("disabled script update rollback preview failed", err)
+				}
+				apply, _ := json.Marshal(agent.ApplyArgs{ProposalID: value.(agent.VergeScriptPreview).PreviewID})
+				if _, err := a.dispatchAgent(context.Background(), "verge-script-apply", apply); err != nil {
+					t.Fatal("disabled script update rollback failed", err)
+				}
+				state, err := a.profiles.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantURL := oldItem.URL
+				wantName := oldItem.Name
+				if n == 1 {
+					wantURL = nextURL
+					wantName = "renamed while scripts disabled"
+				}
+				if state.Items[0].URL != wantURL || state.Items[0].Name != wantName || (state.Items[0].Option.VergeScriptApproval != nil) != (n == 0) {
+					t.Fatal("rollback did not restore URL, name and script setting")
+				}
+			}
+			updated, _, err = a.profiles.LoadForUpdate()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := a.profiles.RestoreSnapshotIfUnchanged(updated, beforeBytes); err != nil {
+				t.Fatal(err)
+			}
+			if err := safepath.CompareAndWrite(dir, "config.yaml", profile.EnsureMixedPort(nextBody, 7897), oldConfig); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.core.Reload(); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	catalog, err = a.profiles.Load()
 	if err != nil {

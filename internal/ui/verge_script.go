@@ -43,8 +43,8 @@ func vergeScriptWarning(s string) string {
 		return "存档不可用或无效；恢复操作会同时关闭脚本和存档数据扩展。"
 	case "The core is stopped; applying only saves settings until the core is started.":
 		return "内核未运行；应用只保存设置，启动内核后才会生效。"
-	case "Applying changes the subscription contents; rollback restores the previous contents and traffic metadata.":
-		return "应用会更改订阅内容；回滚会恢复之前的内容和流量信息。"
+	case "Rollback can restore subscription contents, name, URL and traffic metadata; retained URLs can contain credentials.":
+		return "回滚可恢复订阅内容、名称、链接和流量信息；保留的链接可能包含凭据。"
 	default:
 		return s
 	}

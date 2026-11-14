@@ -14,6 +14,7 @@ import (
 
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/safepath"
+	"github.com/neko233-com/netflow/internal/scriptmeta"
 )
 
 // UpdateProfile replaces one remote subscription only after it has been
@@ -121,9 +122,6 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 	if index < 0 || f.Items[index].URL == "" || f.Items[index].URL != expectedURL {
 		return errors.New("订阅已删除或链接已变化，请重新更新")
 	}
-	if err = validateProfile(body); err != nil {
-		return err
-	}
 	rel := f.Items[index].File
 	oldFile, _, err := readProfileFile(a.dir, rel)
 	if err != nil {
@@ -142,12 +140,32 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 		}
 		return errors.New("已启用的 Verge 脚本绑定当前订阅；请在脚本对话框预览订阅更新并应用，或先关闭脚本再更新")
 	}
+	// A disabled script can still be the previous rollback target. Preserve
+	// its original subscription and metadata before updating that file.
+	item := &f.Items[index]
+	if previous := item.Option.VergeScriptPrevious; item.Option.VergeScriptApproval == nil && previous != nil && previous.Approval != nil && previous.Subscription == nil && (!bytes.Equal(body, oldFile) || nextURL != expectedURL) {
+		copy := *previous
+		copy.Subscription = &scriptmeta.SubscriptionSnapshot{File: item.File, URL: item.URL, Name: item.Name, Updated: item.Updated, Used: item.Used, Total: item.Total, Expire: item.Expire}
+		item.Option.VergeScriptPrevious = &copy
+	}
 	shared, err := a.profiles.SharedProfileFile(f, uid)
 	if err != nil {
 		return err
 	}
 	active := f.Current == uid
-	if active {
+	rawErr := validateProfile(body)
+	if rawErr != nil {
+		if !f.Items[index].Option.VergeExtensions {
+			return rawErr
+		}
+		if err := validateProfileShape(body); err != nil {
+			return err
+		}
+	}
+	// A Verge data extension can define groups/providers referenced by the
+	// subscription. If raw kernel parsing fails, validate the complete composed
+	// configuration even for an inactive profile before replacing its file.
+	if active || rawErr != nil {
 		if err = a.validateEffectiveProfile(body, uid); err != nil {
 			return err
 		}

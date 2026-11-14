@@ -273,7 +273,7 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 		warnings = append(warnings, "This profile is inactive.")
 	}
 	if update != nil {
-		warnings = append(warnings, "Applying changes the subscription contents; rollback restores the previous contents and traffic metadata.")
+		warnings = append(warnings, "Rollback can restore subscription contents, name, URL and traffic metadata; retained URLs can contain credentials.")
 	}
 	if !d.status.Running {
 		warnings = append(warnings, "The core is stopped; applying only saves settings until the core is started.")

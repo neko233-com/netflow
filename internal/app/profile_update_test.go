@@ -12,10 +12,87 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/neko233-com/netflow/internal/migration"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/scriptmeta"
 )
+
+func TestUpdateVergeProfileValidatesProvidersAfterExtensions(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		t.Run(fmt.Sprintf("active-%v", active), func(t *testing.T) {
+			source := t.TempDir()
+			for _, dir := range []string{"profiles", "sets"} {
+				if err := os.Mkdir(filepath.Join(source, dir), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			files := map[string]string{
+				"profiles.yaml":    "current: p1\nitems:\n  - {uid: p1, type: remote, name: Test, url: 'https://example.invalid/sub', file: p1.yaml, option: {merge: m1}}\n  - {uid: m1, type: merge, file: m1.yaml}\n",
+				"profiles/p1.yaml": "mixed-port: 0\ndns: {enable: false}\ntun: {enable: false}\nrules: ['MATCH,DIRECT']\n",
+				"profiles/m1.yaml": "rule-providers:\n  blocked: {type: file, behavior: domain, format: yaml, path: ./sets/rules.yaml}\n",
+				"sets/rules.yaml":  "payload: ['+.blocked.example']\n",
+			}
+			for name, body := range files {
+				if err := os.WriteFile(filepath.Join(source, filepath.FromSlash(name)), []byte(body), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			parsed, err := migration.ReadVerge(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			if _, err := parsed.ImportVerge(dir); err != nil {
+				t.Fatal(err)
+			}
+			a := newProfileHarness(dir)
+			catalog, err := a.profiles.Load()
+			if err != nil || len(catalog.Items) != 1 {
+				t.Fatal("missing imported profile", err)
+			}
+			target := catalog.Items[0]
+			if !active {
+				other, err := a.profiles.ImportLocal("other.yaml", []byte("rules: ['MATCH,DIRECT']\n"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := a.profiles.SetCurrent(other.UID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			a.loadProfiles()
+			if err := a.installCurrentProfile(); err != nil {
+				t.Fatal(err)
+			}
+			oldConfig, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			invalid := []byte("rules: ['RULE-SET,missing,REJECT', 'MATCH,DIRECT']\n")
+			if err := a.updateProfileData(target.UID, target.URL, invalid, nil); err == nil {
+				t.Fatal("missing provider was accepted")
+			}
+			valid := []byte("rules: ['RULE-SET,blocked,REJECT', 'MATCH,DIRECT']\n")
+			if err := validateProfile(valid); err == nil {
+				t.Fatal("fixture unexpectedly validates without Verge extensions")
+			}
+			if err := a.updateProfileData(target.UID, target.URL, valid, nil); err != nil {
+				t.Fatal("valid composed update was rejected", err)
+			}
+			body, err := os.ReadFile(filepath.Join(dir, target.File))
+			if err != nil || string(body) != string(valid) {
+				t.Fatal("valid update not stored", err)
+			}
+			if !active {
+				current, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+				if err != nil || string(current) != string(oldConfig) {
+					t.Fatal("inactive update changed active config", err)
+				}
+			}
+		})
+	}
+}
 
 func TestScriptApprovedProfileUpdatePreservesSourceAndCatalog(t *testing.T) {
 	for _, active := range []bool{false, true} {

@@ -72,6 +72,9 @@ func (a *App) prepareVergeScriptRollback(ctx context.Context, d vergeScriptDraft
 	}
 	if update != nil {
 		next.base = profile.EnsureMixedPort(update.body, 7897)
+		if update.snapshot.Name != "" {
+			next.item.Name = update.snapshot.Name
+		}
 	}
 	selection := migration.ScriptSelection{}
 	clock := d.clock
@@ -82,7 +85,7 @@ func (a *App) prepareVergeScriptRollback(ctx context.Context, d vergeScriptDraft
 		approval := *previous.Approval
 		selection = migration.ScriptSelection{Global: approval.Global, Profile: approval.Profile}
 		clock = approval.Clock
-		resolved, err := scriptapproval.ResolveSnapshot(ctx, a.dir, approval, next.base, d.item.Name, d.item.Option.VergeArchive, d.item.Option.VergeUID)
+		resolved, err := scriptapproval.ResolveSnapshot(ctx, a.dir, approval, next.base, next.item.Name, d.item.Option.VergeArchive, d.item.Option.VergeUID)
 		if err != nil {
 			return empty, scriptpreview.ErrSourcesChanged
 		}
@@ -111,7 +114,7 @@ func (a *App) prepareVergeScriptRollback(ctx context.Context, d vergeScriptDraft
 		}
 		d.hashes[snapshot.ArchivePath] = snapshot.ArchiveSHA256
 	}
-	candidate := scriptpreview.Candidate{Body: append([]byte(nil), body...), BaseSHA256: sha256.Sum256(next.base), ArchiveSHA256: snapshot.ArchiveSHA256, ArchivePath: snapshot.ArchivePath, ArchiveRelative: d.item.Option.VergeArchive, VergeUID: d.item.Option.VergeUID, ProfileNameSHA256: sha256.Sum256([]byte(d.item.Name)), OutputSHA256: sha256.Sum256(body), Clock: clock, Selection: selection}
+	candidate := scriptpreview.Candidate{Body: append([]byte(nil), body...), BaseSHA256: sha256.Sum256(next.base), ArchiveSHA256: snapshot.ArchiveSHA256, ArchivePath: snapshot.ArchivePath, ArchiveRelative: d.item.Option.VergeArchive, VergeUID: d.item.Option.VergeUID, ProfileNameSHA256: sha256.Sum256([]byte(next.item.Name)), OutputSHA256: sha256.Sum256(body), Clock: clock, Selection: selection}
 	if selection.Global {
 		if snapshot.Global == nil {
 			return empty, scriptpreview.ErrSourcesChanged
