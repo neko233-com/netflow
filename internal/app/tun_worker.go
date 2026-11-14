@@ -12,6 +12,33 @@ import (
 
 func (a *App) tunRequestAvailable() bool { return a.tunAllowed() || canLaunchTUNWorker() }
 
+// Auto-start is opt-in and GUI-only; it uses the same preflight and consent
+// path as an explicit toggle. Headless serve retains its own --tun setting.
+func (a *App) requestPreferredTUN(request func(bool, func(error))) {
+	if a == nil || a.headless || a.model == nil || !a.model.Prefs.AutoStartTUN || a.settings.TUN || request == nil {
+		return
+	}
+	request(true, a.tunActionDone)
+}
+
+func (a *App) setTUNAutoStart(on bool) error {
+	if a == nil || a.model == nil || a.store == nil {
+		return errors.New("启动选项不可用")
+	}
+	if a.tunBusy {
+		return errors.New("虚拟网卡正在切换，请稍后重试")
+	}
+	next := a.model.Prefs
+	next.AutoStartTUN = on
+	next.TUN = a.settings.TUN
+	next.SystemProxy = a.settings.SystemProxy
+	if err := a.savePrefs(next); err != nil {
+		return err
+	}
+	a.model.Prefs.AutoStartTUN = on
+	return nil
+}
+
 // requestTUN keeps the window responsive during the Windows consent prompt.
 // All application state and kernel handoff happens back on the UI thread.
 func (a *App) requestTUN(on bool, done func(error)) {

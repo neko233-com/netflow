@@ -12,6 +12,16 @@ import (
 func TestMCPRequestsTUN(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := Start(dir, func(_ context.Context, method string, args json.RawMessage) (any, error) {
+		if method == "tun-autostart" {
+			return TunAutoStartResult{AppliesTo: "gui"}, nil
+		}
+		if method == "tun-autostart-set" {
+			var in TunArgs
+			if json.Unmarshal(args, &in) != nil || in.Enabled == nil || !*in.Enabled {
+				t.Error("incorrect TUN startup preference")
+			}
+			return TunAutoStartResult{Enabled: true, AppliesTo: "gui"}, nil
+		}
 		if method == "rewrite-history" {
 			return RewriteHistory{}, nil
 		}
@@ -109,6 +119,8 @@ func TestMCPRequestsTUN(t *testing.T) {
 		t.Fatalf("MCP version %q does not match the application version %q", got, netflow.Version())
 	}
 	for _, call := range []*mcp.CallToolParams{
+		{Name: "netflow_tun_autostart", Arguments: map[string]any{}},
+		{Name: "netflow_set_tun_autostart", Arguments: map[string]any{"enabled": true}},
 		{Name: "netflow_rewrite_history", Arguments: map[string]any{}},
 		{Name: "netflow_preview_rules", Arguments: map[string]any{"proposal_id": "proposal", "stage": "after"}},
 		{Name: "netflow_cancel_preview", Arguments: map[string]any{"proposal_id": "proposal"}},

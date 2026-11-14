@@ -24,6 +24,7 @@ type Hooks struct {
 	ApplyHotkeys               func(Prefs) error
 	SetTUN                     func(on bool) error
 	SetTUNAsync                func(on bool, done func(error))
+	SetTUNAutoStart            func(on bool) error
 	SetMode                    func(mode string) error
 	SelectProxy                func(group, node string) error
 	UseProfile                 func(uid string) error

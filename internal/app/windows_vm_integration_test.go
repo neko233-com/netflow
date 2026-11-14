@@ -3,6 +3,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	_ "embed"
@@ -313,6 +314,34 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	}
 	if !status.TUN || !status.Headless {
 		t.Fatalf("headless TUN did not start: %+v", status)
+	}
+	{
+		settingsPath := filepath.Join(dir, "settings.json")
+		original, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		external := append(append([]byte(nil), original...), ' ')
+		if err := os.WriteFile(settingsPath, external, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if output, err := call("tun-autostart", "on"); err == nil {
+			t.Fatalf("startup preference overwrote external settings: %s", output)
+		}
+		if current, err := os.ReadFile(settingsPath); err != nil || !bytes.Equal(current, external) {
+			t.Fatal("external settings edit was not preserved")
+		}
+		if err := os.WriteFile(settingsPath, original, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Log("installed headless Agent preserved an outside settings edit")
+	var startup agent.TunAutoStartResult
+	if output, err := call("tun-autostart", "on"); err != nil || json.Unmarshal(output, &startup) != nil || !startup.Enabled || startup.AppliesTo != "gui" {
+		t.Fatalf("could not enable GUI TUN startup preference: %s %v", output, err)
+	}
+	if output, err := call("status"); err != nil || json.Unmarshal(output, &status) != nil || !status.TUN {
+		t.Fatalf("startup preference changed running TUN: %s %v", output, err)
 	}
 	var options agent.KernelOptionsResult
 	if output, err := call("kernel-options"); err != nil || json.Unmarshal(output, &options) != nil || options.Effective == nil {
@@ -1114,6 +1143,181 @@ func vmHeadlessParentExit(t *testing.T, agentExe, dir string) {
 	t.Fatal("headless child did not clean up after its launcher exited")
 }
 
+func vmGUIAutoStartTUN(t *testing.T, guiExe, agentExe, dir string) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := agent.Client{Dir: dir, Timeout: 3 * time.Second}
+	// The GUI preference must not override an explicit headless --tun=false.
+	func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		server := vmCommand(ctx, agentExe, "--config-dir", dir, "serve", "--tun=false")
+		if err := server.Start(); err != nil {
+			t.Fatal(err)
+		}
+		finished := make(chan error, 1)
+		go func() { finished <- server.Wait() }()
+		reaped := false
+		defer func() {
+			if !reaped {
+				_ = server.Process.Kill()
+				<-finished
+			}
+		}()
+		var status agent.Status
+		deadline := time.Now().Add(45 * time.Second)
+		for time.Now().Before(deadline) {
+			if err := client.Call(context.Background(), "status", nil, &status); err == nil && status.Headless && !status.TUNPending {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if !status.Headless || status.TUN {
+			t.Fatalf("headless --tun=false ignored: %+v", status)
+		}
+		var preference agent.TunAutoStartResult
+		if err := client.Call(context.Background(), "tun-autostart", nil, &preference); err != nil || !preference.Enabled {
+			t.Fatalf("GUI preference not retained: %+v %v", preference, err)
+		}
+		var action agent.ActionResult
+		if err := client.Call(context.Background(), "shutdown", nil, &action); err != nil || !action.OK {
+			t.Fatalf("headless shutdown: %+v %v", action, err)
+		}
+		select {
+		case err := <-finished:
+			reaped = true
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("headless did not exit")
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gui := vmCommand(ctx, guiExe)
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(entry), "NETFLOW_CONFIG_DIR=") {
+			gui.Env = append(gui.Env, entry)
+		}
+	}
+	gui.Env = append(gui.Env, "NETFLOW_CONFIG_DIR="+dir, "GOMAXPROCS=1")
+	logFile, err := os.CreateTemp(t.TempDir(), "gui-autotun-*.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logFile.Close()
+	gui.Stdout, gui.Stderr = logFile, logFile
+	if err := gui.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- gui.Wait() }()
+	reaped := false
+	defer func() {
+		if !reaped {
+			_ = gui.Process.Kill()
+			<-finished
+		}
+		if t.Failed() {
+			_ = logFile.Sync()
+			data, _ := os.ReadFile(logFile.Name())
+			if len(data) > 65536 {
+				data = data[len(data)-65536:]
+			}
+			t.Logf("GUI auto-TUN log: %s", data)
+		}
+	}()
+	var status agent.Status
+	deadline := time.Now().Add(100 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := client.Call(context.Background(), "status", nil, &status); err == nil && !status.Headless && !status.TUNPending && status.TUN {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !status.TUN || status.Headless {
+		t.Fatalf("GUI did not request TUN on startup: %+v", status)
+	}
+	enabled := false
+	var preference agent.TunAutoStartResult
+	if err := client.Call(context.Background(), "tun-autostart-set", agent.TunArgs{Enabled: &enabled}, &preference); err != nil || preference.Enabled {
+		t.Fatalf("disable startup preference: %+v %v", preference, err)
+	}
+	if err := client.Call(context.Background(), "status", nil, &status); err != nil || !status.TUN {
+		t.Fatal("disabling startup preference changed active TUN")
+	}
+	var request agent.TunResult
+	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &enabled}, &request); err != nil || !request.Accepted {
+		t.Fatalf("TUN off request: %+v %v", request, err)
+	}
+	deadline = time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := client.Call(context.Background(), "status", nil, &status); err == nil && !status.TUNPending && !status.TUN {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if status.TUN || status.TUNPending {
+		t.Fatalf("GUI TUN did not stop: %+v", status)
+	}
+	settingsPath := filepath.Join(dir, "settings.json")
+	originalSettings, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalSettings := append(append([]byte(nil), originalSettings...), ' ')
+	if err := os.WriteFile(settingsPath, externalSettings, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restoredSettings := false
+	defer func() {
+		if !restoredSettings {
+			_ = os.WriteFile(settingsPath, originalSettings, 0600)
+		}
+	}()
+	enabled = true
+	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &enabled}, &request); err != nil || !request.Accepted {
+		t.Fatalf("TUN conflict test request: %+v %v", request, err)
+	}
+	deadline = time.Now().Add(100 * time.Second)
+	for time.Now().Before(deadline) {
+		status = agent.Status{}
+		if err := client.Call(context.Background(), "status", nil, &status); err == nil && !status.TUNPending && status.TUNError != "" {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if status.TUN || status.TUNPending || !strings.Contains(status.TUNError, "settings changed outside NetFlow") {
+		t.Fatalf("settings conflict did not roll back TUN: %+v", status)
+	}
+	if current, err := os.ReadFile(settingsPath); err != nil || !bytes.Equal(current, externalSettings) {
+		t.Fatal("TUN conflict overwrote external settings")
+	}
+	if err := os.WriteFile(settingsPath, originalSettings, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restoredSettings = true
+	t.Log("settings conflict rejected TUN and rolled back the privileged worker")
+	if err := gui.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	<-finished
+	reaped = true
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, dns, err := vmNetworkSnapshot()
+		if err == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatal("GUI auto-start TUN did not restore networking")
+}
+
 // This test exercises the shipped MSI and real Wintun only inside the isolated,
 // single-disk QEMU guest; it must never run against a workstation's routes.
 func TestWindowsVMEndToEnd(t *testing.T) {
@@ -1590,6 +1794,8 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	t.Log("installed headless CLI activated TUN, applied a rewrite without visible windows, and restored networking on shutdown")
 	vmHeadlessParentExit(t, agentExe, backupTarget)
 	t.Log("headless child restored networking after its CLI launcher was forcibly terminated")
+	vmGUIAutoStartTUN(t, filepath.Join(install, "NetFlow.exe"), agentExe, backupTarget)
+	t.Log("GUI opt-in requested TUN on startup; headless --tun=false stayed off and networking was restored")
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
 	if err != nil {
 		t.Fatal(err)

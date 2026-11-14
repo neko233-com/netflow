@@ -204,6 +204,7 @@ type ProfileForm struct {
 type Prefs struct {
 	SystemProxy    bool
 	TUN            bool
+	AutoStartTUN   bool
 	Language       string
 	ThemeMode      string
 	TrayEvent      string

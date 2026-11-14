@@ -45,6 +45,16 @@ func (m *Model) systemSettings(c *mygoui.Context, pal Palette) {
 				m.Dialogs.TUN = true
 			}
 		})
+		m.switchLine(c, pal, "启动时请求虚拟网卡", &m.Prefs.AutoStartTUN, "tun-autostart-row", func(on bool) {
+			if m.Hooks.SetTUNAutoStart != nil {
+				if err := m.Hooks.SetTUNAutoStart(on); err != nil {
+					m.Prefs.AutoStartTUN = !on
+					m.Notice = err.Error()
+				}
+			}
+		}, func() {
+			helpMark(c, pal, "help-tun-autostart", "仅影响之后的 GUI 启动；会检查冲突并可能请求管理员授权。无界面模式使用 serve 参数。")
+		})
 		m.switchLine(c, pal, "开机自启", &m.Prefs.AutoLaunch, "launch-row", m.setAutoLaunch, nil)
 		m.switchLine(c, pal, "静默启动", &m.Prefs.SilentStart, "silent-row", func(bool) { m.savePrefs() }, func() {
 			helpMark(c, pal, "help-silent", "程序启动时以后台模式运行，不显示程序面板")

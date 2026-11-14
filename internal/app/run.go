@@ -199,6 +199,7 @@ func (a *App) ready(quitting *bool) {
 		if a.model.Prefs.SilentStart || a.model.Prefs.Lightweight {
 			a.win.Show()
 		}
+		a.requestPreferredTUN(a.requestTUN)
 		return
 	}
 	a.tray = tray
@@ -206,6 +207,7 @@ func (a *App) ready(quitting *bool) {
 	if err := a.configureHotkeys(a.model.Prefs, false); err != nil {
 		a.model.Notice = "全局快捷键注册失败: " + err.Error()
 	}
+	a.requestPreferredTUN(a.requestTUN)
 }
 
 func (a *App) trayClick() {

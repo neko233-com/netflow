@@ -53,6 +53,18 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "tun", in, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_tun_autostart", Description: "Read whether a future GUI launch requests TUN automatically; headless serve uses its own --tun option.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, TunAutoStartResult, error) {
+			var out TunAutoStartResult
+			err := client.Call(ctx, "tun-autostart", nil, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_set_tun_autostart", Description: "Set whether future GUI launches request TUN. Does not change current TUN; future launches still perform conflict checks and may request administrator consent."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in TunArgs) (*mcp.CallToolResult, TunAutoStartResult, error) {
+			var out TunAutoStartResult
+			err := client.Call(ctx, "tun-autostart-set", in, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_update_geodata", Description: "Download existing GeoData databases through the active local proxy. Poll netflow_status for geo_pending, geo_error and geo_restart_required; updates apply after restarting NetFlow."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, GeoResult, error) {
 			var out GeoResult

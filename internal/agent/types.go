@@ -351,6 +351,11 @@ type TunResult struct {
 	TUN      bool `json:"tun"`
 }
 
+type TunAutoStartResult struct {
+	Enabled   bool   `json:"enabled"`
+	AppliesTo string `json:"applies_to"`
+}
+
 type GeoResult struct {
 	Accepted bool `json:"accepted"`
 	Pending  bool `json:"pending"`

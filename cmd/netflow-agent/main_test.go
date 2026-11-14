@@ -351,6 +351,37 @@ func TestTUNCommandUsesBridge(t *testing.T) {
 	}
 }
 
+func TestTUNAutoStartCLI(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		switch method {
+		case "tun-autostart":
+			return agent.TunAutoStartResult{AppliesTo: "gui"}, nil
+		case "tun-autostart-set":
+			var in agent.TunArgs
+			if json.Unmarshal(raw, &in) != nil || in.Enabled == nil || !*in.Enabled {
+				return nil, errors.New("invalid startup request")
+			}
+			return agent.TunAutoStartResult{Enabled: true, AppliesTo: "gui"}, nil
+		default:
+			return nil, errors.New("unexpected method")
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	for _, args := range [][]string{{"tun-autostart"}, {"tun-autostart", "on"}} {
+		var output bytes.Buffer
+		if err := run(append([]string{"--config-dir", dir}, args...), strings.NewReader(""), &output); err != nil || !json.Valid(output.Bytes()) {
+			t.Fatalf("%v: %s %v", args, output.String(), err)
+		}
+	}
+	if err := run([]string{"--config-dir", dir, "tun-autostart", "invalid"}, strings.NewReader(""), &bytes.Buffer{}); err == nil {
+		t.Fatal("invalid argument accepted")
+	}
+}
+
 func TestDiagnosticsCommandUsesBridge(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := agent.Start(dir, func(_ context.Context, method string, _ json.RawMessage) (any, error) {

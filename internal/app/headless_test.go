@@ -135,6 +135,39 @@ func TestHeadlessAgentRewriteAndGracefulShutdown(t *testing.T) {
 	if err := client.Call(context.Background(), "show", nil, nil); err == nil {
 		t.Fatal("headless instance claimed to have a window")
 	}
+	startupEnabled := true
+	var startup agent.TunAutoStartResult
+	if err := client.Call(context.Background(), "tun-autostart-set", agent.TunArgs{Enabled: &startupEnabled}, &startup); err != nil || !startup.Enabled || startup.AppliesTo != "gui" {
+		t.Fatalf("set GUI startup preference: %+v %v", startup, err)
+	}
+	if err := client.Call(context.Background(), "tun-autostart", nil, &startup); err != nil || !startup.Enabled {
+		t.Fatalf("read GUI startup preference: %+v %v", startup, err)
+	}
+	if err := client.Call(context.Background(), "status", nil, &status); err != nil || status.TUN {
+		t.Fatal("GUI startup preference changed current headless TUN")
+	}
+	startupEnabled = false
+	settingsPath := filepath.Join(dir, "settings.json")
+	originalSettings, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalSettings := append(append([]byte(nil), originalSettings...), ' ')
+	if err := os.WriteFile(settingsPath, externalSettings, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Call(context.Background(), "tun-autostart-set", agent.TunArgs{Enabled: &startupEnabled}, &startup); err == nil {
+		t.Fatal("external settings edit was overwritten")
+	}
+	if data, err := os.ReadFile(settingsPath); err != nil || string(data) != string(externalSettings) {
+		t.Fatal("external settings edit changed")
+	}
+	if err := os.WriteFile(settingsPath, originalSettings, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Call(context.Background(), "tun-autostart-set", agent.TunArgs{Enabled: &startupEnabled}, &startup); err != nil || startup.Enabled {
+		t.Fatalf("reset GUI startup preference: %+v %v", startup, err)
+	}
 	var options agent.KernelOptionsResult
 	if err := client.Call(context.Background(), "kernel-options", nil, &options); err != nil || options.Overrides.IPv6 != nil {
 		t.Fatalf("headless inherited options: %+v %v", options, err)

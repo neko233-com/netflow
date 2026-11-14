@@ -1157,6 +1157,7 @@ func (a *App) bindHooks() {
 		SetLightweight:      a.setLightweight,
 		ChainAvailable:      func() bool { return false },
 		SetTUN:              a.SetTUN,
+		SetTUNAutoStart:     a.setTUNAutoStart,
 		SetMode:             a.SetMode,
 		SelectProxy:         a.SelectProxy,
 		UseProfile:          a.UseProfile,

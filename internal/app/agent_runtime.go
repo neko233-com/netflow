@@ -145,6 +145,24 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		}
 	case "kernel-options":
 		value, callErr = a.agentKernelOptions()
+	case "tun-autostart":
+		var input agent.Empty
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if a.model == nil {
+				callErr = errors.New("startup preferences unavailable")
+			} else {
+				value = agent.TunAutoStartResult{Enabled: a.model.Prefs.AutoStartTUN, AppliesTo: "gui"}
+			}
+		}
+	case "tun-autostart-set":
+		var input agent.TunArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if input.Enabled == nil {
+				callErr = errors.New("enabled is required")
+			} else if callErr = a.setTUNAutoStart(*input.Enabled); callErr == nil {
+				value = agent.TunAutoStartResult{Enabled: *input.Enabled, AppliesTo: "gui"}
+			}
+		}
 	case "kernel-option":
 		var input agent.KernelOptionArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {
