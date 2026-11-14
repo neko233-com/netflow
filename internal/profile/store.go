@@ -74,6 +74,26 @@ type MetadataPatch struct {
 	AutoUpdate, UseCoreProxy, UseSystemProxy, AllowInsecure *bool
 }
 
+// Preserve the input name used by a disabled script's previous approval.
+// The referenced file may be shared with the current profile until an update
+// replaces it; SharedProfileFile treats the retained reference as shared.
+func retainScriptHistoryBeforeRename(item *CatalogItem, name string) error {
+	if item == nil || name == item.Name || item.Option.VergeScriptApproval != nil {
+		return nil
+	}
+	previous := item.Option.VergeScriptPrevious
+	if previous == nil || previous.Approval == nil || previous.Subscription != nil {
+		return nil
+	}
+	if err := validateManagedProfilePath(item.File); err != nil {
+		return errors.New("无法保留脚本回滚所需的订阅文件")
+	}
+	copy := *previous
+	copy.Subscription = &scriptmeta.SubscriptionSnapshot{File: item.File, URL: item.URL, Name: item.Name, Updated: item.Updated, Used: item.Used, Total: item.Total, Expire: item.Expire}
+	item.Option.VergeScriptPrevious = &copy
+	return nil
+}
+
 func (p MetadataPatch) hasDownloadOptions() bool {
 	return p.UserAgent != nil || p.Timeout != nil || p.Interval != nil || p.AutoUpdate != nil || p.UseCoreProxy != nil || p.UseSystemProxy != nil || p.AllowInsecure != nil
 }
@@ -103,6 +123,9 @@ func (s *Store) PatchMetadata(uid string, patch MetadataPatch) (CatalogItem, err
 			}
 			if item.Option.VergeScriptApproval != nil && name != item.Name {
 				return CatalogItem{}, errors.New("已启用的 Verge 脚本绑定订阅名称；请先关闭脚本，修改名称后重新预览并启用")
+			}
+			if err := retainScriptHistoryBeforeRename(item, name); err != nil {
+				return CatalogItem{}, err
 			}
 			item.Name = name
 		}
@@ -287,6 +310,9 @@ func (s *Store) UpdateMetadata(uid, name, description string, options *CatalogOp
 		if f.Items[i].UID == uid {
 			if f.Items[i].Option.VergeScriptApproval != nil && name != f.Items[i].Name {
 				return errors.New("已启用的 Verge 脚本绑定订阅名称；请先关闭脚本，修改名称后重新预览并启用")
+			}
+			if err := retainScriptHistoryBeforeRename(&f.Items[i], name); err != nil {
+				return err
 			}
 			if options != nil && f.Items[i].Type == "remote" {
 				if options.UpdateInterval < 1 || options.UpdateInterval > 43200 {

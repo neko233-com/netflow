@@ -484,6 +484,46 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 			t.Fatal("disable/enable output incorrect")
 		}
 		if step == 0 {
+			beforeRename, beforeRenameBytes, err := a.profiles.LoadForUpdate()
+			if err != nil {
+				t.Fatal(err)
+			}
+			renamed := "renamed with scripts disabled"
+			if _, err := a.profiles.PatchMetadata(draft.target, profile.MetadataPatch{Name: &renamed}); err != nil {
+				t.Fatal(err)
+			}
+			renameArgs, _ := json.Marshal(agent.ProfileArgs{ProfileID: draft.target})
+			for n := 0; n < 2; n++ {
+				value, err := a.dispatchAgent(context.Background(), "verge-script-rollback-preview", renameArgs)
+				if err != nil {
+					t.Fatal("rename rollback preview failed", err)
+				}
+				apply, _ := json.Marshal(agent.ApplyArgs{ProposalID: value.(agent.VergeScriptPreview).PreviewID})
+				if _, err := a.dispatchAgent(context.Background(), "verge-script-apply", apply); err != nil {
+					t.Fatal("rename rollback failed", err)
+				}
+				state, err := a.profiles.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantName := beforeRename.Items[0].Name
+				if n == 1 {
+					wantName = renamed
+				}
+				if state.Items[0].Name != wantName || (state.Items[0].Option.VergeScriptApproval != nil) != (n == 0) {
+					t.Fatal("rename rollback did not restore name and script setting")
+				}
+			}
+			renamedCatalog, _, err := a.profiles.LoadForUpdate()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := a.profiles.RestoreSnapshotIfUnchanged(renamedCatalog, beforeRenameBytes); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.core.Reload(); err != nil {
+				t.Fatal(err)
+			}
 			beforeChange, beforeBytes, err := a.profiles.LoadForUpdate()
 			if err != nil {
 				t.Fatal(err)

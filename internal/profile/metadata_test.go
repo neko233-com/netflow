@@ -1,12 +1,46 @@
 package profile
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/neko233-com/netflow/internal/scriptmeta"
 )
+
+func TestRenameRetainsDisabledScriptHistory(t *testing.T) {
+	for _, method := range []string{"patch", "update"} {
+		for _, kind := range []string{"local", "remote"} {
+			t.Run(fmt.Sprintf("%s-%s", method, kind), func(t *testing.T) {
+				store := NewStore(t.TempDir())
+				item := CatalogItem{UID: "p", Name: "Old", Type: kind, File: filepath.Join("profiles", "p.yaml"), Option: CatalogOption{VergeScriptPrevious: &scriptmeta.Previous{Approval: &scriptmeta.Approval{}}}}
+				if kind == "remote" {
+					item.URL = "https://example.invalid/sub?token=private"
+				}
+				if err := store.Save(File{Items: []CatalogItem{item}}); err != nil {
+					t.Fatal(err)
+				}
+				name := "New"
+				if method == "patch" {
+					if _, err := store.PatchMetadata("p", MetadataPatch{Name: &name}); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := store.UpdateMetadata("p", name, "", nil); err != nil {
+					t.Fatal(err)
+				}
+				catalog, err := store.Load()
+				if err != nil {
+					t.Fatal(err)
+				}
+				previous := catalog.Items[0].Option.VergeScriptPrevious
+				if catalog.Items[0].Name != name || previous == nil || previous.Subscription == nil || previous.Subscription.File != item.File || previous.Subscription.Name != item.Name || previous.Subscription.URL != item.URL {
+					t.Fatal("previous script input was not retained")
+				}
+			})
+		}
+	}
+}
 
 func TestScriptApprovalProtectsProfileNameAcrossMetadataAPIs(t *testing.T) {
 	dir := t.TempDir()

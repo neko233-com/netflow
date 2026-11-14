@@ -1959,6 +1959,39 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if err != nil || strings.Contains(string(out), "local-script.netflow-test.example") {
 			t.Fatalf("script rollback left rules active: %s %v", out, err)
 		}
+		settingsCtx, settingsCancel = context.WithTimeout(context.Background(), 40*time.Second)
+		settingsCommand = vmCommand(settingsCtx, agentExe, "--config-dir", migrationTarget, "profile-settings-set")
+		renamePatch, _ := json.Marshal(map[string]string{"profile_id": status.ActiveProfile, "name": "Renamed while disabled"})
+		settingsCommand.Stdin = bytes.NewReader(renamePatch)
+		settingsOutput, settingsErr = settingsCommand.CombinedOutput()
+		settingsCancel()
+		if settingsErr != nil {
+			t.Fatalf("disabled profile rename failed: %s %v", settingsOutput, settingsErr)
+		}
+		out, err = callMigration("verge-script-rollback-preview", status.ActiveProfile)
+		if err != nil || json.Unmarshal(out, &script) != nil || script.PreviewID == "" {
+			t.Fatalf("renamed profile rollback preview failed: %s %v", out, err)
+		}
+		out, err = callMigration("verge-script-apply", script.PreviewID)
+		if err != nil || json.Unmarshal(out, &applied) != nil || !applied.Applied {
+			t.Fatalf("renamed profile rollback failed: %s %v", out, err)
+		}
+		out, err = callMigration("profile-settings", status.ActiveProfile)
+		var restoredSettings agent.ProfileSettings
+		if err != nil || json.Unmarshal(out, &restoredSettings) != nil || restoredSettings.Name != "Test" {
+			t.Fatalf("script rollback did not restore profile name: %s %v", out, err)
+		}
+		disableCtx, disableCancel = context.WithTimeout(context.Background(), 90*time.Second)
+		disableCommand = vmCommand(disableCtx, agentExe, "--config-dir", migrationTarget, "verge-script-preview")
+		disableCommand.Stdin = strings.NewReader(`{"global":false,"profile":false}`)
+		out, err = disableCommand.CombinedOutput()
+		disableCancel()
+		if err != nil || json.Unmarshal(out, &script) != nil || script.Operation != "disable" {
+			t.Fatalf("renamed script disable preview failed: %s %v", out, err)
+		}
+		if out, err = callMigration("verge-script-apply", script.PreviewID); err != nil {
+			t.Fatalf("renamed script disable failed: %s %v", out, err)
+		}
 		// Normal updates must also accept providers supplied by Verge data
 		// extensions, while retaining the disabled script's rollback source.
 		out, err = callMigration("update-profile", status.ActiveProfile)

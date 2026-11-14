@@ -69,7 +69,7 @@ func (a *App) finishVergeSubscriptionUpdate(ctx context.Context, ready vergeScri
 		// Snapshots created by 0.2.91 did not record the unchanged URL.
 		nextURL = item.URL
 	}
-	if !profile.ValidURL(nextURL) || (update.snapshot.File == "" && nextURL != item.URL) {
+	if (item.Type == "remote" && !profile.ValidURL(nextURL)) || (item.Type != "remote" && nextURL != "") || (update.snapshot.File == "" && nextURL != item.URL) {
 		return false, scriptpreview.ErrSourcesChanged
 	}
 	nextName := update.snapshot.Name
