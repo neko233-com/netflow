@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"errors"
 	"image"
 	"image/png"
 	"os"
@@ -454,8 +455,41 @@ func TestProfileImportAndDelete(t *testing.T) {
 	}
 }
 
+func TestProfileURLChangeDialogReportsFailureAndSuccess(t *testing.T) {
+	m := NewModel(demoHome())
+	m.Router.Replace("/profile")
+	m.ProfileURLChangeUID, m.ProfileURLChange = "profile", "https://example.invalid/new?token=secret"
+	var finish func(error)
+	m.Hooks.ChangeProfileURLAsync = func(id, url string, done func(error)) {
+		if id != "profile" || url != m.ProfileURLChange {
+			t.Fatal("incorrect change request")
+		}
+		finish = done
+	}
+	tt := mygoui.NewTester(m.View, WindowWidth, WindowHeight)
+	if err := tt.Click("profile-url-save"); err != nil {
+		t.Fatal(err)
+	}
+	if !m.ProfileURLChangeBusy || !m.ProfileBusy || finish == nil {
+		t.Fatal("change did not start")
+	}
+	finish(errors.New("download failed"))
+	if m.ProfileURLChangeBusy || m.ProfileBusy || m.ProfileURLChangeErr != "download failed" || m.ProfileURLChangeUID == "" {
+		t.Fatal("failure was not retained")
+	}
+	tt = mygoui.NewTester(m.View, WindowWidth, WindowHeight)
+	if err := tt.Click("profile-url-save"); err != nil {
+		t.Fatal(err)
+	}
+	finish(nil)
+	if m.ProfileURLChangeUID != "" || m.ProfileURLChange != "" || m.ProfileBusy || m.Notice != "订阅链接已更新" {
+		t.Fatal("successful change did not clear the draft")
+	}
+}
+
 func TestProfileMenuRemoteHasExtraItems(t *testing.T) {
 	m := DemoModel()
+	m.Hooks.ChangeProfileURLAsync = func(string, string, func(error)) {}
 	m.Router.Replace("/profile")
 	tt := renderModel(m, WindowWidth, WindowHeight, false)
 	if err := tt.RightClick("示例订阅"); err != nil {
@@ -463,16 +497,25 @@ func TestProfileMenuRemoteHasExtraItems(t *testing.T) {
 	}
 	menu := tt.Menu()
 	joined := join(menu)
-	for _, item := range []string{"首 页", "分享二维码", "更新", "更新（代理）", "删除"} {
+	for _, item := range []string{"首 页", "分享二维码", "更换订阅链接", "更新", "更新（代理）", "删除"} {
 		if !containsText(joined, item) {
 			t.Fatalf("remote menu missing %s in %v", item, menu)
 		}
+	}
+	if err := tt.ChooseMenuItem("更换订阅链接"); err != nil {
+		t.Fatal(err)
+	}
+	if m.ProfileURLChangeUID == "" || m.ProfileURLChange == "" {
+		t.Fatal("change URL dialog was not opened")
+	}
+	if err := tt.Click("profile-url-cancel"); err != nil {
+		t.Fatal(err)
 	}
 	if err := tt.RightClick("本地配置"); err != nil {
 		t.Fatal(err)
 	}
 	local := join(tt.Menu())
-	if containsText(local, "分享二维码") || containsText(local, "更新（代理）") {
+	if containsText(local, "分享二维码") || containsText(local, "更换订阅链接") || containsText(local, "更新（代理）") {
 		t.Fatalf("local menu %v", tt.Menu())
 	}
 }

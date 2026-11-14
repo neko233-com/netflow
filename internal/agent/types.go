@@ -88,6 +88,11 @@ type ProfileSettingsPatch struct {
 	AllowInsecure  *bool   `json:"allow_insecure,omitempty" jsonschema:"explicitly allow untrusted TLS certificates"`
 }
 
+type ProfileURLArgs struct {
+	ProfileID string `json:"profile_id" jsonschema:"existing remote profile id"`
+	URL       string `json:"url" jsonschema:"replacement HTTP or HTTPS subscription URL, which may contain credentials"`
+}
+
 type ProfileJob struct {
 	JobID     string    `json:"job_id"`
 	Operation string    `json:"operation"`

@@ -85,7 +85,7 @@ func (a *App) pruneProfileJobs(now time.Time) {
 // beginProfileJob and its callback execute on the serialized app event loop;
 // start performs network I/O elsewhere and invokes its callback on that loop.
 func (a *App) beginProfileJob(operation, profileID string, now time.Time, start func(func(string, error))) (agent.ProfileJob, error) {
-	if operation != "import" && operation != "update" {
+	if operation != "import" && operation != "update" && operation != "change-url" {
 		return agent.ProfileJob{}, errors.New("invalid profile operation")
 	}
 	if a.tunBusy {

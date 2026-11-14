@@ -374,13 +374,15 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	}
 	var downloads atomic.Int32
 	var lastUserAgent atomic.Value
+	var lastSubscriptionPath atomic.Value
 	lastUserAgent.Store("")
+	lastSubscriptionPath.Store("")
 	var holdDownload atomic.Bool
 	downloadStarted, releaseDownload := make(chan struct{}, 1), make(chan struct{})
 	var releaseDownloadOnce sync.Once
 	redirectHeaders := make(chan [2]string, 1)
 	subscription := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/subscription" && r.URL.Path != "/" && r.URL.Path != "/redirect-target" {
+		if r.URL.Path != "/subscription" && r.URL.Path != "/" && r.URL.Path != "/redirect-target" && r.URL.Path != "/replacement" && r.URL.Path != "/invalid" {
 			http.NotFound(w, r)
 			return
 		}
@@ -388,6 +390,11 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 			redirectHeaders <- [2]string{r.Header.Get("Referer"), r.Header.Get("Authorization")}
 		}
 		lastUserAgent.Store(r.Header.Get("User-Agent"))
+		lastSubscriptionPath.Store(r.URL.Path)
+		if r.URL.Path == "/invalid" {
+			_, _ = io.WriteString(w, "invalid: [")
+			return
+		}
 		if r.URL.Path == "/subscription" && holdDownload.Load() {
 			select {
 			case downloadStarted <- struct{}{}:
@@ -520,15 +527,77 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if output, err := call("delete-profile", profileJob.ProfileID); err == nil {
 		t.Fatalf("profile was deleted during download: %s", output)
 	}
+	inFlight, err := profile.NewStore(dir).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inFlightFile string
+	for _, item := range inFlight.Items {
+		if item.UID == profileJob.ProfileID {
+			inFlightFile = filepath.Join(dir, item.File)
+		}
+	}
+	if inFlightFile == "" {
+		t.Fatal("in-flight profile file not found")
+	}
+	originalFile, err := os.ReadFile(inFlightFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalEdit := []byte("mode: direct\nrules: ['MATCH,DIRECT']\n")
+	if err := os.WriteFile(inFlightFile, externalEdit, 0600); err != nil {
+		t.Fatal(err)
+	}
 	holdDownload.Store(false)
 	releaseDownloadOnce.Do(func() { close(releaseDownload) })
+	if updateJob = waitJob(updateJob); updateJob.State != "failed" {
+		t.Fatal("concurrent source edit was not rejected")
+	}
+	if data, err := os.ReadFile(inFlightFile); err != nil || string(data) != string(externalEdit) {
+		t.Fatal("download overwrote external profile edit")
+	}
+	if err := os.WriteFile(inFlightFile, originalFile, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := call("update-profile", profileJob.ProfileID); err != nil || json.Unmarshal(output, &updateJob) != nil {
+		t.Fatal("profile update retry did not start")
+	}
 	if updateJob = waitJob(updateJob); updateJob.State != "succeeded" || downloads.Load() <= beforeUpdate {
-		t.Fatalf("headless profile update: %+v", updateJob)
+		t.Fatalf("headless profile update retry: %+v", updateJob)
 	}
 	if got := lastUserAgent.Load(); got != updatedUA {
 		t.Fatalf("installed profile update ignored changed User-Agent: %v", got)
 	}
-	t.Log("installed headless CLI edited subscription metadata, blocked changes during download and used its new options")
+	t.Log("installed headless CLI preserved external edits, blocked concurrent changes and used updated download options")
+	changeURL := func(path string) agent.ProfileJob {
+		t.Helper()
+		body, _ := json.Marshal(agent.ProfileURLArgs{ProfileID: profileJob.ProfileID, URL: subscription.URL + path + "?token=synthetic-url-secret"})
+		c, done := context.WithTimeout(context.Background(), 30*time.Second)
+		command := vmCommand(c, agentExe, "--config-dir", dir, "profile-url-set")
+		command.Stdin = strings.NewReader(string(body))
+		output, e := command.CombinedOutput()
+		done()
+		var job agent.ProfileJob
+		if e != nil || strings.Contains(string(output), "synthetic-url-secret") || json.Unmarshal(output, &job) != nil {
+			t.Fatal("profile URL request failed or leaked")
+		}
+		job = waitJob(job)
+		encoded, _ := json.Marshal(job)
+		if strings.Contains(string(encoded), "synthetic-url-secret") {
+			t.Fatal("profile URL job leaked its URL")
+		}
+		return job
+	}
+	if job := changeURL("/invalid"); job.State != "failed" {
+		t.Fatal("invalid replacement subscription was accepted")
+	}
+	if job := changeURL("/replacement"); job.State != "succeeded" {
+		t.Fatalf("valid subscription replacement failed: %+v", job)
+	}
+	if output, err := call("update-profile", profileJob.ProfileID); err != nil || json.Unmarshal(output, &updateJob) != nil || waitJob(updateJob).State != "succeeded" || lastSubscriptionPath.Load() != "/replacement" {
+		t.Fatal("installed CLI did not use the replacement subscription URL")
+	}
+	t.Log("installed headless CLI rejected invalid replacement and used the verified subscription URL")
 	if payload, err := call("delete-profile", profileJob.ProfileID); err != nil {
 		t.Fatalf("headless profile delete failed: %s %v", payload, err)
 	}
@@ -573,10 +642,30 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if err := profileStore.Save(sharedCatalog); err != nil {
 		t.Fatal(err)
 	}
+	sharedPath := filepath.Join(dir, sharedItem.File)
+	sharedHash, err := vmHash(sharedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := call("update-profile", defaultJob.ProfileID); err != nil || json.Unmarshal(output, &updateJob) != nil || waitJob(updateJob).State != "succeeded" {
+		t.Fatal("shared profile update failed")
+	}
+	sharedCatalog, err = profileStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	separated := false
+	for _, item := range sharedCatalog.Items {
+		if item.UID == defaultJob.ProfileID && item.File != sharedItem.File {
+			separated = true
+		}
+	}
+	if afterHash, err := vmHash(sharedPath); err != nil || afterHash != sharedHash || !separated {
+		t.Fatal("shared profile update changed another profile")
+	}
 	if payload, err := call("delete-profile", defaultJob.ProfileID); err != nil {
 		t.Fatalf("shared profile delete failed: %s %v", payload, err)
 	}
-	sharedPath := filepath.Join(dir, sharedItem.File)
 	if _, err := os.Stat(sharedPath); err != nil {
 		t.Fatal("deleting a shared profile removed another entry's file")
 	}

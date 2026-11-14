@@ -43,6 +43,7 @@ type Hooks struct {
 	DeleteProfile              func(uid string) error
 	UpdateProfile              func(uid string) error
 	UpdateProfileAsync         func(uid string, done func(error))
+	ChangeProfileURLAsync      func(uid, url string, done func(error))
 	UpdateProfileViaProxyAsync func(uid string, done func(error))
 	BrowseProfiles             func() ([]string, error)
 	BrowseBackup               func() (string, error)
@@ -107,59 +108,63 @@ type Model struct {
 	IPBusy      bool
 	IPLeft      int
 
-	Groups              []ProxyGroup
-	Providers           []ProxyProvider
-	ProviderBusy        bool
-	Chain               ChainState
-	ProxiesLoading      bool
-	Profiles            []ProfileItem
-	CurrentProfile      string
-	ProfileURL          string
-	ProfileBusy         bool
-	Batch               bool
-	BatchDeleteAsk      bool
-	RuleEditor          RuleEditor
-	UpdateDialog        bool
-	UpdateResult        update.Result
-	portsDraft          Prefs
-	portsDraftActive    bool
-	hotkeyDraft         Prefs
-	hotkeyDraftActive   bool
-	ShowNextUpdate      map[string]bool
-	Form                ProfileForm
-	DeleteUID           string
-	Prefs               Prefs
-	WebDAVSecretStored  bool
-	BackupSchedule      agent.BackupSchedule
-	BackupHours         string
-	WebDAVURLDraft      string
-	WebDAVUserDraft     string
-	WebDAVPasswordDraft string
-	WebDAVRemoteDraft   string
-	WebDAVRemoteNames   []string
-	BackupBusy          bool
-	RestorePath         string
-	Notice              string
-	Busy                string
-	DNSAsk              bool
-	ProfileHasDNS       bool
-	DNSDraft            string
-	DNSProfileID        string
-	RuntimeConfig       string
-	QRImage             mygoui.ImageSource
-	QRURL               string
-	QROpen              bool
-	ForceTray           bool
-	Dialogs             dialogSet
-	Hooks               Hooks
-	Conns               ConnView
-	Rules               RuleView
-	Logs                LogView
-	TestForm            TestForm
-	TunStack            string
-	ServiceInstalled    bool
-	ServiceRunning      bool
-	Unlocks             []UnlockItem
+	Groups               []ProxyGroup
+	Providers            []ProxyProvider
+	ProviderBusy         bool
+	Chain                ChainState
+	ProxiesLoading       bool
+	Profiles             []ProfileItem
+	CurrentProfile       string
+	ProfileURL           string
+	ProfileBusy          bool
+	Batch                bool
+	BatchDeleteAsk       bool
+	RuleEditor           RuleEditor
+	UpdateDialog         bool
+	UpdateResult         update.Result
+	portsDraft           Prefs
+	portsDraftActive     bool
+	hotkeyDraft          Prefs
+	hotkeyDraftActive    bool
+	ShowNextUpdate       map[string]bool
+	Form                 ProfileForm
+	ProfileURLChangeUID  string
+	ProfileURLChange     string
+	ProfileURLChangeErr  string
+	ProfileURLChangeBusy bool
+	DeleteUID            string
+	Prefs                Prefs
+	WebDAVSecretStored   bool
+	BackupSchedule       agent.BackupSchedule
+	BackupHours          string
+	WebDAVURLDraft       string
+	WebDAVUserDraft      string
+	WebDAVPasswordDraft  string
+	WebDAVRemoteDraft    string
+	WebDAVRemoteNames    []string
+	BackupBusy           bool
+	RestorePath          string
+	Notice               string
+	Busy                 string
+	DNSAsk               bool
+	ProfileHasDNS        bool
+	DNSDraft             string
+	DNSProfileID         string
+	RuntimeConfig        string
+	QRImage              mygoui.ImageSource
+	QRURL                string
+	QROpen               bool
+	ForceTray            bool
+	Dialogs              dialogSet
+	Hooks                Hooks
+	Conns                ConnView
+	Rules                RuleView
+	Logs                 LogView
+	TestForm             TestForm
+	TunStack             string
+	ServiceInstalled     bool
+	ServiceRunning       bool
+	Unlocks              []UnlockItem
 }
 
 type dialogSet struct {

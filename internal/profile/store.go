@@ -435,6 +435,29 @@ func (s *Store) profileFileShared(items []CatalogItem, index int) (bool, error) 
 	return false, nil
 }
 
+// SharedProfileFile reports whether another catalog entry references the same
+// managed path or underlying file. The caller must commit against this same
+// catalog snapshot before relying on the result.
+func (s *Store) SharedProfileFile(catalog File, uid string) (bool, error) {
+	index := -1
+	for i, item := range catalog.Items {
+		if item.UID != uid {
+			continue
+		}
+		if index >= 0 {
+			return false, errors.New("duplicate profile id")
+		}
+		index = i
+	}
+	if index < 0 {
+		return false, errors.New("profile not found")
+	}
+	if err := validateManagedProfilePath(catalog.Items[index].File); err != nil {
+		return false, err
+	}
+	return s.profileFileShared(catalog.Items, index)
+}
+
 // DiscardFirstImport rolls back a failed first activation, without touching
 // an existing catalog or any file outside the managed profiles directory.
 func (s *Store) DiscardFirstImport(uid string) error {

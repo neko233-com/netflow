@@ -186,15 +186,22 @@ func TestHeadlessAgentManagesSubscriptions(t *testing.T) {
 	config := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\nipv6: false\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
 	var hold atomic.Bool
 	var lastUserAgent atomic.Value
+	var lastPath atomic.Value
 	lastUserAgent.Store("")
+	lastPath.Store("")
 	started, release := make(chan struct{}, 1), make(chan struct{})
 	var releaseOnce sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/subscription" {
+		if r.URL.Path != "/subscription" && r.URL.Path != "/replacement" && r.URL.Path != "/invalid" {
 			http.NotFound(w, r)
 			return
 		}
+		lastPath.Store(r.URL.Path)
 		lastUserAgent.Store(r.Header.Get("User-Agent"))
+		if r.URL.Path == "/invalid" {
+			_, _ = w.Write([]byte("invalid: ["))
+			return
+		}
 		if hold.Load() {
 			select {
 			case started <- struct{}{}:
@@ -307,13 +314,73 @@ func TestHeadlessAgentManagesSubscriptions(t *testing.T) {
 	if overlapping == nil {
 		t.Fatal("GUI update was allowed to overlap the Agent update")
 	}
+	var inFlight profile.File
+	a.runOnMain(func() { inFlight, catalogErr = a.profiles.Load() })
+	if catalogErr != nil || len(inFlight.Items) == 0 {
+		t.Fatal("profile disappeared during download")
+	}
+	filePath := filepath.Join(dir, inFlight.Items[0].File)
+	original, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalEdit := []byte("mode: direct\nrules: ['MATCH,DIRECT']\n")
+	if err := os.WriteFile(filePath, externalEdit, 0600); err != nil {
+		t.Fatal(err)
+	}
 	hold.Store(false)
 	releaseOnce.Do(func() { close(release) })
+	if job = wait(job); job.State != "failed" {
+		t.Fatalf("concurrent source edit was not rejected: %+v", job)
+	}
+	if got, err := os.ReadFile(filePath); err != nil || string(got) != string(externalEdit) {
+		t.Fatal("download overwrote external profile edits")
+	}
+	if err := os.WriteFile(filePath, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Call(context.Background(), "update-profile", agent.ProfileArgs{ProfileID: first.ProfileID}, &job); err != nil {
+		t.Fatal(err)
+	}
 	if job = wait(job); job.State != "succeeded" {
-		t.Fatalf("update: %+v", job)
+		t.Fatalf("update after conflict: %+v", job)
 	}
 	if got := lastUserAgent.Load(); got != ua {
 		t.Fatalf("updated user agent not used: %v", got)
+	}
+	badURL := server.URL + "/invalid?token=synthetic-secret"
+	var replaceJob agent.ProfileJob
+	if err := client.Call(context.Background(), "profile-url-set", agent.ProfileURLArgs{ProfileID: first.ProfileID, URL: badURL}, &replaceJob); err != nil {
+		t.Fatal(err)
+	}
+	replaceJob = wait(replaceJob)
+	encoded, _ = json.Marshal(replaceJob)
+	if replaceJob.State != "failed" || strings.Contains(string(encoded), "synthetic-secret") {
+		t.Fatalf("invalid URL replacement was not safely rejected: %s", encoded)
+	}
+	var current profile.File
+	a.runOnMain(func() { current, catalogErr = a.profiles.Load() })
+	if catalogErr != nil || current.Items[0].URL != url {
+		t.Fatal("failed URL replacement changed the catalog")
+	}
+	newURL := server.URL + "/replacement?token=another-synthetic-secret"
+	if err := client.Call(context.Background(), "profile-url-set", agent.ProfileURLArgs{ProfileID: first.ProfileID, URL: newURL}, &replaceJob); err != nil {
+		t.Fatal(err)
+	}
+	replaceJob = wait(replaceJob)
+	encoded, _ = json.Marshal(replaceJob)
+	if replaceJob.State != "succeeded" || strings.Contains(string(encoded), "another-synthetic-secret") {
+		t.Fatalf("URL replacement failed or leaked: %s", encoded)
+	}
+	a.runOnMain(func() { current, catalogErr = a.profiles.Load() })
+	if catalogErr != nil || current.Items[0].URL != newURL {
+		t.Fatal("replacement URL was not persisted")
+	}
+	if err := client.Call(context.Background(), "update-profile", agent.ProfileArgs{ProfileID: first.ProfileID}, &job); err != nil {
+		t.Fatal(err)
+	}
+	if job = wait(job); job.State != "succeeded" || lastPath.Load() != "/replacement" {
+		t.Fatal("later update did not use the replacement URL")
 	}
 	if err := client.Call(context.Background(), "delete-profile", agent.ProfileArgs{ProfileID: first.ProfileID}, nil); err == nil {
 		t.Fatal("active profile was deleted")

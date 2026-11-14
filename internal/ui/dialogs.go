@@ -26,6 +26,7 @@ func (m *Model) overlay(c *mygoui.Context, pal Palette) {
 	m.updateDialog(c, pal)
 	m.profileQRDialog(c, pal)
 	m.profileForm(c, pal)
+	m.profileURLChangeDialog(c, pal)
 	m.providerDialog(c, pal)
 	m.simpleDialog(c, pal, &m.Dialogs.Theme, "主题设置", m.themeBody)
 	m.simpleDialog(c, pal, &m.Dialogs.Layout, "界面设置", m.layoutBody)
@@ -55,6 +56,55 @@ func (m *Model) overlay(c *mygoui.Context, pal Palette) {
 	m.connColumnDialog(c, pal)
 	m.ruleProviderDialog(c, pal)
 	m.testFormDialog(c, pal)
+}
+
+func (m *Model) profileURLChangeDialog(c *mygoui.Context, pal Palette) {
+	if m.ProfileURLChangeUID == "" {
+		return
+	}
+	open := true
+	mygoui.Modal(c, &open, func() {
+		mygoui.Column(c).Width(440).Padding(16).Gap(8).Background(pal.Dialog).Radius(8).Children(func() {
+			mygoui.Text(c, "更换订阅链接").FontSize(18).Bold()
+			mygoui.Text(c, "保存前会下载并校验新配置；失败时保留原链接和配置。更改可能重载内核。").FontSize(13).TextColor(pal.TextMuted)
+			mygoui.TextInput(c, &m.ProfileURLChange).FillWidth().Disabled(m.ProfileURLChangeBusy).Label("profile-new-url")
+			if m.ProfileURLChangeErr != "" {
+				mygoui.Text(c, m.ProfileURLChangeErr).FontSize(13).TextColor(pal.Error)
+			}
+			mygoui.Row(c).Gap(8).Children(func() {
+				if filledButton(c, pal, "取消", "profile-url-cancel", false) && !m.ProfileURLChangeBusy {
+					m.ProfileURLChangeUID, m.ProfileURLChange, m.ProfileURLChangeErr = "", "", ""
+				}
+				button := mygoui.ButtonBase(c.Key("profile-url-save")).Height(32).Padding(0, 12).Radius(6).Disabled(m.ProfileURLChangeBusy || m.ProfileBusy).Background(pal.Primary).TextColor(pal.OnPrimary).Label("profile-url-save")
+				button.Children(func() { mygoui.Text(c, "下载并保存").FontSize(13) })
+				if button.Clicked() && !m.ProfileURLChangeBusy && !m.ProfileBusy {
+					if !ValidSubscriptionURL(m.ProfileURLChange) {
+						m.ProfileURLChangeErr = "请输入有效的订阅链接"
+						return
+					}
+					if m.Hooks.ChangeProfileURLAsync == nil {
+						m.ProfileURLChangeErr = "更换订阅链接不可用"
+						return
+					}
+					uid, url := m.ProfileURLChangeUID, m.ProfileURLChange
+					m.ProfileURLChangeBusy, m.ProfileBusy = true, true
+					m.ProfileURLChangeErr = "正在下载并校验…"
+					m.Hooks.ChangeProfileURLAsync(uid, url, func(err error) {
+						m.ProfileURLChangeBusy, m.ProfileBusy = false, false
+						if err != nil {
+							m.ProfileURLChangeErr = err.Error()
+							return
+						}
+						m.ProfileURLChangeUID, m.ProfileURLChange, m.ProfileURLChangeErr = "", "", ""
+						m.Notice = "订阅链接已更新"
+					})
+				}
+			})
+		})
+	})
+	if !open && !m.ProfileURLChangeBusy {
+		m.ProfileURLChangeUID, m.ProfileURLChange, m.ProfileURLChangeErr = "", "", ""
+	}
 }
 
 func (m *Model) batchDeleteDialog(c *mygoui.Context, pal Palette) {

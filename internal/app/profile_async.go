@@ -93,6 +93,10 @@ func newSubscriptionClient(proxyAddr string, timeout time.Duration, acceptInvali
 }
 
 func (a *App) updateProfileWithOptionsAsync(uid string, forceProxy bool, done func(error)) {
+	if a.tunBusy {
+		done(fmt.Errorf("虚拟网卡正在切换，请稍后重试"))
+		return
+	}
 	if a.profileUpdates[uid] {
 		done(fmt.Errorf("订阅正在更新"))
 		return
@@ -113,10 +117,14 @@ func (a *App) updateProfileWithOptionsAsync(uid string, forceProxy bool, done fu
 	a.profileUpdates[uid] = true
 	go func() {
 		defer client.CloseIdleConnections()
-		result, err := fetchProfileResponse(item.URL, client, item.Option.UserAgent)
+		source, err := a.snapshotProfileSource(item.File)
+		var result subscriptionResponse
+		if err == nil {
+			result, err = fetchProfileResponse(item.URL, client, item.Option.UserAgent)
+		}
 		a.runOnMain(func() {
 			if err == nil {
-				err = a.updateProfileData(uid, item.URL, result.body, result.headers)
+				err = a.updateProfileDataWithSource(uid, item.URL, item.URL, result.body, result.headers, &source)
 			}
 			delete(a.profileUpdates, uid)
 			done(err)
@@ -129,6 +137,56 @@ func (a *App) updateProfileWithOptionsAsync(uid string, forceProxy bool, done fu
 
 func (a *App) updateProfileAsync(uid string, done func(error)) {
 	a.updateProfileWithOptionsAsync(uid, false, done)
+}
+
+// changeProfileURLAsync fetches and validates the new URL before replacing the
+// catalog and configuration, retaining the old URL and data on failure.
+func (a *App) changeProfileURLAsync(uid, raw string, done func(error)) {
+	raw = strings.TrimSpace(raw)
+	if a.tunBusy {
+		done(fmt.Errorf("虚拟网卡正在切换，请稍后重试"))
+		return
+	}
+	if len(raw) > 8192 || strings.ContainsAny(raw, "\r\n\x00") || !profile.ValidURL(raw) {
+		done(profile.ErrInvalidURL)
+		return
+	}
+	if a.profileUpdates[uid] {
+		done(fmt.Errorf("订阅正在更新"))
+		return
+	}
+	item, err := a.profileItem(uid)
+	if err != nil || item.Type != "remote" {
+		done(fmt.Errorf("远程订阅不存在"))
+		return
+	}
+	client, err := a.subscriptionClient(item.Option, false)
+	if err != nil {
+		done(err)
+		return
+	}
+	if a.profileUpdates == nil {
+		a.profileUpdates = make(map[string]bool)
+	}
+	a.profileUpdates[uid] = true
+	go func() {
+		defer client.CloseIdleConnections()
+		source, err := a.snapshotProfileSource(item.File)
+		var result subscriptionResponse
+		if err == nil {
+			result, err = fetchProfileResponse(raw, client, item.Option.UserAgent)
+		}
+		a.runOnMain(func() {
+			if err == nil {
+				err = a.updateProfileDataWithSource(uid, item.URL, raw, result.body, result.headers, &source)
+			}
+			delete(a.profileUpdates, uid)
+			done(err)
+			if a.win != nil {
+				a.win.Invalidate()
+			}
+		})
+	}()
 }
 
 func (a *App) browseProfiles() ([]string, error) {

@@ -104,6 +104,7 @@ func (a *App) ready(quitting *bool) {
 	a.model.Hooks.SetTUNAsync = a.requestTUN
 	a.model.Hooks.ImportURLAsync = a.importURLAsync
 	a.model.Hooks.UpdateProfileAsync = a.updateProfileAsync
+	a.model.Hooks.ChangeProfileURLAsync = a.changeProfileURLAsync
 	a.model.Hooks.UpdateProfileViaProxyAsync = a.updateProfileViaProxyAsync
 	a.model.Hooks.BrowseProfiles = a.browseProfiles
 	a.model.Hooks.BrowseBackup = a.browseBackup

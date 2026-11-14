@@ -351,6 +351,13 @@ func (m *Model) profileMenu(c *mygoui.Context, menu *mygoui.Menu, p *ProfileItem
 		if menu.Item("分享二维码").Chosen() {
 			m.openProfileQR(p.URL)
 		}
+		if menu.Item("更换订阅链接").Chosen() {
+			if m.ProfileBusy || m.Hooks.ChangeProfileURLAsync == nil {
+				m.Notice = "订阅操作暂不可用"
+			} else {
+				m.ProfileURLChangeUID, m.ProfileURLChange, m.ProfileURLChangeErr = p.UID, p.URL, ""
+			}
+		}
 	}
 	if menu.Item("编辑信息").Chosen() {
 		m.Form = ProfileForm{

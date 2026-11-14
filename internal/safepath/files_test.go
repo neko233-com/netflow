@@ -63,6 +63,34 @@ func TestCreatedRollbackPreservesReplacement(t *testing.T) {
 	}
 }
 
+func TestCreatedRollbackPreservesEditedOrReplacedFile(t *testing.T) {
+	dir := t.TempDir()
+	created, err := CreateExclusive(dir, "created.yaml", []byte("original"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Close()
+	path := filepath.Join(dir, "created.yaml")
+	if err := os.WriteFile(path, []byte("edited"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.RemoveIfUnchanged([]byte("original")); !errors.Is(err, ErrChanged) {
+		t.Fatalf("edited file removed: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := created.RemoveIfUnchanged([]byte("original")); !errors.Is(err, ErrChanged) {
+		t.Fatalf("replacement file removed: %v", err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "original" {
+		t.Fatal("replacement was not preserved")
+	}
+}
+
 func TestManagedTraversalRejected(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"../outside", ".", filepath.Join("profiles", "..", "..", "outside")} {

@@ -108,6 +108,13 @@ func TestKernelOptionCLI(t *testing.T) {
 func TestProfileSettingsCLIReadsPatchFromStdin(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		if method == "profile-url-set" {
+			var in agent.ProfileURLArgs
+			if json.Unmarshal(raw, &in) != nil || in.ProfileID != "profile" || in.URL != "https://example.invalid/?token=synthetic-secret" {
+				return nil, errors.New("unexpected URL request")
+			}
+			return agent.ProfileJob{JobID: "job", State: "pending"}, nil
+		}
 		if method == "profile-settings" {
 			return agent.ProfileSettings{ProfileID: "profile", Name: "test"}, nil
 		}
@@ -130,6 +137,9 @@ func TestProfileSettingsCLIReadsPatchFromStdin(t *testing.T) {
 	}
 	if err := run([]string{"--config-dir", dir, "profile-settings-set"}, strings.NewReader(`{"profile_id":"profile","unknown":1}`), &output); err == nil {
 		t.Fatal("unknown patch field accepted")
+	}
+	if err := run([]string{"--config-dir", dir, "profile-url-set"}, strings.NewReader(`{"profile_id":"profile","url":"https://example.invalid/?token=synthetic-secret"}`), &output); err != nil || strings.Contains(output.String(), "synthetic-secret") {
+		t.Fatalf("URL request failed or leaked: %v", err)
 	}
 }
 

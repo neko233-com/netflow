@@ -95,6 +95,12 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "profile-settings-set", in, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_replace_profile_url", Description: "Fetch and validate a replacement subscription URL before applying it. The URL may contain credentials; the asynchronous job does not return it. Poll netflow_profile_job_status."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in ProfileURLArgs) (*mcp.CallToolResult, ProfileJob, error) {
+			var out ProfileJob
+			err := client.Call(ctx, "profile-url-set", in, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_webdav_config", Description: "Read whether WebDAV credentials are saved and account-protected storage is available. Never returns credential values.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args Empty) (*mcp.CallToolResult, WebDAVConfigStatus, error) {
 			var out WebDAVConfigStatus

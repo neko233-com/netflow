@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/ui"
 )
 
@@ -149,6 +150,25 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		var input agent.ProfileSettingsPatch
 		if callErr = decodeStrict(args, &input); callErr == nil {
 			value, callErr = a.agentUpdateProfileSettings(input)
+		}
+	case "profile-url-set":
+		var input agent.ProfileURLArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if a.core == nil || !a.core.Status().Running || a.tunBusy {
+				callErr = errors.New("core unavailable or TUN transition in progress")
+				break
+			}
+			if input.ProfileID == "" || len(input.ProfileID) > 256 || len(input.URL) > 8192 || strings.ContainsAny(input.URL, "\r\n\x00") || !profile.ValidURL(input.URL) {
+				callErr = errors.New("invalid profile id or subscription URL")
+				break
+			}
+			if a.profileUpdates[input.ProfileID] {
+				callErr = errors.New("profile update is in progress")
+				break
+			}
+			value, callErr = a.beginProfileJob("change-url", input.ProfileID, time.Now(), func(done func(string, error)) {
+				a.changeProfileURLAsync(input.ProfileID, input.URL, func(err error) { done(input.ProfileID, err) })
+			})
 		}
 	case "import-profile":
 		var input agent.ProfileImportArgs

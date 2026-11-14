@@ -332,6 +332,46 @@ func (c *Created) Remove() error {
 	return c.root.Remove(c.name)
 }
 
+// RemoveIfUnchanged preserves both a replacement file and edits made to the
+// created file itself. The final check and removal are not atomic against an
+// adversarial writer in the same account.
+func (c *Created) RemoveIfUnchanged(expected []byte) error {
+	if c == nil || c.root == nil || c.info == nil {
+		return errors.New("created file is unavailable")
+	}
+	current, err := c.root.Lstat(c.name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !current.Mode().IsRegular() || !os.SameFile(c.info, current) {
+		return ErrChanged
+	}
+	f, err := c.root.Open(c.name)
+	if err != nil {
+		return err
+	}
+	opened, err := f.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(current, opened) {
+		_ = f.Close()
+		return ErrChanged
+	}
+	data, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if len(data) > MaxFileBytes || !bytes.Equal(data, expected) || !unchanged(c.root, c.name, current) {
+		return ErrChanged
+	}
+	return c.root.Remove(c.name)
+}
+
 func (c *Created) Close() error {
 	if c == nil || c.root == nil {
 		return nil

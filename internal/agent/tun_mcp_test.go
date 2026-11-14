@@ -12,6 +12,13 @@ import (
 func TestMCPRequestsTUN(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := Start(dir, func(_ context.Context, method string, args json.RawMessage) (any, error) {
+		if method == "profile-url-set" {
+			var in ProfileURLArgs
+			if json.Unmarshal(args, &in) != nil || in.ProfileID != "profile" || in.URL != "https://example.invalid/?token=synthetic-secret" {
+				t.Error("incorrect profile URL request")
+			}
+			return ProfileJob{JobID: "job", State: "pending"}, nil
+		}
 		if method == "profile-settings" {
 			return ProfileSettings{ProfileID: "profile", Name: "test"}, nil
 		}
@@ -83,6 +90,7 @@ func TestMCPRequestsTUN(t *testing.T) {
 		{Name: "netflow_set_kernel_option", Arguments: map[string]any{"name": "ipv6", "bool_value": true}},
 		{Name: "netflow_profile_settings", Arguments: map[string]any{"profile_id": "profile"}},
 		{Name: "netflow_update_profile_settings", Arguments: map[string]any{"profile_id": "profile", "auto_update": true}},
+		{Name: "netflow_replace_profile_url", Arguments: map[string]any{"profile_id": "profile", "url": "https://example.invalid/?token=synthetic-secret"}},
 	} {
 		result, err := cs.CallTool(ctx, call)
 		if err != nil || result.IsError {
