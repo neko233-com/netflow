@@ -1158,6 +1158,7 @@ func (a *App) bindHooks() {
 		SetAutoLaunch:       a.SetAutoLaunch,
 		SetLightweight:      a.setLightweight,
 		ChainAvailable:      func() bool { return true },
+		LoadGroupIcon:       a.loadGroupIcon,
 		ConnectChainAsync:   a.connectChainAsync,
 		DisconnectChain:     a.disconnectChain,
 		SetTUN:              a.SetTUN,

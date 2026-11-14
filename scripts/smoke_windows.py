@@ -1,6 +1,7 @@
 """Run the Windows portable ZIP against a local HTTP origin, without OS proxy changes."""
 
 import argparse
+import base64
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -67,6 +68,7 @@ def main():
         if args.Quiet:
             prefs = {"Language": "zh", "SilentStart": True}
             (data / "settings.json").write_text(json.dumps({"prefs": json.dumps(prefs)}), encoding="utf-8")
+        icon_data = base64.b64encode((ROOT / "internal" / "ui" / "assets" / "netflow.png").read_bytes()).decode("ascii")
         chain_config = ("proxies: [{name: chain-one, type: socks5, server: 127.0.0.1, port: 9}, "
                         "{name: chain-two, type: socks5, server: 127.0.0.1, port: 10}]\n")
         chain_group = "  - {name: SmokeChain, type: select, proxies: [chain-one, chain-two]}\n"
@@ -75,7 +77,7 @@ def main():
             "mode: rule\nlog-level: error\nipv6: false\ngeo-auto-update: false\n"
             "dns:\n  enable: false\ntun:\n  enable: false\n"
             + chain_config + "proxy-groups:\n  - name: SmokeGroup\n    type: select\n    proxies: [DIRECT, REJECT]\n"
-            + chain_group + "rules:\n  - MATCH,DIRECT\n",
+            + "    icon: 'data:image/png;base64," + icon_data + "'\n" + chain_group + "rules:\n  - MATCH,DIRECT\n",
             encoding="utf-8",
         )
         env = dict(os.environ, NETFLOW_CONFIG_DIR=str(data), GOMAXPROCS="1")

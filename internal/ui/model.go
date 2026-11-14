@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -96,6 +97,7 @@ type Hooks struct {
 	TestProxyAsync             func(group, name, url string, done func(int, error))
 	CheckUpdateAsync           func(done func(update.Result, error))
 	QueryIPAsync               func(done func(ipinfo.Result, error))
+	LoadGroupIcon              func(context.Context, string) ([]byte, error)
 }
 
 // Model is the main window: a sidebar and the page it shows.
@@ -108,6 +110,7 @@ type Model struct {
 
 	NetTab      int
 	ChartSmooth bool
+	traffic     trafficHistory
 	Sites       []SiteTest
 	IP          IPView
 	IPShown     bool
@@ -115,6 +118,11 @@ type Model struct {
 	IPBusy      bool
 	IPLeft      int
 
+	groupIcons           *groupIconCache
+	proxyJumpTarget      string
+	proxyHoverLetter     string
+	proxyHoverAt         time.Time
+	proxyHoverFired      bool
 	Groups               []ProxyGroup
 	Providers            []ProxyProvider
 	ProviderBusy         bool
@@ -247,6 +255,12 @@ func (m *Model) View(c *mygoui.Context) {
 	m.normalize()
 	if m.Router.Path() != "/rules" {
 		m.Rules.Loaded = false
+	}
+	if m.Router.Path() != "/proxies" {
+		m.resetProxyNavigation()
+		if m.groupIcons != nil {
+			m.groupIcons.cancelPending()
+		}
 	}
 	m.flushFilters(c.Now())
 	dark := c.Theme().Dark

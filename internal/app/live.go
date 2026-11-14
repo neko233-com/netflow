@@ -97,8 +97,9 @@ func (a *App) liveLoop(stop <-chan struct{}) {
 						a.model.Chain.Warning = a.agentChainStatus().Warning
 					}
 					active, up, down := a.core.Connections()
-					snap := a.connTrack.Observe(active, up, down, time.Now())
-					a.updateTraffic(snap)
+					sampledAt := time.Now()
+					snap := a.connTrack.Observe(active, up, down, sampledAt)
+					a.updateTraffic(snap, sampledAt)
 					if !a.started.IsZero() {
 						a.model.Home.Uptime = time.Since(a.started)
 					}
@@ -111,7 +112,9 @@ func (a *App) liveLoop(stop <-chan struct{}) {
 				if n%20 == 0 {
 					a.model.TickIP()
 				}
-				if a.win != nil {
+				// Continue collecting connection and log data while unfocused,
+				// but do not redraw the traffic view until focus returns.
+				if a.win != nil && (!a.model.Prefs.PauseOnBlur || a.win.IsFocused()) {
 					a.win.Invalidate()
 				}
 			})
@@ -119,7 +122,7 @@ func (a *App) liveLoop(stop <-chan struct{}) {
 	}
 }
 
-func (a *App) updateTraffic(snap conn.Snapshot) {
+func (a *App) updateTraffic(snap conn.Snapshot, sampledAt time.Time) {
 	if a.model == nil {
 		return
 	}
@@ -132,4 +135,5 @@ func (a *App) updateTraffic(snap conn.Snapshot) {
 	a.model.Home.UpSpeed = snap.UploadSpeed
 	a.model.Home.DownSpeed = snap.DownloadSpeed
 	a.model.Home.Connections = len(snap.Active)
+	a.model.RecordTraffic(sampledAt, snap.UploadSpeed, snap.DownloadSpeed)
 }

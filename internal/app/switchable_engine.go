@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -143,6 +145,18 @@ func (s *switchableEngine) ProxyProviders() []core.ProxyProvider {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.active.ProxyProviders()
+}
+func (s *switchableEngine) ResolveIconHost(ctx context.Context, host string) ([]netip.Addr, error) {
+	s.mu.RLock()
+	active := s.active
+	s.mu.RUnlock()
+	resolver, ok := active.(interface {
+		ResolveIconHost(context.Context, string) ([]netip.Addr, error)
+	})
+	if !ok {
+		return nil, errors.New("kernel DNS unavailable")
+	}
+	return resolver.ResolveIconHost(ctx, host)
 }
 func (s *switchableEngine) ProviderMembers(n string) ([]core.ProxyNode, error) {
 	s.mu.RLock()

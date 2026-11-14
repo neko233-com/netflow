@@ -1,6 +1,7 @@
 package coreipc
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/rpc"
@@ -165,7 +166,7 @@ func TestWorkerOverPrivateConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	source := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\nrules: ['MATCH,DIRECT']\n"
+	source := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\nhosts: {icon-test.netflow.example: 8.8.8.8}\nrules: ['MATCH,DIRECT']\n"
 	path := filepath.Join(dir, "config.yaml")
 	if err = os.WriteFile(path, []byte(source), 0600); err != nil {
 		t.Fatal(err)
@@ -179,6 +180,10 @@ func TestWorkerOverPrivateConnection(t *testing.T) {
 	})
 	if err = client.Start(dir); err != nil {
 		t.Fatal(err)
+	}
+	addresses, err := client.ResolveIconHost(context.Background(), "icon-test.netflow.example")
+	if err != nil || len(addresses) != 1 || addresses[0].String() != "8.8.8.8" {
+		t.Fatalf("worker DNS lookup: %v %v", addresses, err)
 	}
 	if status := client.Status(); !status.Running || status.TUN {
 		t.Fatalf("status %+v", status)

@@ -2396,7 +2396,7 @@ ruleRefreshed:
 	}
 	workerConfig := strings.Replace(config, "MATCH,REJECT", "MATCH,DIRECT", 1)
 	workerConfig = strings.Replace(workerConfig, "  - MATCH,DIRECT", "  - GEOIP,US,DIRECT\n  - MATCH,DIRECT", 1)
-	workerConfig += "\nproxy-providers:\n  local:\n    type: file\n    path: providers/nodes.yaml\n"
+	workerConfig += "\nhosts: {icon-dns.netflow-test.example: 8.8.8.8}\nproxy-providers:\n  local:\n    type: file\n    path: providers/nodes.yaml\n"
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -2422,6 +2422,13 @@ ruleRefreshed:
 	if err := worker.Start(workerDir); err != nil {
 		t.Fatalf("start worker: %v", err)
 	}
+	iconDNSCtx, iconDNSCancel := context.WithTimeout(context.Background(), 6*time.Second)
+	iconAddresses, iconDNSErr := worker.ResolveIconHost(iconDNSCtx, "icon-dns.netflow-test.example")
+	iconDNSCancel()
+	if iconDNSErr != nil || len(iconAddresses) != 1 || iconAddresses[0].String() != "8.8.8.8" {
+		t.Fatalf("TUN worker icon DNS: %v %v", iconAddresses, iconDNSErr)
+	}
+	t.Log("privileged TUN worker resolved a configured group-icon hostname without a fake-IP result")
 	if conn, err := net.DialTimeout("tcp4", controllerAddress, time.Second); err == nil {
 		conn.Close()
 		t.Fatal("privileged kernel exposed an external controller")

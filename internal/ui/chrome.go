@@ -7,6 +7,14 @@ import (
 )
 
 func (m *Model) page(c *mygoui.Context, pal Palette, title string, actions func(), body func()) {
+	m.pageLayout(c, pal, title, actions, body, true)
+}
+
+func (m *Model) fixedPage(c *mygoui.Context, pal Palette, title string, actions func(), body func()) {
+	m.pageLayout(c, pal, title, actions, body, false)
+}
+
+func (m *Model) pageLayout(c *mygoui.Context, pal Palette, title string, actions func(), body func(), scroll bool) {
 	mygoui.Column(c).Fill().Children(func() {
 		head := mygoui.Row(c).Height(58).Padding(0, 20).Gap(8).AlignItems(mygoui.Center).Shrink(0)
 		head.BorderWidth(0, 0, 1, 0).BorderColor(pal.Divider)
@@ -23,11 +31,14 @@ func (m *Model) page(c *mygoui.Context, pal Palette, title string, actions func(
 		if m.Home.Error != "" && m.Router.Path() == "/home" {
 			mygoui.Text(c, m.Home.Error).FontSize(13).TextColor(pal.Error).Padding(0, 20, 6, 20)
 		}
-		mygoui.Scroll(c).Grow(1).Children(func() {
-			if body != nil {
-				body()
-			}
-		})
+		if body == nil {
+			return
+		}
+		if scroll {
+			mygoui.Scroll(c).Grow(1).Children(body)
+		} else {
+			body()
+		}
 	})
 }
 

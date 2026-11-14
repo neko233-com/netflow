@@ -350,22 +350,9 @@ func modeDesc(mode string) string {
 }
 
 func (m *Model) trafficCard(c *mygoui.Context, pal Palette) mygoui.Element {
-	style := "平滑"
-	if !m.ChartSmooth {
-		style = "线性"
-	}
 	return card(c, pal, "流量统计", "速", ToneSecondary, nil, func() {
 		if m.Prefs.TrafficGraph {
-			box := mygoui.ButtonBase(c.Key("traffic-chart")).FillWidth().Height(130).Radius(8).Label("traffic-chart")
-			box.Border(1, pal.Divider).AlignItems(mygoui.Center).Justify(mygoui.Center)
-			box.Children(func() {
-				mygoui.Text(c, "上传").FontSize(12).TextColor(pal.Secondary)
-				mygoui.Text(c, "下载").FontSize(12).TextColor(pal.Primary)
-				mygoui.Text(c, style).FontSize(12).TextColor(pal.TextMuted)
-			})
-			if box.Clicked() {
-				m.ChartSmooth = !m.ChartSmooth
-			}
+			m.trafficGraph(c, pal)
 		}
 		w, _ := c.Size()
 		cols := 2

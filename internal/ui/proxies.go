@@ -12,7 +12,7 @@ func (m *Model) proxyPage(c *mygoui.Context, pal Palette) {
 	if m.Chain.On {
 		title = "链式代理模式"
 	}
-	m.page(c, pal, title, func() {
+	m.fixedPage(c, pal, title, func() {
 		if m.Chain.On {
 			mygoui.Text(c, "!").TextColor(pal.Warning).Tooltip("链式代理会显著降低网速。如果您没有明确的业务需求，或不了解此项配置，请保持关闭")
 		}
@@ -54,7 +54,13 @@ func (m *Model) proxyPage(c *mygoui.Context, pal Palette) {
 			}
 		}
 	}, func() {
+		if !m.Prefs.GroupIcon && m.groupIcons != nil {
+			m.groupIcons.cancelPending()
+		}
 		reason := m.proxyReason()
+		if reason != EmptyNone {
+			m.resetProxyNavigation()
+		}
 		if reason == EmptyDirect {
 			m.directEmpty(c, pal)
 			return
@@ -67,19 +73,23 @@ func (m *Model) proxyPage(c *mygoui.Context, pal Palette) {
 			m.proxyEmpty(c, pal, reason)
 			return
 		}
-		if m.Chain.On {
-			m.chainPanel(c, pal)
-		}
-		mygoui.Row(c).FillWidth().AlignItems(mygoui.Start).Children(func() {
-			mygoui.Column(c).Grow(1).Padding(8).Gap(8).Children(func() {
-				for i := range m.Groups {
-					if !m.Groups[i].Hidden {
-						m.groupBlock(c, pal, i)
+		mygoui.Row(c).Grow(1).FillWidth().AlignItems(mygoui.Stretch).Children(func() {
+			mygoui.Scroll(c).Grow(1).FillHeight().Children(func() {
+				mygoui.Column(c).FillWidth().Children(func() {
+					if m.Chain.On {
+						m.chainPanel(c, pal)
 					}
-				}
+					mygoui.Column(c).FillWidth().Padding(8).Gap(8).Children(func() {
+						for i := range m.Groups {
+							if !m.Groups[i].Hidden {
+								m.groupBlock(c, pal, i)
+							}
+						}
+					})
+				})
 			})
 			if m.Home.Mode == "rule" || m.Home.Mode == "global" {
-				m.letterNav(c, pal)
+				mygoui.Scroll(c).Width(36).FillHeight().Children(func() { m.letterNav(c, pal) })
 			}
 		})
 	})
@@ -236,34 +246,91 @@ func (m *Model) chainPanel(c *mygoui.Context, pal Palette) {
 	})
 }
 
+func (m *Model) resetProxyNavigation() {
+	m.proxyJumpTarget = ""
+	m.proxyHoverLetter = ""
+	m.proxyHoverAt = time.Time{}
+	m.proxyHoverFired = false
+}
+
 func (m *Model) letterNav(c *mygoui.Context, pal Palette) {
 	seen := map[string]bool{}
+	hovered := false
 	mygoui.Column(c).Width(28).Padding(8, 0).Gap(2).AlignItems(mygoui.Center).Children(func() {
 		for i := range m.Groups {
-			if m.Groups[i].Hidden {
+			g := &m.Groups[i]
+			if g.Hidden {
 				continue
 			}
-			letter := GroupLetter(m.Groups[i].Name)
+			letter := GroupLetter(g.Name)
 			if letter == "" || seen[letter] {
 				continue
 			}
 			seen[letter] = true
-			idx := i
-			if textButton(c, pal, letter, letter, "letter-"+letter) {
-				m.Groups[idx].Open = true
+			b := mygoui.ButtonBase(c.Key("letter-"+letter)).Height(28).Padding(0, 8).Radius(6).Label("letter-" + letter)
+			b.Background(mygoui.Transparent).TextColor(pal.Text).Tooltip(letter)
+			b.Children(func() { mygoui.Text(c, letter).FontSize(13) })
+			jump := b.Clicked()
+			if m.Prefs.HoverNav && b.Hovered() {
+				hovered = true
+				if m.proxyHoverLetter != letter {
+					m.proxyHoverLetter = letter
+					m.proxyHoverAt = c.Now()
+					m.proxyHoverFired = false
+				}
+				delay := time.Duration(m.Prefs.HoverDelay) * time.Millisecond
+				if delay < 0 {
+					delay = 0
+				}
+				if delay > 5*time.Second {
+					delay = 5 * time.Second
+				}
+				remaining := delay - c.Now().Sub(m.proxyHoverAt)
+				if !m.proxyHoverFired && remaining <= 0 {
+					jump = true
+					m.proxyHoverFired = true
+				} else if !m.proxyHoverFired {
+					c.After(remaining)
+				}
+			}
+			if jump {
+				g.Open = true
+				m.proxyJumpTarget = g.Name
+				c.Invalidate()
+				if b.Hovered() {
+					m.proxyHoverFired = true
+				}
 			}
 		}
 	})
+	if !hovered {
+		m.proxyHoverLetter = ""
+		m.proxyHoverAt = time.Time{}
+		m.proxyHoverFired = false
+	}
 }
 
 func (m *Model) groupBlock(c *mygoui.Context, pal Palette, i int) {
 	g := &m.Groups[i]
 	mygoui.Column(c).FillWidth().Radius(8).Background(pal.Card).Children(func() {
 		head := mygoui.ButtonBase(c.Key("group-"+g.Name)).FillWidth().Padding(4, 8).Radius(8).Label("group-" + g.Name)
+		if m.proxyJumpTarget == g.Name {
+			head.ScrollIntoView()
+			m.proxyJumpTarget = ""
+		}
 		head.Children(func() {
 			mygoui.Row(c).FillWidth().AlignItems(mygoui.Center).Gap(8).Children(func() {
 				mygoui.Column(c).Grow(1).Children(func() {
 					mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
+						if m.Prefs.GroupIcon && g.Icon != "" {
+							if m.groupIcons == nil {
+								m.groupIcons = newGroupIconCache()
+							}
+							services := c.Services()
+							if icon := m.groupIcons.get(g.Icon, m.Hooks.LoadGroupIcon, services.Invalidate); icon != nil {
+								mygoui.Image(c, icon).Size(20, 20).Label("group-icon-" + g.Name)
+							}
+						}
 						mygoui.Text(c, g.Name).FontSize(14).Bold()
 						chip(c, pal, g.Type, ToneMuted, false)
 					})

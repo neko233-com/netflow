@@ -1,9 +1,11 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sync"
@@ -255,6 +257,43 @@ func (c *Core) ProviderMembers(name string) ([]ProxyNode, error) {
 		out = append(out, ProxyNode{Name: px.Name(), Type: px.Type().String(), Provider: info.ProviderName, DialerProxy: info.DialerProxy})
 	}
 	return out, nil
+}
+
+// ResolveIconHost uses the active kernel resolver, avoiding OS fake-IP
+// responses when TUN DNS interception is enabled.
+func (c *Core) ResolveIconHost(ctx context.Context, host string) ([]netip.Addr, error) {
+	if c == nil || host == "" {
+		return nil, errors.New("invalid icon host")
+	}
+	// Capture the resolver and hosts while application reloads are excluded,
+	// then release the lock before network I/O so shutdown is not blocked.
+	c.mu.Lock()
+	if !c.running {
+		c.mu.Unlock()
+		return nil, errors.New("core is not running")
+	}
+	if node, ok := resolver.DefaultHosts.Search(host, false); ok && len(node.IPs) > 0 {
+		addresses := append([]netip.Addr(nil), node.IPs...)
+		c.mu.Unlock()
+		return addresses, nil
+	}
+	if address, err := netip.ParseAddr(host); err == nil {
+		c.mu.Unlock()
+		return []netip.Addr{address.Unmap()}, nil
+	}
+	active := resolver.DefaultResolver
+	disableIPv6 := resolver.DisableIPv6
+	if active == nil || !active.Invalid() {
+		active = resolver.SystemResolver
+	}
+	c.mu.Unlock()
+	if active == nil {
+		return nil, errors.New("kernel DNS unavailable")
+	}
+	if disableIPv6 {
+		return active.LookupIPv4(ctx, host)
+	}
+	return active.LookupIP(ctx, host)
 }
 
 func (c *Core) apply() error {

@@ -3,6 +3,7 @@
 package coreipc
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/rpc"
@@ -318,6 +319,24 @@ func (w *Worker) ProxyProviders(_ Empty, out *ProxyProviders) error {
 func (w *Worker) ProviderMembers(in Name, out *ProxyNodes) (err error) {
 	out.Items, err = w.kernel.ProviderMembers(in.Value)
 	return err
+}
+func (w *Worker) ResolveIconHost(in Name, out *TextListResult) error {
+	if len(in.Value) == 0 || len(in.Value) > 253 {
+		return errors.New("invalid icon host")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	addresses, err := w.kernel.ResolveIconHost(ctx, in.Value)
+	if err != nil {
+		return err
+	}
+	if len(addresses) > 64 {
+		return errors.New("too many icon host addresses")
+	}
+	for _, address := range addresses {
+		out.Values = append(out.Values, address.String())
+	}
+	return nil
 }
 func (w *Worker) UpdateProxyProvider(in Name, out *Empty) error {
 	return w.kernel.UpdateProxyProvider(in.Value)

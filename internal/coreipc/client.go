@@ -1,10 +1,12 @@
 package coreipc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net/netip"
 	"net/rpc"
 	"os"
 	"sync"
@@ -307,6 +309,27 @@ func (c *Client) ProviderMembers(name string) ([]core.ProxyNode, error) {
 	var out ProxyNodes
 	err := c.short("ProviderMembers", Name{name}, &out)
 	return out.Items, err
+}
+func (c *Client) ResolveIconHost(ctx context.Context, host string) ([]netip.Addr, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var out TextListResult
+	if err := c.call("ResolveIconHost", Name{host}, &out, 6*time.Second); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	addresses := make([]netip.Addr, 0, len(out.Values))
+	for _, item := range out.Values {
+		address, err := netip.ParseAddr(item)
+		if err != nil {
+			return nil, errors.New("invalid kernel DNS response")
+		}
+		addresses = append(addresses, address)
+	}
+	return addresses, nil
 }
 func (c *Client) UpdateProxyProvider(name string) error {
 	return c.updateProxyProvider(name, nil)

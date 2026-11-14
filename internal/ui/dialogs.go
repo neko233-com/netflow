@@ -520,6 +520,7 @@ func (m *Model) layoutBody(c *mygoui.Context, pal Palette) {
 	m.boolLine(c, "流量图显", &m.Prefs.TrafficGraph)
 	m.boolLine(c, "内核占用", &m.Prefs.MemoryUsage)
 	m.boolLine(c, "代理组图标", &m.Prefs.GroupIcon)
+	mygoui.Text(c, "远程图标通过内核代理按 IP 规则加载；内网地址和过大图片不会加载。").FontSize(12).TextColor(pal.TextMuted)
 	m.boolLine(c, "失去焦点时暂停渲染流量统计", &m.Prefs.PauseOnBlur)
 	m.boolLine(c, "悬浮跳转导航", &m.Prefs.HoverNav)
 	m.boolLine(c, "收起导航栏", &m.Prefs.CollapseNav)
