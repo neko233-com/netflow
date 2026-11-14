@@ -58,6 +58,9 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		}
 		return agent.AfterResponse{Result: agent.ActionResult{OK: true}, After: a.headlessCancel}, nil
 	}
+	if method == "status" {
+		return a.dispatchAgentStatus(ctx)
+	}
 	if method == "verge-script-cache-prune" {
 		var in agent.Empty
 		if err := decodeStrict(args, &in); err != nil {
@@ -454,6 +457,50 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		return nil, errors.New("desktop application is shutting down")
 	}
 	return value, callErr
+}
+
+// A status request must not hold an HTTP handler indefinitely when a kernel
+// transaction blocks the event loop. Coalesce pending reads and never return
+// a stale snapshot as live state. The queued callback checks its context
+// before accessing app state after the caller has timed out.
+func (a *App) dispatchAgentStatus(parent context.Context) (any, error) {
+	if err := parent.Err(); err != nil {
+		return nil, err
+	}
+	if !a.agentStatusInFlight.CompareAndSwap(false, true) {
+		return nil, errors.New("status unavailable: application is busy")
+	}
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	defer cancel()
+	type statusResult struct {
+		value agent.Status
+		err   error
+	}
+	result := make(chan statusResult, 1)
+	go func() {
+		defer a.agentStatusInFlight.Store(false)
+		var out statusResult
+		executed := false
+		a.runOnMain(func() {
+			executed = true
+			if out.err = ctx.Err(); out.err == nil {
+				out.value, out.err = a.agentStatus()
+			}
+		})
+		if !executed {
+			out.err = errors.New("desktop application is shutting down")
+		}
+		result <- out
+	}()
+	select {
+	case out := <-result:
+		return out.value, out.err
+	case <-ctx.Done():
+		if err := parent.Err(); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("status unavailable: application is busy")
+	}
 }
 
 func (a *App) agentCommand(method string, args json.RawMessage) (value any, callErr error) {

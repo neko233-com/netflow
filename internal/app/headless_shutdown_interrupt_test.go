@@ -68,6 +68,21 @@ func TestHeadlessShutdownInterruptsUncachedProviderReload(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				t.Fatal("provider did not begin loading")
 			}
+			started := time.Now()
+			var status agent.Status
+			if err := client.Call(context.Background(), "status", nil, &status); err == nil || !strings.Contains(err.Error(), "busy") {
+				t.Fatalf("status did not report busy: %+v %v", status, err)
+			}
+			if time.Since(started) > 4*time.Second {
+				t.Fatal("status waited for the provider download")
+			}
+			started = time.Now()
+			if err := client.Call(context.Background(), "status", nil, &status); err == nil || !strings.Contains(err.Error(), "busy") {
+				t.Fatalf("second status did not report busy: %+v %v", status, err)
+			}
+			if time.Since(started) > time.Second {
+				t.Fatal("pending status reads were not coalesced")
+			}
 			if viaAgent {
 				var result agent.ActionResult
 				if err := client.Call(context.Background(), "shutdown", nil, &result); err != nil || !result.OK {
@@ -166,5 +181,92 @@ func TestHeadlessContextCancelsUncachedProviderStartup(t *testing.T) {
 		if strings.HasPrefix(entry.Name(), "endpoint-") {
 			t.Fatalf("agent endpoint unexpectedly exists: %s", entry.Name())
 		}
+	}
+}
+
+func TestHeadlessStatusRecoversAfterUncachedProviderReload(t *testing.T) {
+	t.Setenv("CI", "1")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var enteredOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enteredOnce.Do(func() { close(entered) })
+		select {
+		case <-release:
+			_, _ = w.Write([]byte("proxies: [{name: fresh, type: direct}]\n"))
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	defer unblock()
+	dir := t.TempDir()
+	base := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(base), 0600); err != nil {
+		t.Fatal(err)
+	}
+	engine := core.New()
+	a := New(Options{Dirs: appdir.Fixed(dir), Proxy: sysproxy.NewMemory(), TUN: tun.NewMemory(), Core: engine})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready, finished := make(chan bool, 1), make(chan error, 1)
+	go func() { finished <- a.RunHeadless(ctx, HeadlessOptions{Ready: func(tun bool) { ready <- tun }}) }()
+	select {
+	case <-ready:
+	case err := <-finished:
+		t.Fatalf("startup: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("startup timed out")
+	}
+	config := base + "proxy-providers:\n  uncached: {type: http, url: '" + server.URL + "', path: providers/uncached.yaml, interval: 3600, health-check: {enable: false}}\n"
+	if err := os.WriteFile(path, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	client := agent.Client{Dir: dir, Timeout: 5 * time.Second}
+	modeDone := make(chan error, 1)
+	go func() { modeDone <- client.Call(context.Background(), "mode", agent.ModeArgs{Mode: "direct"}, nil) }()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("provider did not start")
+	}
+	var status agent.Status
+	if err := client.Call(context.Background(), "status", nil, &status); err == nil || !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("blocked status: %v", err)
+	}
+	unblock()
+	select {
+	case err := <-modeDone:
+		if err != nil {
+			t.Fatalf("mode change: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("mode change did not finish")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := client.Call(context.Background(), "status", nil, &status)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("status did not recover: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !status.Running || status.Mode != "direct" {
+		t.Fatalf("status is stale: %+v", status)
+	}
+	var result agent.ActionResult
+	if err := client.Call(context.Background(), "shutdown", nil, &result); err != nil || !result.OK {
+		t.Fatalf("shutdown: %+v %v", result, err)
+	}
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timed out")
 	}
 }

@@ -78,6 +78,7 @@ type App struct {
 	chain                   atomic.Pointer[activeChain]
 	chainDisconnectWarning  string
 	agentBridge             *agent.Bridge
+	agentStatusInFlight     atomic.Bool
 	agentProposals          map[string]agentProposal
 	agentChainProposals     map[string]chainProposal
 	agentScriptPreviews     map[string]vergeScriptPreviewPages

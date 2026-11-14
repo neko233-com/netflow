@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -50,6 +51,57 @@ func TestBridgeRequiresTokenAndRejectsBrowserOrigin(t *testing.T) {
 	}
 	if _, err := os.Stat(b.file); !os.IsNotExist(err) {
 		t.Fatalf("endpoint remains: %v", err)
+	}
+}
+
+func TestBridgeBoundsBusyOperationsAndReservesStatusAndShutdown(t *testing.T) {
+	entered := make(chan struct{}, maxBridgeOperations)
+	release := make(chan struct{})
+	bridge, err := Start(t.TempDir(), func(ctx context.Context, method string, _ json.RawMessage) (any, error) {
+		if method == "blocked" {
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return map[string]bool{"ok": true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	ep := endpoint{Address: bridge.listener.Addr().String(), Token: bridge.token}
+	client := Client{Timeout: 10 * time.Second}
+	done := make(chan error, maxBridgeOperations)
+	for i := 0; i < maxBridgeOperations; i++ {
+		go func() { done <- client.call(context.Background(), ep, "blocked", nil, nil) }()
+	}
+	for i := 0; i < maxBridgeOperations; i++ {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("operations did not reach the bridge")
+		}
+	}
+	if err := client.call(context.Background(), ep, "blocked", nil, nil); err == nil || !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("overflow request: %v", err)
+	}
+	for _, method := range []string{"status", "shutdown"} {
+		var result map[string]bool
+		if err := client.call(context.Background(), ep, method, nil, &result); err != nil || !result["ok"] {
+			t.Fatalf("reserved %s: %v %v", method, result, err)
+		}
+	}
+	unblock()
+	for i := 0; i < maxBridgeOperations; i++ {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

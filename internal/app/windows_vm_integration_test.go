@@ -1812,6 +1812,20 @@ func vmHeadlessUncachedShutdown(t *testing.T, agentExe string) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("headless initial provider did not start")
 	}
+	statusStarted := time.Now()
+	if err := client.Call(context.Background(), "status", nil, &status); err == nil || !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("status did not report busy during initial provider: %+v %v", status, err)
+	}
+	if time.Since(statusStarted) >= 5*time.Second {
+		t.Fatal("status waited for initial provider")
+	}
+	statusStarted = time.Now()
+	if err := client.Call(context.Background(), "status", nil, &status); err == nil || !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("second status did not report busy: %+v %v", status, err)
+	}
+	if time.Since(statusStarted) >= 2*time.Second {
+		t.Fatal("pending status was not coalesced")
+	}
 	var result agent.ActionResult
 	if err := client.Call(context.Background(), "shutdown", nil, &result); err != nil || !result.OK {
 		t.Fatalf("headless shutdown acknowledgement: %+v %v", result, err)
@@ -1846,7 +1860,7 @@ func vmHeadlessUncachedShutdown(t *testing.T, agentExe string) {
 	for time.Now().Before(deadline) {
 		routes, dns, err := vmNetworkSnapshot()
 		if err == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
-			t.Log("headless Agent shutdown canceled initial provider, rolled back mode, and restored TUN networking")
+			t.Log("headless Agent status reported busy promptly; shutdown canceled initial provider, rolled back mode, and restored TUN networking")
 			return
 		}
 		time.Sleep(time.Second)

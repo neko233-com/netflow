@@ -32,6 +32,7 @@ type response struct {
 }
 
 const maxBridgeResponseBytes = 32 << 20
+const maxBridgeOperations = 32
 
 type endpoint struct {
 	Address string `json:"address"`
@@ -115,6 +116,9 @@ func Start(dir string, handle Handler) (*Bridge, error) {
 		return nil, err
 	}
 	b := &Bridge{listener: listener, file: fileName, token: token, root: root, name: name, info: info}
+	operations := make(chan struct{}, maxBridgeOperations)
+	statuses := make(chan struct{}, 2)
+	shutdowns := make(chan struct{}, 2)
 	b.server = &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != e.Address || r.Header.Get("Origin") != "" {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -149,6 +153,23 @@ func Start(dir string, handle Handler) (*Bridge, error) {
 		}
 		if in.Method == "ping" {
 			_ = json.NewEncoder(w).Encode(response{Result: json.RawMessage(`{"ok":true}`)})
+			return
+		}
+		// Keep read and shutdown capacity independent from slow mutations, and
+		// bound queued local requests while the application event loop is busy.
+		slots := operations
+		switch in.Method {
+		case "status":
+			slots = statuses
+		case "shutdown":
+			slots = shutdowns
+		}
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(response{Error: "agent is busy; retry later"})
 			return
 		}
 		result, err := handle(r.Context(), in.Method, in.Arguments)
