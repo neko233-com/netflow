@@ -91,6 +91,7 @@ type App struct {
 	geoBusy          bool
 	geoLastError     string
 	geoRestart       bool
+	providerWarning  string
 	localCoreFactory func() coreEngine
 }
 

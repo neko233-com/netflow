@@ -208,6 +208,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_bytes(200, b"OK", "text/plain")
         if self.path == "/v1/provider.yaml":
             return self.send_bytes(200, b"proxies:\n  - {name: remote, type: ss, server: 127.0.0.1, port: 3, cipher: aes-128-gcm, password: test}\n", "text/plain")
+        if self.path == "/v1/rules.yaml":
+            return self.send_bytes(200, b"payload:\n  - '+.fresh.netflow-test.example'\n  - '+.second.netflow-test.example'\n", "text/plain")
         if self.path == "/v1/manifest":
             try:
                 body = load_manifest()

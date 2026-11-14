@@ -1,6 +1,6 @@
 # NetFlow
 
-NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 UI 和 [mihomo](https://github.com/MetaCubeX/mihomo) 的桌面代理客户端，目标是逐步实现 Clash Verge 的常用功能。界面不是网页，也不需要 WebView。内核目前使用 [基于 mihomo v1.19.33 的公开补丁版本](https://github.com/neko233-com/mihomo/tree/v1.19.33-netflow.9)，修复日志等级并发访问、控制器生命周期竞争以及 TUN 状态同步问题，并支持 Agent 离线校验。
+NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 UI 和 [mihomo](https://github.com/MetaCubeX/mihomo) 的桌面代理客户端，目标是逐步实现 Clash Verge 的常用功能。界面不是网页，也不需要 WebView。内核目前使用 [基于 mihomo v1.19.33 的公开补丁版本](https://github.com/neko233-com/mihomo/tree/v1.19.33-netflow.12)，修复日志等级、规则集合更新等并发问题，支持 Agent 离线校验及安全的集合缓存快照。
 
 **目前是开发预览版，尚未达到 Clash Verge 功能对等，也不建议替代现有稳定客户端。** 本项目从 [Clash Go](https://github.com/charlzyx/clash-go) 的 `0a0fd79` 版本开始，保留上游 MIT 许可和署名，正进行 Windows 适配。
 
@@ -11,6 +11,7 @@ NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 U
 ## 当前状态
 
 - 已接入 mihomo 内核、订阅 URL 导入、配置激活、代理组切换、节点测速、代理与规则集合更新、模式切换、规则和连接显示、日志与托盘界面。部分功能仍需更完整的真实环境回归。
+- TUN 特权内核中的 HTTP 代理和规则集合缓存会定期同步到用户配置目录；手动更新后立即同步，关闭内核时再同步一次。回写前会比较用户文件与原始快照，发现修改、删除、联接路径或不安全路径时保留用户文件并报告警告；其他可安全同步的集合仍会处理。异常终止可能丢失最近一次同步之后的缓存更新，下一次启动可能需要重新下载。文件系统中的外部并发修改仍可能与最终替换发生竞争。
 - 系统接入聚焦虚拟网卡（TUN），界面和托盘不再提供系统代理开关。Windows 升级启动时只恢复仍由旧版 NetFlow 持有的系统代理备份，不覆盖其他应用的设置。
 - Windows TUN 使用实验性独立特权内核：开启时会请求管理员授权，常见的活动 TUN 网卡会被拒绝以减少冲突；每次重新启动应用后需重新开启并授权。当前授权需要使用同一 Windows 账户。隔离 Windows 10 来宾已验证真实 Wintun、四种协议栈、DNS/Fake-IP 流量、切换 TUN 时内存与持久 Fake-IP 映射双向保持，以及正常关闭、桌面进程退出、内核连接断开和强制终止后的路由与 DNS 恢复。普通权限进程将配置文件内容复制至管理员专属临时目录，特权内核不直接打开用户配置树，并禁用外部控制器；此快照不包含链接、运行缓存、桌面应用元数据和 Verge 原始恢复存档，最多 128 MiB、4096 个文件。macOS ARM64 包包含实验性授权内核和隔离配置实现，但尚未在 Mac 上运行验证，不应依赖其 TUN 功能。整体安全性和功能对等尚未完成，不应当作生产支持。Linux Docker 测试覆盖独立网络命名空间中的 IPv4 TUN、规则、DNS/Fake-IP 流量及连接断开后的清理。
 - 支持本地文件选择或拖放导入、远程订阅后台下载、按订阅设置自动更新、批量更新与删除、重新激活订阅，并显示服务端提供的订阅流量及到期时间。可设置订阅下载的 User-Agent、超时、代理和证书验证；内核代理或系统手动 HTTP(S) 代理不可用时返回错误，不会改为直连。系统代理选项不处理 PAC、自动检测或绕过列表；同时启用时优先内核代理。删除时会保留当前订阅。Windows 开机自启通过当前用户注册表实现，静默启动依赖托盘；部分设置尚未接入。
@@ -43,7 +44,7 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 
 CLI 还提供 `version`、`diagnostics`、`groups`、`rules [偏移 [数量]]`、`select <组> <节点>`、`mode <rule|global|direct>`、`use-profile <订阅 ID>` 和 `close-connection <连接 ID>`。`version` 无需运行桌面程序；其余操作有对应的 `netflow_` MCP 工具。设置页、CLI 和 MCP 的诊断摘要仅包含版本、平台、运行状态及计数，不包含订阅地址、配置目录、错误原文、令牌或连接详情。切换节点、模式、订阅及关闭连接会直接改变运行状态；关闭不存在的连接会返回 `closed: false`。规则覆写仍需要先预览再应用。
 
-`update-geo` 和 MCP 的 `netflow_update_geodata` 可发起与设置页相同的 GeoData 更新。请求返回后通过 `status` 中的 `geo_pending`、`geo_error` 和 `geo_restart_required` 跟踪结果；下载完成后仍需退出并重新启动程序。
+`update-geo` 和 MCP 的 `netflow_update_geodata` 可发起与设置页相同的 GeoData 更新。请求返回后通过 `status` 中的 `geo_pending`、`geo_error` 和 `geo_restart_required` 跟踪结果；下载完成后仍需退出并重新启动程序。`provider_cache_warning` 报告特权内核集合缓存未能安全回写的情况。
 
 ## Clash Verge 迁移
 

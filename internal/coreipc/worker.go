@@ -244,10 +244,20 @@ func (w *Worker) Reload(in Apply, out *Empty) error {
 	w.kernel.SetTransformer(func([]byte, string) ([]byte, error) { return b, nil })
 	return w.kernel.Reload()
 }
-func (w *Worker) Stop(_ Empty, out *Empty) error {
+func (w *Worker) Stop(in ProviderCacheQuery, out *ProviderCaches) error {
 	w.applyMu.Lock()
 	defer w.applyMu.Unlock()
-	return w.kernel.Stop()
+	if err := w.kernel.Stop(); err != nil {
+		return err
+	}
+	// The TUN and listeners are already stopped. A cache failure is a warning,
+	// since reporting Stop itself as failed would leave the desktop believing
+	// that a now-stopped worker is still serving traffic.
+	if err := w.collectProviderCaches(in, out); err != nil {
+		out.Items = nil
+		out.Warning = err.Error()
+	}
+	return nil
 }
 func (w *Worker) Status(_ Empty, out *core.Status) error {
 	w.applyMu.Lock()

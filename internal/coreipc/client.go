@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/rpc"
 	"os"
 	"path/filepath"
@@ -31,16 +32,23 @@ type Client struct {
 	closeErr      error
 	workerPID     uint32
 	failureDetail func() error
+	caches        cacheState
+	cacheWarning  string
+	cachePending  bool
+	cacheStop     chan struct{}
+	cacheLoopOnce sync.Once
+	cacheInterval time.Duration
 }
 
 func NewClient(c io.ReadWriteCloser) (*Client, error) {
 	if c == nil {
 		return nil, errors.New("nil kernel transport")
 	}
-	return &Client{rpc: rpc.NewClient(c)}, nil
+	return &Client{rpc: rpc.NewClient(c), cacheStop: make(chan struct{}), cacheInterval: 30 * time.Second}, nil
 }
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
+		close(c.cacheStop)
 		c.closeErr = c.rpc.Close()
 		if c.closeHook != nil {
 			c.closeErr = errors.Join(c.closeErr, c.closeHook())
@@ -159,6 +167,10 @@ func (c *Client) Start(dir string) error {
 	c.mu.Lock()
 	c.dir = dir
 	c.mu.Unlock()
+	c.caches = newCacheState(files, capabilities.IsolatedFiles)
+	if capabilities.IsolatedFiles {
+		c.startCacheLoop()
+	}
 	return nil
 }
 func (c *Client) Reload() error {
@@ -185,12 +197,26 @@ func (c *Client) Reload() error {
 			return err
 		}
 	}
-	return c.call("Reload", Apply{Config: data, Files: files}, &Empty{}, 45*time.Second)
+	if err := c.call("Reload", Apply{Config: data, Files: files}, &Empty{}, 45*time.Second); err != nil {
+		return err
+	}
+	c.caches = newCacheState(files, capabilities.IsolatedFiles)
+	return nil
 }
 func (c *Client) Stop() error {
 	c.applyMu.Lock()
 	defer c.applyMu.Unlock()
-	return c.short("Stop", Empty{}, &Empty{})
+	var caches ProviderCaches
+	if err := c.call("Stop", c.cacheQuery(), &caches, 45*time.Second); err != nil {
+		return err
+	}
+	if c.caches.running && c.caches.isolated {
+		if err := c.applyProviderCaches(caches); err != nil {
+			log.Printf("provider cache was not persisted: %v", err)
+		}
+	}
+	c.caches.running = false
+	return nil
 }
 func (c *Client) EffectiveConfig() ([]byte, error) {
 	var out ConfigResult
@@ -263,7 +289,15 @@ func (c *Client) RuleProviders() []rules.Provider {
 	return out.Items
 }
 func (c *Client) UpdateRuleProvider(name string) error {
-	return c.call("UpdateRuleProvider", Name{name}, &Empty{}, 2*time.Minute)
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+	if err := c.call("UpdateRuleProvider", Name{name}, &Empty{}, 2*time.Minute); err != nil {
+		return err
+	}
+	if err := c.syncProviderCaches(); err != nil {
+		return fmt.Errorf("provider updated; one or more caches were not persisted: %w", err)
+	}
+	return nil
 }
 func (c *Client) ProxyProviders() []core.ProxyProvider {
 	var out ProxyProviders
@@ -271,7 +305,15 @@ func (c *Client) ProxyProviders() []core.ProxyProvider {
 	return out.Items
 }
 func (c *Client) UpdateProxyProvider(name string) error {
-	return c.call("UpdateProxyProvider", Name{name}, &Empty{}, 2*time.Minute)
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+	if err := c.call("UpdateProxyProvider", Name{name}, &Empty{}, 2*time.Minute); err != nil {
+		return err
+	}
+	if err := c.syncProviderCaches(); err != nil {
+		return fmt.Errorf("provider updated; one or more caches were not persisted: %w", err)
+	}
+	return nil
 }
 func (c *Client) TestDelay(group, node, url string, timeout time.Duration) (int, error) {
 	var out DelayResult

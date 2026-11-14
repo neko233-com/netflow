@@ -13,20 +13,21 @@ type Profile struct {
 	Active bool   `json:"active"`
 }
 type Status struct {
-	Running       bool          `json:"running"`
-	TUN           bool          `json:"tun"`
-	TUNPending    bool          `json:"tun_pending"`
-	TUNError      string        `json:"tun_error,omitempty"`
-	GeoPending    bool          `json:"geo_pending"`
-	GeoError      string        `json:"geo_error,omitempty"`
-	GeoRestart    bool          `json:"geo_restart_required"`
-	TUNStacks     []string      `json:"tun_stacks"`
-	Mode          string        `json:"mode"`
-	ActiveProfile string        `json:"active_profile,omitempty"`
-	Revision      uint64        `json:"revision"`
-	Profiles      []Profile     `json:"profiles"`
-	Connections   []conn.Item   `json:"connections"`
-	Overrides     rewrite.State `json:"overrides"`
+	Running              bool          `json:"running"`
+	TUN                  bool          `json:"tun"`
+	TUNPending           bool          `json:"tun_pending"`
+	TUNError             string        `json:"tun_error,omitempty"`
+	GeoPending           bool          `json:"geo_pending"`
+	GeoError             string        `json:"geo_error,omitempty"`
+	GeoRestart           bool          `json:"geo_restart_required"`
+	ProviderCacheWarning string        `json:"provider_cache_warning,omitempty"`
+	TUNStacks            []string      `json:"tun_stacks"`
+	Mode                 string        `json:"mode"`
+	ActiveProfile        string        `json:"active_profile,omitempty"`
+	Revision             uint64        `json:"revision"`
+	Profiles             []Profile     `json:"profiles"`
+	Connections          []conn.Item   `json:"connections"`
+	Overrides            rewrite.State `json:"overrides"`
 }
 
 // Diagnostics deliberately excludes configuration contents, paths, profile

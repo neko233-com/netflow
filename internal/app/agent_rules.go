@@ -50,6 +50,9 @@ func (a *App) agentStatus() (agent.Status, error) {
 	st := a.core.Status()
 	connections, _, _ := a.core.Connections()
 	out := agent.Status{Running: st.Running, TUN: st.TUN, TUNPending: a.tunBusy, TUNError: a.tunLastError, GeoPending: a.geoBusy, GeoError: a.geoLastError, GeoRestart: a.geoRestart, TUNStacks: tun.SupportedStacks(), Mode: st.Mode, ActiveProfile: a.core.ProfileID(), Revision: a.rewrites.Snapshot().Revision, Connections: connections, Overrides: a.rewrites.Snapshot()}
+	if source, ok := a.core.(interface{ CacheWarning() string }); ok {
+		out.ProviderCacheWarning = source.CacheWarning()
+	}
 	for _, p := range catalog.Items {
 		out.Profiles = append(out.Profiles, agent.Profile{ID: p.UID, Name: p.Name, Active: p.UID == out.ActiveProfile})
 	}

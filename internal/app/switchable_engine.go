@@ -20,11 +20,12 @@ type engineLogSubscription struct {
 // switchableEngine serializes handoff between a desktop kernel and a private
 // worker; readers cannot observe a half-switched engine.
 type switchableEngine struct {
-	mu        sync.RWMutex
-	active    coreEngine
-	transform func([]byte, string) ([]byte, error)
-	nextLog   uint64
-	logs      map[uint64]*engineLogSubscription
+	mu           sync.RWMutex
+	active       coreEngine
+	transform    func([]byte, string) ([]byte, error)
+	nextLog      uint64
+	logs         map[uint64]*engineLogSubscription
+	cacheWarning string
 }
 
 func newSwitchableEngine(active coreEngine) *switchableEngine {
@@ -57,6 +58,16 @@ func (s *switchableEngine) Reload() error {
 	return s.active.Reload()
 }
 func (s *switchableEngine) Stop() error { s.mu.RLock(); defer s.mu.RUnlock(); return s.active.Stop() }
+func (s *switchableEngine) CacheWarning() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if current, ok := s.active.(interface{ CacheWarning() string }); ok {
+		if warning := current.CacheWarning(); warning != "" {
+			return warning
+		}
+	}
+	return s.cacheWarning
+}
 func (s *switchableEngine) Status() core.Status {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -188,6 +199,11 @@ func (s *switchableEngine) replace(next coreEngine, before func() error, commit 
 	if err := old.Stop(); err != nil {
 		s.startLogs()
 		return err
+	}
+	if source, ok := old.(interface{ CacheWarning() string }); ok {
+		if warning := source.CacheWarning(); warning != "" {
+			s.cacheWarning = warning
+		}
 	}
 	rollback := func(cause error) error {
 		stopErr := next.Stop()

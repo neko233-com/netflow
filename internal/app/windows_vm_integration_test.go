@@ -842,17 +842,28 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	junctionConfig := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ntun: {enable: false}\nproxy-providers:\n  linked:\n    type: http\n    url: 'http://10.233.42.1:18765/v1/provider.yaml'\n    path: junction/provider.yaml\n    interval: 3600\nrules: ['MATCH,DIRECT']\n"
-	if err := os.WriteFile(filepath.Join(workerDir, "config.yaml"), []byte(junctionConfig), 0600); err != nil {
+	junctionTUN, err := tun.Compose([]byte(junctionConfig), true, "NetFlowVM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workerDir, "config.yaml"), junctionTUN, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := worker.Start(workerDir); err != nil {
 		t.Fatalf("start junction provider: %v", err)
 	}
-	if err := worker.UpdateProxyProvider("linked"); err != nil {
-		t.Fatalf("update junction provider: %v", err)
+	if !worker.Status().TUN {
+		t.Fatal("junction-cache test did not start TUN")
+	}
+	if err := worker.UpdateProxyProvider("linked"); err == nil {
+		t.Fatal("junction cache update claimed it was safely persisted")
 	}
 	if err := worker.Stop(); err != nil {
 		t.Fatalf("stop junction provider: %v", err)
+	}
+	waitRestored("junction cache failure")
+	if worker.CacheWarning() == "" {
+		t.Fatal("junction cache failure was not reported")
 	}
 	afterProvider, err := os.ReadFile(provider)
 	if err != nil || string(afterProvider) != string(originalProvider) {
@@ -862,6 +873,48 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workerDir, "providers"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	remoteProxy := filepath.Join(workerDir, "providers", "remote.yaml")
+	remoteRule := filepath.Join(workerDir, "providers", "remote-rules.yaml")
+	if err := os.WriteFile(remoteProxy, []byte("proxies: [{name: old, type: direct}]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(remoteRule, []byte("payload:\n  - '+.old.netflow-test.example'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	remoteConfig := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\ntun: {enable: false}\n" +
+		"proxy-providers:\n  remote: {type: http, url: 'http://10.233.42.1:18765/v1/provider.yaml', path: providers/remote.yaml, interval: 3600, health-check: {enable: false}}\n" +
+		"rule-providers:\n  remote: {type: http, url: 'http://10.233.42.1:18765/v1/rules.yaml', path: providers/remote-rules.yaml, behavior: domain, format: yaml, interval: 1}\n" +
+		"rules: ['RULE-SET,remote,DIRECT', 'MATCH,DIRECT']\n"
+	if err := os.WriteFile(filepath.Join(workerDir, "config.yaml"), []byte(remoteConfig), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.Start(workerDir); err != nil {
+		t.Fatalf("start HTTP provider worker: %v", err)
+	}
+	if err := worker.UpdateProxyProvider("remote"); err != nil {
+		t.Fatalf("persist manual proxy update: %v", err)
+	}
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, p := range worker.RuleProviders() {
+			if p.Name == "remote" && p.Count == 2 {
+				goto ruleRefreshed
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatal("automatic rule provider did not refresh")
+ruleRefreshed:
+	if err := worker.Stop(); err != nil {
+		t.Fatalf("stop HTTP provider worker: %v", err)
+	}
+	for path, marker := range map[string]string{remoteProxy: "name: remote", remoteRule: "+.fresh.netflow-test.example"} {
+		data, err := os.ReadFile(path)
+		if err != nil || !strings.Contains(string(data), marker) {
+			t.Fatalf("provider update not persisted: %q %v", data, err)
+		}
+	}
+	t.Log("manual proxy and automatic rule provider updates persisted outside the privileged stage")
 	if err := os.WriteFile(filepath.Join(workerDir, "Country.mmdb"), vmGeoFixture, 0600); err != nil {
 		t.Fatal(err)
 	}

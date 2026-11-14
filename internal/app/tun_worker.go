@@ -23,6 +23,13 @@ func (a *App) requestTUN(on bool, done func(error)) {
 			a.tunLastError = ""
 		}
 		done(err)
+		if err == nil && a.model != nil {
+			if source, ok := a.core.(interface{ CacheWarning() string }); ok {
+				if warning := source.CacheWarning(); warning != "" {
+					a.model.Notice = "虚拟网卡已切换，但集合缓存未保存: " + warning
+				}
+			}
+		}
 	}
 	if a.tunBusy {
 		finish(errors.New("虚拟网卡正在切换"))

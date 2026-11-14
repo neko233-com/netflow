@@ -225,6 +225,12 @@ github.com/neko233-com/mihomo v1.19.33-netflow.8 h1:EHNLCPUs+fcEWopTRe0B3sf/K2by
 github.com/neko233-com/mihomo v1.19.33-netflow.8/go.mod h1:bzTZ70b83bz4enuwxrjHYg1Iqze8XqTP72OHmulMhYA=
 github.com/neko233-com/mihomo v1.19.33-netflow.9 h1:w4NSVG4dTlRIVu2wokPk0fHPKVcYG0d6acgZrSpM0Rg=
 github.com/neko233-com/mihomo v1.19.33-netflow.9/go.mod h1:bzTZ70b83bz4enuwxrjHYg1Iqze8XqTP72OHmulMhYA=
+github.com/neko233-com/mihomo v1.19.33-netflow.10 h1:t9T2AIzwvupCdYwtr3a0GPklTcsrcTzRnKEJkgQfhWM=
+github.com/neko233-com/mihomo v1.19.33-netflow.10/go.mod h1:bzTZ70b83bz4enuwxrjHYg1Iqze8XqTP72OHmulMhYA=
+github.com/neko233-com/mihomo v1.19.33-netflow.11 h1:Uqq1Myf87ZKUeSOAE9Jo10ZPb5oNsSXNFUSAT60PhtM=
+github.com/neko233-com/mihomo v1.19.33-netflow.11/go.mod h1:bzTZ70b83bz4enuwxrjHYg1Iqze8XqTP72OHmulMhYA=
+github.com/neko233-com/mihomo v1.19.33-netflow.12 h1:3TanwFaLrsUfjLJiOZfd6uBRRZg2Cl0sNXTHZz4cC2w=
+github.com/neko233-com/mihomo v1.19.33-netflow.12/go.mod h1:bzTZ70b83bz4enuwxrjHYg1Iqze8XqTP72OHmulMhYA=
 github.com/oasisprotocol/deoxysii v0.0.0-20220228165953-2091330c22b7 h1:1102pQc2SEPp5+xrS26wEaeb26sZy6k9/ZXlZN+eXE4=
 github.com/oasisprotocol/deoxysii v0.0.0-20220228165953-2091330c22b7/go.mod h1:UqoUn6cHESlliMhOnKLWr+CBH+e3bazUPvFj1XZwAjs=
 github.com/openacid/errors v0.8.1/go.mod h1:GUQEJJOJE3W9skHm8E8Y4phdl2LLEN8iD7c5gcGgdx0=

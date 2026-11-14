@@ -15,6 +15,78 @@ type diagnosticRPC struct{}
 
 func (*diagnosticRPC) Fail(_ Empty, _ *Empty) error { return errors.New("remote rejection") }
 
+type slowCacheRPC struct{ release chan struct{} }
+
+func (s *slowCacheRPC) ProviderCaches(_ ProviderCacheQuery, _ *ProviderCaches) error {
+	<-s.release
+	return nil
+}
+func (*slowCacheRPC) Status(_ Empty, out *BoolResult) error { out.Value = true; return nil }
+
+type stopCacheRPC struct{ item ProviderCache }
+
+func (s *stopCacheRPC) Stop(_ ProviderCacheQuery, out *ProviderCaches) error {
+	out.Items = []ProviderCache{s.item}
+	return nil
+}
+
+func TestStopReportsCacheConflictWithoutPretendingKernelIsRunning(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "providers"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join("providers", "cache.yaml")
+	if err := os.WriteFile(filepath.Join(dir, path), []byte("user edit"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	left, right := net.Pipe()
+	server := rpc.NewServer()
+	if err := server.RegisterName("Kernel", &stopCacheRPC{item: ProviderCache{Path: path, Data: []byte("download"), Version: "1"}}); err != nil {
+		t.Fatal(err)
+	}
+	go server.ServeConn(right)
+	c, err := NewClient(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.dir = dir
+	c.caches = newCacheState([]StageFile{{Path: path, Data: []byte("old")}}, true)
+	if err := c.Stop(); err != nil {
+		t.Fatalf("stopped core reported as running: %v", err)
+	}
+	if c.CacheWarning() == "" || c.caches.running {
+		t.Fatal("cache conflict warning or stopped state missing")
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, path))
+	if string(data) != "user edit" {
+		t.Fatal("user edit was overwritten")
+	}
+}
+
+func TestSlowCacheReadDoesNotCloseTransport(t *testing.T) {
+	left, right := net.Pipe()
+	server := rpc.NewServer()
+	slow := &slowCacheRPC{release: make(chan struct{})}
+	if err := server.RegisterName("Kernel", slow); err != nil {
+		t.Fatal(err)
+	}
+	go server.ServeConn(right)
+	client, err := NewClient(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.readProviderCaches(ProviderCacheQuery{}, 25*time.Millisecond); err == nil {
+		t.Fatal("slow read did not time out")
+	}
+	var status BoolResult
+	if err := client.short("Status", Empty{}, &status); err != nil || !status.Value {
+		t.Fatalf("cache timeout closed transport: %+v %v", status, err)
+	}
+	close(slow.release)
+}
+
 func TestClientAddsWorkerDetailOnlyForTransportErrors(t *testing.T) {
 	left, right := net.Pipe()
 	server := rpc.NewServer()

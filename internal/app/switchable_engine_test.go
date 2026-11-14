@@ -26,6 +26,7 @@ type switchTestEngine struct {
 	closed                                  bool
 	starts, stops, subscribes, unsubscribes int
 	onStart                                 func()
+	warning                                 string
 	transform                               func([]byte, string) ([]byte, error)
 }
 
@@ -68,7 +69,20 @@ func (e *switchTestEngine) SubscribeLogs(func(string, string)) func() {
 	e.subscribes++
 	return func() { e.unsubscribes++ }
 }
-func (e *switchTestEngine) Close() error { e.closed = true; return nil }
+func (e *switchTestEngine) Close() error         { e.closed = true; return nil }
+func (e *switchTestEngine) CacheWarning() string { return e.warning }
+
+func TestHandoffPreservesProviderCacheWarning(t *testing.T) {
+	old := &switchTestEngine{running: true, dir: t.TempDir(), warning: "cache conflict"}
+	next := &switchTestEngine{}
+	s := newSwitchableEngine(old)
+	if err := s.replace(next, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.CacheWarning(); got != "cache conflict" {
+		t.Fatalf("cache warning lost: %q", got)
+	}
+}
 
 func TestSwitchEngineTransfersStateAndLogs(t *testing.T) {
 	old := &switchTestEngine{running: true, dir: "config", id: "profile"}

@@ -85,6 +85,15 @@ func (a *App) liveLoop(stop <-chan struct{}) {
 				a.logs.Flush(time.Now())
 				a.model.Logs.Lines = a.logs.Lines()
 				if sampleConn && a.core != nil {
+					if source, ok := a.core.(interface{ CacheWarning() string }); ok {
+						warning := source.CacheWarning()
+						if warning != a.providerWarning {
+							a.providerWarning = warning
+							if warning != "" {
+								a.model.Notice = "集合缓存未保存: " + warning
+							}
+						}
+					}
 					active, up, down := a.core.Connections()
 					snap := a.connTrack.Observe(active, up, down, time.Now())
 					a.updateTraffic(snap)
