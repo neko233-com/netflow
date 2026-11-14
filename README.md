@@ -70,6 +70,17 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 
 CLI 还提供 `version`、`diagnostics`、`groups`、`rules [偏移 [数量]]`、`select <组> <节点>`、`mode <rule|global|direct>`、`use-profile <订阅 ID>` 和 `close-connection <连接 ID>`。`version` 无需运行桌面程序；其余操作有对应的 `netflow_` MCP 工具。设置页、CLI 和 MCP 的诊断摘要仅包含版本、平台、运行状态及计数，不包含订阅地址、配置目录、错误原文、令牌或连接详情。切换节点、模式、订阅及关闭连接会直接改变运行状态；关闭不存在的连接会返回 `closed: false`。规则覆写仍需要先预览再应用。
 
+GUI 或无界面实例运行时，`profiles` 可列出订阅；`import-profile` 从标准输入读取 JSON，避免把订阅地址放入命令参数。例如：
+
+```powershell
+'{"url":"https://example.com/subscription","name":"我的订阅","auto_update":true}' | & $agent import-profile
+& $agent profile-job-status '<上一步返回的 job_id>'
+& $agent update-profile '<订阅 ID>'
+& $agent delete-profile '<非当前订阅 ID>'
+```
+
+导入和更新是后台任务，均通过 `profile-job-status` 查询；订阅 ID 在导入成功后返回。导入失败可能已部分写入，重试前应先检查订阅列表；删除也可能部分完成，当前订阅不能删除。同一订阅的并发 Agent 更新会合并，GUI 与 Agent 不会同时更新同一订阅。默认不自动更新；JSON 可指定 `auto_update`、`update_interval_minutes`、`timeout_seconds`、`user_agent` 和 `use_core_proxy`，要求内核代理时不可用会失败，不回退到直连。任务错误和列表不包含订阅 URL 字段，但自定义订阅名称可能包含用户自行填写的敏感信息。完成的任务最多保留十分钟，容量不足时可能提前清理，程序退出后任务记录丢失。对应 MCP 工具为 `netflow_profiles`、`netflow_import_profile`、`netflow_update_profile`、`netflow_profile_job_status` 和 `netflow_delete_profile`。
+
 `providers` 列出当前代理与规则集合；`update-provider <proxy|rule> <名称>` 发起后台更新，返回 `job_id`，再用 `provider-job-status <job_id>` 查询 `pending`、`succeeded` 或 `failed`。对应 MCP 工具为 `netflow_providers`、`netflow_update_provider` 和 `netflow_provider_job_status`。重复提交同一订阅中仍在进行的同一更新会返回同一个任务；任务启动前如果活动订阅已切换，会失败而不会更新另一个订阅。完成的任务最多保留十分钟，容量不足时较旧的完成任务可能提前清理；程序退出后任务记录不保留。任务错误不会暴露订阅 URL 或凭据。
 
 `update-geo` 和 MCP 的 `netflow_update_geodata` 可发起与设置页相同的 GeoData 更新。请求返回后通过 `status` 中的 `geo_pending`、`geo_error` 和 `geo_restart_required` 跟踪结果；下载完成后仍需退出并重新启动程序。`provider_cache_warning` 报告特权内核集合缓存未能安全回写的情况。

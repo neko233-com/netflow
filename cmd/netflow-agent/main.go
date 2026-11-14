@@ -24,7 +24,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags := flag.NewFlagSet("netflow-agent", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, update-geo, tun on|off, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-export PATH, backup-restore PATH")
+		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, update-geo, tun on|off, profiles, import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-export PATH, backup-restore PATH")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -107,11 +107,12 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	case "help":
 		flags.Usage()
 		return nil
-	case "diagnostics", "shutdown", "update-geo", "groups", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
+	case "diagnostics", "shutdown", "update-geo", "groups", "profiles", "import-profile", "update-profile", "delete-profile", "profile-job-status", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
 		method := flags.Arg(0)
+		stdin := input
 		var input any
 		switch method {
-		case "diagnostics", "shutdown", "update-geo", "groups", "providers":
+		case "diagnostics", "shutdown", "update-geo", "groups", "profiles", "providers":
 			if flags.NArg() != 1 {
 				return fmt.Errorf("%s takes no arguments", method)
 			}
@@ -144,6 +145,30 @@ func run(args []string, input io.Reader, output io.Writer) error {
 				return errors.New("provider-job-status requires a job ID")
 			}
 			input = agent.ProviderJobArgs{JobID: flags.Arg(1)}
+		case "profile-job-status":
+			if flags.NArg() != 2 || flags.Arg(1) == "" {
+				return errors.New("profile-job-status requires a job ID")
+			}
+			input = agent.ProfileJobArgs{JobID: flags.Arg(1)}
+		case "import-profile":
+			if flags.NArg() != 1 {
+				return errors.New("import-profile reads one JSON object from stdin")
+			}
+			body, err := io.ReadAll(io.LimitReader(stdin, (1<<20)+1))
+			if err != nil || len(body) > 1<<20 {
+				return errors.New("invalid or oversized profile input")
+			}
+			var value agent.ProfileImportArgs
+			dec := json.NewDecoder(bytes.NewReader(body))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&value); err != nil {
+				return err
+			}
+			var extra any
+			if dec.Decode(&extra) != io.EOF {
+				return errors.New("unexpected trailing JSON")
+			}
+			input = value
 		case "select":
 			if flags.NArg() != 3 {
 				return errors.New("select requires GROUP and NODE")
@@ -160,9 +185,9 @@ func run(args []string, input io.Reader, output io.Writer) error {
 				return errors.New("mode requires rule, global, or direct")
 			}
 			input = agent.ModeArgs{Mode: flags.Arg(1)}
-		case "use-profile":
+		case "use-profile", "update-profile", "delete-profile":
 			if flags.NArg() != 2 {
-				return errors.New("use-profile requires a profile ID")
+				return fmt.Errorf("%s requires a profile ID", method)
 			}
 			input = agent.ProfileArgs{ProfileID: flags.Arg(1)}
 		case "close-connection":

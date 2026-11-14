@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/ui"
 )
 
 func (a *App) startAgent() error {
@@ -126,6 +127,61 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		}
 	case "groups":
 		value, callErr = a.agentGroups()
+	case "profiles":
+		var input agent.Empty
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentProfiles()
+		}
+	case "import-profile":
+		var input agent.ProfileImportArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if a.core == nil || !a.core.Status().Running {
+				callErr = errors.New("core is not running")
+				break
+			}
+			var form ui.ProfileForm
+			form, callErr = profileImportForm(input)
+			if callErr == nil {
+				value, callErr = a.beginProfileJob("import", "", time.Now(), func(done func(string, error)) {
+					a.createProfileWithResult(form, done)
+				})
+			}
+		}
+	case "update-profile":
+		var input agent.ProfileArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if a.core == nil || !a.core.Status().Running {
+				callErr = errors.New("core is not running")
+				break
+			}
+			if input.ProfileID == "" || len(input.ProfileID) > 256 {
+				callErr = errors.New("invalid profile id")
+				break
+			}
+			if _, err := a.profileItem(input.ProfileID); err != nil {
+				callErr = errors.New("remote profile not found")
+				break
+			}
+			value, callErr = a.beginProfileJob("update", input.ProfileID, time.Now(), func(done func(string, error)) {
+				a.updateProfileAsync(input.ProfileID, func(err error) { done(input.ProfileID, err) })
+			})
+		}
+	case "profile-job-status":
+		var input agent.ProfileJobArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.getProfileJob(input.JobID, time.Now())
+		}
+	case "delete-profile":
+		var input agent.ProfileArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if input.ProfileID == "" || len(input.ProfileID) > 256 || a.tunBusy {
+				callErr = errors.New("invalid profile id or TUN transition in progress")
+			} else if err := a.DeleteProfile(input.ProfileID); err != nil {
+				callErr = errors.New("profile deletion failed or was partial; ensure it is inactive and inspect profiles before retrying")
+			} else {
+				value = agent.ActionResult{OK: true}
+			}
+		}
 	case "providers":
 		var input agent.Empty
 		if callErr = decodeStrict(args, &input); callErr == nil {

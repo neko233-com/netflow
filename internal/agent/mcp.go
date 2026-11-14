@@ -65,6 +65,36 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "groups", nil, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_profiles", Description: "List profile IDs, user-controlled names and the active profile without a subscription URL field.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, ProfileList, error) {
+			var out ProfileList
+			err := client.Call(ctx, "profiles", nil, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_import_profile", Description: "Start an asynchronous subscription import. The URL may contain credentials and is not returned in job results. Poll netflow_profile_job_status and inspect profiles before retrying a failed import."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args ProfileImportArgs) (*mcp.CallToolResult, ProfileJob, error) {
+			var out ProfileJob
+			err := client.Call(ctx, "import-profile", args, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_update_profile", Description: "Start an asynchronous update of a remote subscription. Poll netflow_profile_job_status."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args ProfileArgs) (*mcp.CallToolResult, ProfileJob, error) {
+			var out ProfileJob
+			err := client.Call(ctx, "update-profile", args, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_profile_job_status", Description: "Read a subscription import or update job. Completed jobs are retained for up to ten minutes, subject to capacity.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args ProfileJobArgs) (*mcp.CallToolResult, ProfileJob, error) {
+			var out ProfileJob
+			err := client.Call(ctx, "profile-job-status", args, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_delete_profile", Description: "Delete an inactive profile and its profile-scoped rewrites. The active profile cannot be deleted.", Annotations: &mcp.ToolAnnotations{DestructiveHint: func() *bool { b := true; return &b }()}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args ProfileArgs) (*mcp.CallToolResult, ActionResult, error) {
+			var out ActionResult
+			err := client.Call(ctx, "delete-profile", args, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_providers", Description: "List active proxy and rule providers without their URLs or local paths.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, ProviderList, error) {
 			var out ProviderList

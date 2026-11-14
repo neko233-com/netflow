@@ -90,6 +90,10 @@ func newSubscriptionClient(proxyAddr string, timeout time.Duration, acceptInvali
 }
 
 func (a *App) updateProfileWithOptionsAsync(uid string, forceProxy bool, done func(error)) {
+	if a.profileUpdates[uid] {
+		done(fmt.Errorf("订阅正在更新"))
+		return
+	}
 	item, err := a.profileItem(uid)
 	if err != nil {
 		done(err)
@@ -100,6 +104,10 @@ func (a *App) updateProfileWithOptionsAsync(uid string, forceProxy bool, done fu
 		done(err)
 		return
 	}
+	if a.profileUpdates == nil {
+		a.profileUpdates = make(map[string]bool)
+	}
+	a.profileUpdates[uid] = true
 	go func() {
 		defer client.CloseIdleConnections()
 		result, err := fetchProfileResponse(item.URL, client, item.Option.UserAgent)
@@ -107,6 +115,7 @@ func (a *App) updateProfileWithOptionsAsync(uid string, forceProxy bool, done fu
 			if err == nil {
 				err = a.updateProfileData(uid, item.URL, result.body, result.headers)
 			}
+			delete(a.profileUpdates, uid)
 			done(err)
 			if a.win != nil {
 				a.win.Invalidate()
@@ -124,22 +133,29 @@ func (a *App) browseProfiles() ([]string, error) {
 }
 
 func (a *App) createProfileAsync(form ui.ProfileForm, done func(error)) {
+	a.createProfileWithResult(form, func(_ string, err error) { done(err) })
+}
+
+// createProfileWithResult reports the new identifier even when saving its
+// metadata fails after import, so automation can avoid accidental duplicates.
+func (a *App) createProfileWithResult(form ui.ProfileForm, done func(string, error)) {
 	raw := strings.TrimSpace(form.URL)
 	if form.Timeout < 1 || form.Timeout > 300 || form.Interval < 1 || form.Interval > 43200 {
-		done(fmt.Errorf("下载超时须在 1 到 300 秒之间，更新间隔须在 1 到 43200 分钟之间"))
+		done("", fmt.Errorf("下载超时须在 1 到 300 秒之间，更新间隔须在 1 到 43200 分钟之间"))
 		return
 	}
 	options := profile.CatalogOption{UserAgent: strings.TrimSpace(form.UA), TimeoutSeconds: form.Timeout,
 		UseClashProxy: form.Clash, UseSystemProxy: form.SysProxy, AcceptInvalid: form.Insecure}
 	client, err := a.subscriptionClient(options, false)
 	if err != nil {
-		done(err)
+		done("", err)
 		return
 	}
 	go func() {
 		defer client.CloseIdleConnections()
 		result, err := fetchProfileResponse(raw, client, options.UserAgent)
 		a.runOnMain(func() {
+			uid := ""
 			if err == nil {
 				err = a.importURLData(raw, result.body, result.headers)
 				if err == nil {
@@ -150,6 +166,7 @@ func (a *App) createProfileAsync(form ui.ProfileForm, done func(error)) {
 						err = fmt.Errorf("新订阅未出现在目录中")
 					} else {
 						item := catalog.Items[len(catalog.Items)-1]
+						uid = item.UID
 						name := strings.TrimSpace(form.Name)
 						if name == "" {
 							name = item.Name
@@ -163,7 +180,7 @@ func (a *App) createProfileAsync(form ui.ProfileForm, done func(error)) {
 					}
 				}
 			}
-			done(err)
+			done(uid, err)
 			if a.win != nil {
 				a.win.Invalidate()
 			}

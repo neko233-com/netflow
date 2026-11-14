@@ -49,6 +49,29 @@ func TestOfflineBackupCLIRespectsLockAndRestoresNewDirectory(t *testing.T) {
 	}
 }
 
+func TestImportProfileCLIReadsCredentialsFromStdin(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		var input agent.ProfileImportArgs
+		if method != "import-profile" || json.Unmarshal(raw, &input) != nil || input.URL != "https://example.invalid/?token=synthetic-secret" {
+			return nil, errors.New("unexpected request")
+		}
+		return agent.ProfileJob{JobID: "job", State: "pending"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	var output bytes.Buffer
+	err = run([]string{"--config-dir", dir, "import-profile"}, strings.NewReader(`{"url":"https://example.invalid/?token=synthetic-secret"}`), &output)
+	if err != nil || strings.Contains(output.String(), "synthetic-secret") || !strings.Contains(output.String(), `"job_id":"job"`) {
+		t.Fatalf("unexpected CLI result: %s %v", output.String(), err)
+	}
+	if err := run([]string{"--config-dir", dir, "import-profile", "unexpected"}, strings.NewReader(`{}`), &output); err == nil {
+		t.Fatal("CLI accepted URL argument")
+	}
+}
+
 func TestRealVergeImportThroughCLI(t *testing.T) {
 	source := os.Getenv("NETFLOW_TEST_VERGE_SOURCE")
 	if source == "" {

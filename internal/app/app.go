@@ -84,6 +84,7 @@ type App struct {
 	probeStop           chan struct{}
 	profileAutoStop     chan struct{}
 	profileAutoRetry    map[string]time.Time
+	profileUpdates      map[string]bool
 	shortcuts           shortcutRegistrar
 	hotkeys             map[string]hotkeyBinding
 	privilegedTUN       bool
@@ -94,6 +95,7 @@ type App struct {
 	geoRestart          bool
 	providerWarning     string
 	providerJobs        map[string]providerJobRecord
+	profileJobs         map[string]profileJobRecord
 	webDAVProtected     string
 	webDAVProtectionErr error
 	localCoreFactory    func() coreEngine

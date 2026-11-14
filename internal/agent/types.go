@@ -12,6 +12,33 @@ type Profile struct {
 	Name   string `json:"name"`
 	Active bool   `json:"active"`
 }
+
+type ProfileList struct {
+	Profiles []Profile `json:"profiles"`
+}
+
+type ProfileImportArgs struct {
+	URL          string `json:"url" jsonschema:"HTTP or HTTPS subscription URL, which may contain credentials"`
+	Name         string `json:"name,omitempty" jsonschema:"optional display name"`
+	UserAgent    string `json:"user_agent,omitempty" jsonschema:"optional HTTP user agent"`
+	Timeout      int    `json:"timeout_seconds,omitempty" jsonschema:"download timeout from 1 to 300 seconds, default 60"`
+	Interval     int    `json:"update_interval_minutes,omitempty" jsonschema:"automatic update interval from 1 to 43200 minutes, default 1440"`
+	AutoUpdate   bool   `json:"auto_update,omitempty" jsonschema:"enable periodic updates"`
+	UseCoreProxy bool   `json:"use_core_proxy,omitempty" jsonschema:"download through the running core; never fall back to direct"`
+}
+
+type ProfileJob struct {
+	JobID     string    `json:"job_id"`
+	Operation string    `json:"operation"`
+	ProfileID string    `json:"profile_id,omitempty"`
+	State     string    `json:"state"`
+	Error     string    `json:"error,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type ProfileJobArgs struct {
+	JobID string `json:"job_id" jsonschema:"profile job identifier"`
+}
 type Status struct {
 	Running              bool          `json:"running"`
 	Headless             bool          `json:"headless"`

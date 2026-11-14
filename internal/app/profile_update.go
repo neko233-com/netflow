@@ -14,6 +14,9 @@ import (
 // UpdateProfile replaces one remote subscription only after it has been
 // downloaded and validated. A failed reload restores the previous files.
 func (a *App) UpdateProfile(uid string) error {
+	if a.profileUpdates[uid] {
+		return errors.New("订阅正在更新")
+	}
 	item, err := a.profileItem(uid)
 	if err != nil {
 		return err

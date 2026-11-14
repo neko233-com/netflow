@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -214,6 +216,65 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if windows := vmVisibleWindows(endpoint.PID); windows != 0 {
 		t.Fatalf("headless process has %d visible windows", windows)
 	}
+	var downloads atomic.Int32
+	subscription := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/subscription" {
+			http.NotFound(w, r)
+			return
+		}
+		downloads.Add(1)
+		_, _ = io.WriteString(w, "mixed-port: 0\nport: 0\nsocks-port: 0\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n")
+	}))
+	defer subscription.Close()
+	waitJob := func(job agent.ProfileJob) agent.ProfileJob {
+		t.Helper()
+		until := time.Now().Add(30 * time.Second)
+		for job.State == "pending" && time.Now().Before(until) {
+			payload, e := call("profile-job-status", job.JobID)
+			if e != nil || json.Unmarshal(payload, &job) != nil {
+				t.Fatalf("headless profile job query failed: %s %v", payload, e)
+			}
+			if job.State == "pending" {
+				time.Sleep(200 * time.Millisecond)
+			}
+		}
+		return job
+	}
+	importProfile := func(path string) agent.ProfileJob {
+		t.Helper()
+		body, _ := json.Marshal(agent.ProfileImportArgs{URL: subscription.URL + path + "?token=synthetic-secret", Name: "headless-test"})
+		c, done := context.WithTimeout(context.Background(), 30*time.Second)
+		command := vmCommand(c, agentExe, "--config-dir", dir, "import-profile")
+		command.Stdin = strings.NewReader(string(body))
+		payload, e := command.CombinedOutput()
+		done()
+		var job agent.ProfileJob
+		if e != nil || strings.Contains(string(payload), "synthetic-secret") || json.Unmarshal(payload, &job) != nil {
+			t.Fatalf("headless profile import request failed: %s %v", payload, e)
+		}
+		return waitJob(job)
+	}
+	profileJob := importProfile("/subscription")
+	if profileJob.State != "succeeded" || profileJob.ProfileID == "" {
+		t.Fatalf("headless profile import: %+v", profileJob)
+	}
+	payload, err := call("update-profile", profileJob.ProfileID)
+	var updateJob agent.ProfileJob
+	if err != nil || json.Unmarshal(payload, &updateJob) != nil {
+		t.Fatalf("headless profile update request failed: %s %v", payload, err)
+	}
+	if updateJob = waitJob(updateJob); updateJob.State != "succeeded" || downloads.Load() < 2 {
+		t.Fatalf("headless profile update: %+v", updateJob)
+	}
+	if payload, err := call("delete-profile", profileJob.ProfileID); err != nil {
+		t.Fatalf("headless profile delete failed: %s %v", payload, err)
+	}
+	failedJob := importProfile("/missing")
+	encodedJob, _ := json.Marshal(failedJob)
+	if failedJob.State != "failed" || strings.Contains(string(encodedJob), "synthetic-secret") || strings.Contains(string(encodedJob), subscription.URL) {
+		t.Fatal("failed profile job exposed sensitive URL or did not fail")
+	}
+	t.Log("installed headless Agent imported, updated and deleted an inactive subscription without exposing its URL")
 	input := `{"scope":"global","operation":"set","layer":{"prepend":["DOMAIN,headless.example,DIRECT"]}}`
 	c, done := context.WithTimeout(context.Background(), 30*time.Second)
 	preview := vmCommand(c, agentExe, "--config-dir", dir, "preview")
