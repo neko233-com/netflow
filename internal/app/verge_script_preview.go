@@ -52,6 +52,7 @@ type vergeScriptPreviewPages struct {
 	prepared                  scriptpreview.Prepared
 	rollback                  bool
 	rollbackTarget            *scriptmeta.Previous
+	update                    *vergeSubscriptionUpdate
 }
 
 func (a *App) previewVergeScriptAsync(in agent.VergeScriptPreviewArgs, done func(agent.VergeScriptPreview, error)) func() {
@@ -144,6 +145,17 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 	if err := a.checkVergeScriptDraft(d); err != nil {
 		return result, err
 	}
+	var update *vergeSubscriptionUpdate
+	if rollback {
+		var err error
+		update, err = a.rollbackSubscription(d)
+		if err != nil {
+			return result, err
+		}
+		if update != nil && sha256.Sum256(profile.EnsureMixedPort(update.body, 7897)) != p.Candidate.BaseSHA256 {
+			return result, scriptpreview.ErrSourcesChanged
+		}
+	}
 	now := time.Now()
 	for id, preview := range a.agentScriptPreviews {
 		if !preview.expires.After(now) {
@@ -159,6 +171,9 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 	}
 	bytes += len(p.Baseline) + len(p.Effective)
 	bytes += len(p.Candidate.Body) + len(d.base) + len(d.activeEffective)
+	if update != nil {
+		bytes += len(update.body) + len(update.snapshot.File)
+	}
 	catalogBytes, err := json.Marshal(d.catalog)
 	if err != nil || len(catalogBytes) > 8<<20 {
 		return result, errors.New("profile catalog is too large for script preview")
@@ -222,6 +237,10 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 			copy := *value.Approval
 			value.Approval = &copy
 		}
+		if value.Subscription != nil {
+			copy := *value.Subscription
+			value.Subscription = &copy
+		}
 		target = &value
 		operation = "rollback"
 	} else if p.Candidate.DataOnlyWithoutArchive {
@@ -229,7 +248,7 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 	} else if !p.Candidate.Selection.Global && !p.Candidate.Selection.Profile {
 		operation = "disable"
 	}
-	a.agentScriptPreviews[id] = vergeScriptPreviewPages{before: p.BeforeRules, after: p.AfterRules, beforeConfig: p.Baseline, afterConfig: p.Effective, bytes: bytes, expires: expires, draft: d, prepared: p, rollback: rollback, rollbackTarget: target}
+	a.agentScriptPreviews[id] = vergeScriptPreviewPages{before: p.BeforeRules, after: p.AfterRules, beforeConfig: p.Baseline, afterConfig: p.Effective, bytes: bytes, expires: expires, draft: d, prepared: p, rollback: rollback, rollbackTarget: target, update: update}
 	warnings := []string{
 		"Preview does not change script settings. Apply the unexpired preview separately.",
 		"Scripts use a fixed preview time and deterministic random values; behavior can differ from Clash Verge.",
@@ -242,6 +261,9 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 	}
 	if d.target != d.active {
 		warnings = append(warnings, "This profile is inactive.")
+	}
+	if update != nil {
+		warnings = append(warnings, "Rollback also restores the previous subscription contents and traffic metadata.")
 	}
 	if !d.status.Running {
 		warnings = append(warnings, "The core is stopped; applying only saves settings until the core is started.")

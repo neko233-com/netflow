@@ -20,6 +20,9 @@ func TestSnapshotCopiesUserFilesAndExcludesRuntimeSecrets(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "verge-script-outputs"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(dir, "profiles", ".netflow-script-subscriptions"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(filepath.Join(dir, ".netflow-geodata-pending"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -35,6 +38,7 @@ func TestSnapshotCopiesUserFilesAndExcludesRuntimeSecrets(t *testing.T) {
 		"verge-imports/v0123456789abcdef0123456789abcdef.zip": "private recovery archive",
 		"verge-imports/user.yaml":                             "arbitrary user file",
 		"verge-script-outputs/private.json":                   "private approved output",
+		"profiles/.netflow-script-subscriptions/old.yaml":     "private rollback subscription",
 		".netflow-geodata-pending/manifest.json":              "desktop transaction",
 		".netflow-geodata-tmp-abandoned":                      "unfinished update",
 	} {

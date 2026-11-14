@@ -65,6 +65,14 @@ func (a *App) prepareVergeScriptRollback(ctx context.Context, d vergeScriptDraft
 	if err != nil {
 		return empty, err
 	}
+	next := d
+	update, err := a.rollbackSubscription(d)
+	if err != nil {
+		return empty, err
+	}
+	if update != nil {
+		next.base = profile.EnsureMixedPort(update.body, 7897)
+	}
 	selection := migration.ScriptSelection{}
 	clock := d.clock
 	var snapshot migration.ArchivedScriptSnapshot
@@ -74,7 +82,7 @@ func (a *App) prepareVergeScriptRollback(ctx context.Context, d vergeScriptDraft
 		approval := *previous.Approval
 		selection = migration.ScriptSelection{Global: approval.Global, Profile: approval.Profile}
 		clock = approval.Clock
-		resolved, err := scriptapproval.ResolveSnapshot(ctx, a.dir, approval, d.base, d.item.Name, d.item.Option.VergeArchive, d.item.Option.VergeUID)
+		resolved, err := scriptapproval.ResolveSnapshot(ctx, a.dir, approval, next.base, d.item.Name, d.item.Option.VergeArchive, d.item.Option.VergeUID)
 		if err != nil {
 			return empty, scriptpreview.ErrSourcesChanged
 		}
@@ -91,9 +99,9 @@ func (a *App) prepareVergeScriptRollback(ctx context.Context, d vergeScriptDraft
 		if err != nil {
 			return empty, scriptpreview.ErrCandidate
 		}
-		body = d.base
+		body = next.base
 		if previous.VergeExtensions {
-			body, err = profile.ComposeVergeExtensions(d.base, ext)
+			body, err = profile.ComposeVergeExtensions(next.base, ext)
 			if err != nil {
 				return empty, scriptpreview.ErrCandidate
 			}
@@ -103,7 +111,7 @@ func (a *App) prepareVergeScriptRollback(ctx context.Context, d vergeScriptDraft
 		}
 		d.hashes[snapshot.ArchivePath] = snapshot.ArchiveSHA256
 	}
-	candidate := scriptpreview.Candidate{Body: append([]byte(nil), body...), BaseSHA256: sha256.Sum256(d.base), ArchiveSHA256: snapshot.ArchiveSHA256, ArchivePath: snapshot.ArchivePath, ArchiveRelative: d.item.Option.VergeArchive, VergeUID: d.item.Option.VergeUID, ProfileNameSHA256: sha256.Sum256([]byte(d.item.Name)), OutputSHA256: sha256.Sum256(body), Clock: clock, Selection: selection}
+	candidate := scriptpreview.Candidate{Body: append([]byte(nil), body...), BaseSHA256: sha256.Sum256(next.base), ArchiveSHA256: snapshot.ArchiveSHA256, ArchivePath: snapshot.ArchivePath, ArchiveRelative: d.item.Option.VergeArchive, VergeUID: d.item.Option.VergeUID, ProfileNameSHA256: sha256.Sum256([]byte(d.item.Name)), OutputSHA256: sha256.Sum256(body), Clock: clock, Selection: selection}
 	if selection.Global {
 		if snapshot.Global == nil {
 			return empty, scriptpreview.ErrSourcesChanged
@@ -116,5 +124,5 @@ func (a *App) prepareVergeScriptRollback(ctx context.Context, d vergeScriptDraft
 		}
 		candidate.Steps = append(candidate.Steps, scriptpreview.Step{Scope: "profile", ScriptSHA256: snapshot.Profile.SHA256})
 	}
-	return scriptpreview.PrepareCandidate(ctx, a.vergeScriptPreviewInput(d, baseline, managed, selection, clock, protect), candidate)
+	return scriptpreview.PrepareCandidate(ctx, a.vergeScriptPreviewInput(next, baseline, managed, selection, clock, protect), candidate)
 }

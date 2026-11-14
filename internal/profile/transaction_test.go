@@ -2,6 +2,7 @@ package profile
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/neko233-com/netflow/internal/safepath"
+	"github.com/neko233-com/netflow/internal/scriptmeta"
 )
 
 func TestPatchMetadataIsPartialValidatedAndPreservesExtensions(t *testing.T) {
@@ -152,6 +154,42 @@ func TestDeleteKeepsProfileFileReferencedByAnotherEntry(t *testing.T) {
 	body, readErr := os.ReadFile(filepath.Join(dir, filename))
 	if err != nil || len(catalog.Items) != 1 || catalog.Current != "active" || readErr != nil || string(body) != "shared" {
 		t.Fatal("deletion removed shared profile data")
+	}
+}
+
+func TestDeleteKeepsProfileFileReferencedByRollback(t *testing.T) {
+	for _, alias := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hardlink-%v", alias), func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.Mkdir(filepath.Join(dir, "profiles"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			original := filepath.Join("profiles", "old.yaml")
+			if err := os.WriteFile(filepath.Join(dir, original), []byte("retained"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			retained := original
+			if alias {
+				retained = filepath.Join("profiles", "alias.yaml")
+				if err := os.Link(filepath.Join(dir, original), filepath.Join(dir, retained)); err != nil {
+					t.Skipf("hard links unavailable: %v", err)
+				}
+			}
+			store := NewStore(dir)
+			catalog := File{Current: "active", Items: []CatalogItem{
+				{UID: "active", File: filepath.Join("profiles", "current.yaml"), Option: CatalogOption{VergeScriptPrevious: &scriptmeta.Previous{Subscription: &scriptmeta.SubscriptionSnapshot{File: retained}}}},
+				{UID: "remove", File: original},
+			}}
+			if err := store.Save(catalog); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Delete("remove"); err != nil {
+				t.Fatal(err)
+			}
+			if body, err := os.ReadFile(filepath.Join(dir, original)); err != nil || string(body) != "retained" {
+				t.Fatal("rollback reference was removed", err)
+			}
+		})
 	}
 }
 

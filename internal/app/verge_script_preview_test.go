@@ -19,6 +19,7 @@ import (
 	"github.com/neko233-com/netflow/internal/migration"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/scriptapproval"
 	"github.com/neko233-com/netflow/internal/scriptpreview"
 	"github.com/neko233-com/netflow/internal/sysproxy"
@@ -297,6 +298,85 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	staleSource.hash[0] ^= 1
 	if _, err := a.prepareVergeScriptUpdate(context.Background(), updateDraft, staleSource, downloaded); !errors.Is(err, scriptpreview.ErrSourcesChanged) {
 		t.Fatal("download based on a stale subscription snapshot was accepted", err)
+	}
+	updatePreview, err := a.finishVergeScriptPreview(updateDraft, updatedPreview, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateProposal := a.agentScriptPreviews[updatePreview.PreviewID]
+	updateProposal.update = &vergeSubscriptionUpdate{body: downloaded}
+	delete(a.agentScriptPreviews, updatePreview.PreviewID)
+	updateReady, err := a.prepareVergeScriptCommit(context.Background(), updateProposal)
+	if err != nil {
+		t.Fatal("prepare subscription transaction", err)
+	}
+	_, oldUpdateCatalog, err := a.profiles.LoadForUpdate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	coreBeforeUpdate := a.core
+	a.core = &chainFailReloadEngine{coreEngine: coreBeforeUpdate, failures: 1}
+	if _, err := a.finishVergeScriptCommit(context.Background(), updateReady); err == nil {
+		t.Fatal("failed subscription reload was accepted")
+	}
+	a.core = coreBeforeUpdate
+	_, afterFailedUpdate, err := a.profiles.LoadForUpdate()
+	if err != nil || !bytes.Equal(afterFailedUpdate, oldUpdateCatalog) {
+		t.Fatal("failed subscription reload did not restore catalog", err)
+	}
+	if current, err := a.core.EffectiveConfig(); err != nil || !bytes.Equal(active, current) {
+		t.Fatal("failed subscription reload did not restore core", err)
+	}
+	if updated, err := a.finishVergeScriptCommit(context.Background(), updateReady); err != nil || !updated {
+		t.Fatal("validated subscription transaction failed", err)
+	}
+	updatedCatalog, _, err := a.profiles.LoadForUpdate()
+	if err != nil || updatedCatalog.Items[0].File == updateDraft.item.File || updatedCatalog.Items[0].Option.VergeScriptPrevious == nil || updatedCatalog.Items[0].Option.VergeScriptPrevious.Subscription == nil {
+		t.Fatal("subscription transaction omitted retained rollback state", err)
+	}
+	if current, err := a.core.EffectiveConfig(); err != nil || !bytes.Contains(current, []byte("DOMAIN,new-subscription.test,DIRECT")) {
+		t.Fatal("updated subscription was not loaded", err)
+	}
+	// Simulate interruption after the catalog switch but before config.yaml is
+	// replaced. Startup derives the active config from the committed catalog.
+	if err := safepath.CompareAndWrite(a.dir, "config.yaml", profile.EnsureMixedPort(downloaded, 7897), updateDraft.base); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.installCurrentProfile(); err != nil {
+		t.Fatal("startup could not reconstruct committed subscription", err)
+	}
+	if restored, err := safepath.ReadFile(a.dir, "config.yaml"); err != nil || !bytes.Equal(restored, profile.EnsureMixedPort(downloaded, 7897)) {
+		t.Fatal("startup reconstructed the wrong subscription", err)
+	}
+	for step := 0; step < 2; step++ {
+		input, _ := json.Marshal(agent.ProfileArgs{ProfileID: draft.target})
+		value, err := a.dispatchAgent(context.Background(), "verge-script-rollback-preview", input)
+		if err != nil {
+			t.Fatal("subscription rollback preview failed", err)
+		}
+		rollback := value.(agent.VergeScriptPreview)
+		apply, _ := json.Marshal(agent.ApplyArgs{ProposalID: rollback.PreviewID})
+		if _, err := a.dispatchAgent(context.Background(), "verge-script-apply", apply); err != nil {
+			t.Fatal("subscription rollback apply failed", err)
+		}
+		current, err := a.core.EffectiveConfig()
+		if err != nil || bytes.Contains(current, []byte("DOMAIN,new-subscription.test,DIRECT")) != (step == 1) {
+			t.Fatal("subscription rollback did not restore the requested contents", err)
+		}
+	}
+	updatedCatalog, _, err = a.profiles.LoadForUpdate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Restore the fixture's original script history for the tests below.
+	if err := a.profiles.RestoreSnapshotIfUnchanged(updatedCatalog, oldUpdateCatalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := safepath.CompareAndWrite(a.dir, "config.yaml", profile.EnsureMixedPort(downloaded, 7897), updateDraft.base); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.core.Reload(); err != nil {
+		t.Fatal(err)
 	}
 	// Preview and commit the previous data-only configuration, then preview
 	// the reverse transition. Both directions go through offline validation.

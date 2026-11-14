@@ -394,14 +394,23 @@ func (s *Store) Delete(uid string) error {
 }
 
 func (s *Store) profileFileShared(items []CatalogItem, index int) (bool, error) {
-	if len(items) < 2 {
-		return false, nil
-	}
 	file := items[index].File
+	var references []string
 	for i, item := range items {
-		if i != index && strings.EqualFold(filepath.Clean(item.File), filepath.Clean(file)) {
+		if i != index && item.File != "" {
+			references = append(references, item.File)
+		}
+		if previous := item.Option.VergeScriptPrevious; previous != nil && previous.Subscription != nil && previous.Subscription.File != "" {
+			references = append(references, previous.Subscription.File)
+		}
+	}
+	for _, reference := range references {
+		if strings.EqualFold(filepath.Clean(reference), filepath.Clean(file)) {
 			return true, nil
 		}
+	}
+	if len(references) == 0 {
+		return false, nil
 	}
 	target, err := safepath.OpenRead(s.dir, file)
 	if errors.Is(err, os.ErrNotExist) {
@@ -415,14 +424,11 @@ func (s *Store) profileFileShared(items []CatalogItem, index int) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	for i, item := range items {
-		if i == index || item.File == "" {
-			continue
-		}
-		if err := validateManagedProfilePath(item.File); err != nil {
+	for _, reference := range references {
+		if err := validateManagedProfilePath(reference); err != nil {
 			return false, err
 		}
-		other, err := safepath.OpenRead(s.dir, item.File)
+		other, err := safepath.OpenRead(s.dir, reference)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}

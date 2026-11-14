@@ -22,6 +22,18 @@ type Approval struct {
 // Previous is the exact script setting before the last committed change.
 // An absent Approval represents the previous data-only configuration.
 type Previous struct {
-	Approval        *Approval `json:"approval,omitempty"`
-	VergeExtensions bool      `json:"verge_extensions,omitempty"`
+	Approval        *Approval             `json:"approval,omitempty"`
+	VergeExtensions bool                  `json:"verge_extensions,omitempty"`
+	Subscription    *SubscriptionSnapshot `json:"subscription,omitempty"`
+}
+
+// SubscriptionSnapshot identifies a retained profile file and its associated
+// subscription metadata for an explicitly previewed update rollback. Files
+// may contain credentials and must remain private to the configuration root.
+type SubscriptionSnapshot struct {
+	File    string    `json:"file"`
+	Updated time.Time `json:"updated,omitempty"`
+	Used    int64     `json:"used,omitempty"`
+	Total   int64     `json:"total,omitempty"`
+	Expire  time.Time `json:"expire,omitempty"`
 }

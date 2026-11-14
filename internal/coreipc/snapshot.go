@@ -59,6 +59,9 @@ func snapshotDirectory(root string) ([]StageFile, error) {
 			if !strings.ContainsAny(rel, `/\`) && (strings.EqualFold(rel, "agent") || strings.EqualFold(rel, "verge-script-outputs")) {
 				return filepath.SkipDir
 			}
+			if strings.EqualFold(rel, filepath.Join("profiles", ".netflow-script-subscriptions")) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if entry.Type()&os.ModeType != 0 {
