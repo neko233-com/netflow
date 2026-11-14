@@ -557,7 +557,7 @@ func TestVergeScriptCLIPreviewAndPaging(t *testing.T) {
 				return nil, errors.New("bad config page")
 			}
 			return agent.VergeScriptConfigPage{Text: "private fixture"}, nil
-		case "verge-script-rollback-preview":
+		case "verge-script-rollback-preview", "verge-script-update-preview":
 			var in agent.ProfileArgs
 			if json.Unmarshal(raw, &in) != nil || in.ProfileID != "sub" {
 				return nil, errors.New("bad rollback preview")
@@ -589,6 +589,7 @@ func TestVergeScriptCLIPreviewAndPaging(t *testing.T) {
 		{[]string{"verge-script-preview-rules", "p", "after", "2", "1"}, ""},
 		{[]string{"verge-script-preview-config", "p", "after", "4", "8"}, ""},
 		{[]string{"verge-script-rollback-preview", "sub"}, ""},
+		{[]string{"verge-script-update-preview", "sub"}, ""},
 		{[]string{"verge-script-apply", "p"}, ""},
 		{[]string{"verge-script-cache-prune"}, ""},
 		{[]string{"verge-script-preview-cancel", "p"}, ""},

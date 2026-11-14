@@ -137,7 +137,10 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 	// its approval unusable on the next activation. URL replacement can also
 	// normalize the name, so it needs the same protection even for equal bytes.
 	if f.Items[index].Option.VergeScriptApproval != nil && (!bytes.Equal(body, oldFile) || nextURL != expectedURL) {
-		return errors.New("已启用的 Verge 脚本绑定当前订阅；请先关闭脚本，更新订阅后重新预览并启用")
+		if nextURL != expectedURL {
+			return errors.New("已启用的 Verge 脚本绑定当前订阅；更换链接前请先关闭脚本，再重新预览并启用")
+		}
+		return errors.New("已启用的 Verge 脚本绑定当前订阅；请在脚本对话框预览订阅更新并应用，或先关闭脚本再更新")
 	}
 	shared, err := a.profiles.SharedProfileFile(f, uid)
 	if err != nil {

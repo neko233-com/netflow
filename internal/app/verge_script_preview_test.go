@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -272,6 +274,21 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	if bytes.Contains(active, []byte("0.0.0.0:9090")) || a.core.Status().TUN || a.core.Status().Mode == "global" {
 		t.Fatal("cached script modified protected runtime controls")
 	}
+	var downloaded []byte
+	subscription := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Subscription-Userinfo", "upload=1; download=2; total=100")
+		_, _ = w.Write(downloaded)
+	}))
+	defer subscription.Close()
+	remoteCatalog, remoteSnapshot, err := a.profiles.LoadForUpdate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteCatalog.Items[0].Type = "remote"
+	remoteCatalog.Items[0].URL = subscription.URL + "?token=synthetic-secret"
+	if err := a.profiles.SaveIfUnchanged(remoteCatalog, remoteSnapshot); err != nil {
+		t.Fatal(err)
+	}
 	updateDraft, err := a.captureVergeScriptDraft(draft.target)
 	if err != nil {
 		t.Fatal(err)
@@ -280,7 +297,7 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	downloaded := bytes.Replace(updateDraft.base, []byte("MATCH,DIRECT"), []byte("DOMAIN,new-subscription.test,DIRECT"), 1)
+	downloaded = bytes.Replace(updateDraft.base, []byte("MATCH,DIRECT"), []byte("DOMAIN,new-subscription.test,DIRECT"), 1)
 	updatedPreview, err := a.prepareVergeScriptUpdate(context.Background(), updateDraft, updateSource, downloaded)
 	if err != nil {
 		t.Fatal("subscription script update preview failed", err)
@@ -299,13 +316,32 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	if _, err := a.prepareVergeScriptUpdate(context.Background(), updateDraft, staleSource, downloaded); !errors.Is(err, scriptpreview.ErrSourcesChanged) {
 		t.Fatal("download based on a stale subscription snapshot was accepted", err)
 	}
-	updatePreview, err := a.finishVergeScriptPreview(updateDraft, updatedPreview, false)
+	updateArgs, _ := json.Marshal(agent.ProfileArgs{ProfileID: draft.target})
+	updateResult, err := a.dispatchAgent(context.Background(), "verge-script-update-preview", updateArgs)
+	if err != nil {
+		t.Fatal("downloaded subscription preview failed", err)
+	}
+	updatePreview := updateResult.(agent.VergeScriptPreview)
+	encodedPreview, _ := json.Marshal(updatePreview)
+	if updatePreview.Operation != "update-subscription" || strings.Contains(string(encodedPreview), "synthetic-secret") {
+		t.Fatal("invalid or secret-bearing subscription preview")
+	}
+	updateProposal := a.agentScriptPreviews[updatePreview.PreviewID]
+	delete(a.agentScriptPreviews, updatePreview.PreviewID)
+	oldProfile, _, err := readProfileFile(a.dir, updateDraft.item.File)
 	if err != nil {
 		t.Fatal(err)
 	}
-	updateProposal := a.agentScriptPreviews[updatePreview.PreviewID]
-	updateProposal.update = &vergeSubscriptionUpdate{body: downloaded}
-	delete(a.agentScriptPreviews, updatePreview.PreviewID)
+	externalProfile := append(append([]byte(nil), oldProfile...), []byte("\n# external edit\n")...)
+	if err := safepath.CompareAndWrite(a.dir, updateDraft.item.File, oldProfile, externalProfile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.prepareVergeScriptCommit(context.Background(), updateProposal); !errors.Is(err, scriptpreview.ErrSourcesChanged) {
+		t.Fatal("subscription preview ignored an external edit", err)
+	}
+	if err := safepath.CompareAndWrite(a.dir, updateDraft.item.File, externalProfile, oldProfile); err != nil {
+		t.Fatal(err)
+	}
 	updateReady, err := a.prepareVergeScriptCommit(context.Background(), updateProposal)
 	if err != nil {
 		t.Fatal("prepare subscription transaction", err)
@@ -331,7 +367,7 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 		t.Fatal("validated subscription transaction failed", err)
 	}
 	updatedCatalog, _, err := a.profiles.LoadForUpdate()
-	if err != nil || updatedCatalog.Items[0].File == updateDraft.item.File || updatedCatalog.Items[0].Option.VergeScriptPrevious == nil || updatedCatalog.Items[0].Option.VergeScriptPrevious.Subscription == nil {
+	if err != nil || updatedCatalog.Items[0].File == updateDraft.item.File || updatedCatalog.Items[0].Used != 3 || updatedCatalog.Items[0].Total != 100 || updatedCatalog.Items[0].Option.VergeScriptPrevious == nil || updatedCatalog.Items[0].Option.VergeScriptPrevious.Subscription == nil {
 		t.Fatal("subscription transaction omitted retained rollback state", err)
 	}
 	if current, err := a.core.EffectiveConfig(); err != nil || !bytes.Contains(current, []byte("DOMAIN,new-subscription.test,DIRECT")) {
@@ -362,6 +398,11 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 		current, err := a.core.EffectiveConfig()
 		if err != nil || bytes.Contains(current, []byte("DOMAIN,new-subscription.test,DIRECT")) != (step == 1) {
 			t.Fatal("subscription rollback did not restore the requested contents", err)
+		}
+		if step == 0 {
+			if _, err := a.dispatchAgent(context.Background(), "verge-script-cache-prune", json.RawMessage(`{}`)); err != nil {
+				t.Fatal("cleanup failed while the updated subscription was retained for rollback", err)
+			}
 		}
 	}
 	updatedCatalog, _, err = a.profiles.LoadForUpdate()
@@ -473,12 +514,50 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	if err != nil || !bytes.Equal(beforeInactive, unchanged) {
 		t.Fatal("inactive apply changed running core", err)
 	}
+	inactiveCatalog, inactiveSnapshot, err := a.profiles.LoadForUpdate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range inactiveCatalog.Items {
+		if inactiveCatalog.Items[i].UID == other {
+			inactiveCatalog.Items[i].Type, inactiveCatalog.Items[i].URL = "remote", subscription.URL
+		}
+	}
+	if err := a.profiles.SaveIfUnchanged(inactiveCatalog, inactiveSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	downloaded = []byte("mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\ntun: {enable: false}\nrules: ['DOMAIN,inactive-update.test,DIRECT', 'MATCH,DIRECT']\n")
+	inactiveUpdateArgs, _ := json.Marshal(agent.ProfileArgs{ProfileID: other})
+	value, err = a.dispatchAgent(context.Background(), "verge-script-update-preview", inactiveUpdateArgs)
+	if err != nil {
+		t.Fatal("inactive subscription update preview failed", err)
+	}
+	inactivePreview := value.(agent.VergeScriptPreview)
+	inactiveApply, _ := json.Marshal(agent.ApplyArgs{ProposalID: inactivePreview.PreviewID})
+	value, err = a.dispatchAgent(context.Background(), "verge-script-apply", inactiveApply)
+	if err != nil || !value.(agent.VergeScriptApplyResult).Applied || value.(agent.VergeScriptApplyResult).Active {
+		t.Fatal("inactive subscription update failed", err)
+	}
+	if current, err := a.core.EffectiveConfig(); err != nil || !bytes.Equal(beforeInactive, current) {
+		t.Fatal("inactive subscription update changed active core", err)
+	}
 	if err := a.UseProfile(other); err != nil {
 		t.Fatal("could not activate approved inactive profile", err)
 	}
 	selected, err := a.core.EffectiveConfig()
-	if err != nil || !bytes.Contains(selected, []byte("DOMAIN,inactive.test,DIRECT")) {
+	if err != nil || !bytes.Contains(selected, []byte("DOMAIN,inactive.test,DIRECT")) || !bytes.Contains(selected, []byte("DOMAIN,inactive-update.test,DIRECT")) {
 		t.Fatal("inactive script output did not activate", err)
+	}
+	value, err = a.dispatchAgent(context.Background(), "verge-script-rollback-preview", inactiveUpdateArgs)
+	if err != nil {
+		t.Fatal("inactive update rollback preview failed", err)
+	}
+	inactiveApply, _ = json.Marshal(agent.ApplyArgs{ProposalID: value.(agent.VergeScriptPreview).PreviewID})
+	if _, err := a.dispatchAgent(context.Background(), "verge-script-apply", inactiveApply); err != nil {
+		t.Fatal("inactive update rollback failed", err)
+	}
+	if current, err := a.core.EffectiveConfig(); err != nil || bytes.Contains(current, []byte("DOMAIN,inactive-update.test,DIRECT")) {
+		t.Fatal("inactive update rollback did not restore previous profile", err)
 	}
 	if err := a.UseProfile(draft.target); err != nil {
 		t.Fatal("could not restore original profile", err)

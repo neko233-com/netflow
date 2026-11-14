@@ -31,7 +31,7 @@ func TestVergeScriptMCPPreviewAndPaging(t *testing.T) {
 				return nil, errors.New("bad config page")
 			}
 			return VergeScriptConfigPage{Text: "private fixture"}, nil
-		case "verge-script-rollback-preview":
+		case "verge-script-rollback-preview", "verge-script-update-preview":
 			var in ProfileArgs
 			if json.Unmarshal(raw, &in) != nil || in.ProfileID != "sub" {
 				return nil, errors.New("bad rollback preview")
@@ -74,6 +74,7 @@ func TestVergeScriptMCPPreviewAndPaging(t *testing.T) {
 		{Name: "netflow_verge_script_preview_rules", Arguments: map[string]any{"proposal_id": "p", "stage": "after"}},
 		{Name: "netflow_verge_script_preview_config", Arguments: map[string]any{"preview_id": "p", "stage": "after"}},
 		{Name: "netflow_preview_verge_script_rollback", Arguments: map[string]any{"profile_id": "sub"}},
+		{Name: "netflow_preview_verge_subscription_update", Arguments: map[string]any{"profile_id": "sub"}},
 		{Name: "netflow_apply_verge_script", Arguments: map[string]any{"proposal_id": "p"}},
 		{Name: "netflow_prune_verge_script_cache", Arguments: map[string]any{}},
 		{Name: "netflow_cancel_verge_script_preview", Arguments: map[string]any{"proposal_id": "p"}},

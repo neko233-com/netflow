@@ -203,9 +203,9 @@ $source = "$env:APPDATA\io.github.clash-verge-rev.clash-verge-rev"
 
 新迁入的 Verge DNS 设置按字段覆盖订阅中的 DNS，保留未设置的原字段，并应用非空 hosts；编辑 DNS 内容后，该订阅改用 NetFlow 的整段 DNS 覆写，已迁入的 hosts 仍保留。旧版本已经迁入的订阅不会自动改变 DNS 行为，可在新的配置目录重新迁入以使用新的合并方式。
 
-在订阅卡片右键选择“预览 Verge 脚本”，可选择脚本、审查规则与完整配置，再单独应用或预览回滚。Agent 可将 `{"profile_id":"订阅ID","global":true,"profile":true}` 传给 `netflow-agent verge-script-preview`，用返回的 `preview_id` 执行 `verge-script-apply ID`；全不选可预览关闭脚本，`verge-script-rollback-preview PROFILE` 可预览上一份设置。使用 `verge-script-preview-rules ID before|after [OFFSET [LIMIT]]` 查看规则，或用 `verge-script-preview-config ID before|after [OFFSET [LIMIT]]` 显式查看完整配置；后者可能包含订阅凭据。对应 MCP 工具包括 `netflow_preview_verge_script`、`netflow_apply_verge_script` 和 `netflow_preview_verge_script_rollback`。预览不改变配置；应用会重载活动内核并可能中断连接。全局脚本按所选订阅单独批准；脚本使用固定预览时间与确定性随机源，可能与 Verge 不同。已批准结果绑定订阅、名称和存档；订阅变化时请先关闭脚本、更新，再重新预览启用。更多限制见 [脚本扩展状态](docs/verge-script-status.md)。
+在订阅卡片右键选择“预览 Verge 脚本”，可选择脚本、审查规则与完整配置，再单独应用或预览回滚。Agent 可将 `{"profile_id":"订阅ID","global":true,"profile":true}` 传给 `netflow-agent verge-script-preview`，用返回的 `preview_id` 执行 `verge-script-apply ID`；全不选可预览关闭脚本，`verge-script-rollback-preview PROFILE` 可预览上一份设置。已启用脚本的远程订阅可在此对话框下载并预览更新，或使用 `verge-script-update-preview PROFILE` / MCP `netflow_preview_verge_subscription_update`；确认后单独应用，上一份订阅与脚本设置可一起预览回滚。使用 `verge-script-preview-rules ID before|after [OFFSET [LIMIT]]` 查看规则，或用 `verge-script-preview-config ID before|after [OFFSET [LIMIT]]` 显式查看完整配置；后者可能包含订阅凭据。对应 MCP 工具还包括 `netflow_preview_verge_script`、`netflow_apply_verge_script` 和 `netflow_preview_verge_script_rollback`。预览不改变配置；应用会重载活动内核并可能中断连接。全局脚本按所选订阅单独批准；脚本使用固定预览时间与确定性随机源，可能与 Verge 不同。已批准结果绑定订阅、名称和存档；自动更新及更换订阅链接仍需先关闭脚本。更多限制见 [脚本扩展状态](docs/verge-script-status.md)。
 
-`profiles` 和 MCP `netflow_profiles` 会标出已关联 Verge 存档、已启用的全局或订阅脚本以及是否有上一份设置；存档关联标志不代表文件当前可读。脚本缓存达到上限时，可在预览对话框清理未引用缓存，或运行 `verge-script-cache-prune`；当前和上一份设置使用的缓存会保留。
+`profiles` 和 MCP `netflow_profiles` 会标出已关联 Verge 存档、已启用的全局或订阅脚本以及是否有上一份设置；存档关联标志不代表文件当前可读。脚本输出或保留的订阅文件达到上限时，可在预览对话框清理未引用文件，或运行 `verge-script-cache-prune`；当前和上一份设置使用的文件会保留。
 
 新迁入订阅中的文件型规则和代理集合（包括数据合并扩展中的引用）会从所选目录或备份复制到独立的 `verge-providers` 目录；HTTP 集合缓存可用时一并复制，不存在时重新下载。源文件不在所选目录或备份中、无法安全读取或缺失时会显示提示，缺失的文件型集合必须补齐后才能正常使用。为避免误读其他配置，这些路径也会被重定向到独立目录。后续订阅更新沿用原始路径的映射；更新若引入了新的本地文件路径，需要手动提供该文件。单个集合文件最多 8 MiB，迁移读取总量最多 64 MiB。已由旧版迁入的订阅需要重新迁入才能获得这些映射。
 

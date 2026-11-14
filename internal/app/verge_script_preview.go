@@ -63,6 +63,10 @@ func (a *App) previewVergeScriptRollbackAsync(id string, done func(agent.VergeSc
 	return a.previewVergeScriptOperationAsync("verge-script-rollback-preview", agent.ProfileArgs{ProfileID: id}, done)
 }
 
+func (a *App) previewVergeScriptUpdateAsync(id string, done func(agent.VergeScriptPreview, error)) func() {
+	return a.previewVergeScriptOperationAsync("verge-script-update-preview", agent.ProfileArgs{ProfileID: id}, done)
+}
+
 func (a *App) previewVergeScriptOperationAsync(method string, in any, done func(agent.VergeScriptPreview, error)) func() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -140,13 +144,15 @@ func (a *App) pruneVergeScriptCacheAsync(done func(agent.VergeScriptCachePruneRe
 	return cancel
 }
 
-func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepared, rollback bool) (agent.VergeScriptPreview, error) {
+func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepared, rollback bool, update *vergeSubscriptionUpdate) (agent.VergeScriptPreview, error) {
 	var result agent.VergeScriptPreview
 	if err := a.checkVergeScriptDraft(d); err != nil {
 		return result, err
 	}
-	var update *vergeSubscriptionUpdate
 	if rollback {
+		if update != nil {
+			return result, scriptpreview.ErrSourcesChanged
+		}
 		var err error
 		update, err = a.rollbackSubscription(d)
 		if err != nil {
@@ -155,6 +161,8 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 		if update != nil && sha256.Sum256(profile.EnsureMixedPort(update.body, 7897)) != p.Candidate.BaseSHA256 {
 			return result, scriptpreview.ErrSourcesChanged
 		}
+	} else if update != nil && (update.snapshot.File != "" || sha256.Sum256(profile.EnsureMixedPort(update.body, 7897)) != p.Candidate.BaseSHA256) {
+		return result, scriptpreview.ErrSourcesChanged
 	}
 	now := time.Now()
 	for id, preview := range a.agentScriptPreviews {
@@ -243,6 +251,8 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 		}
 		target = &value
 		operation = "rollback"
+	} else if update != nil {
+		operation = "update-subscription"
 	} else if p.Candidate.DataOnlyWithoutArchive {
 		operation = "recover-disable"
 	} else if !p.Candidate.Selection.Global && !p.Candidate.Selection.Profile {
@@ -263,7 +273,7 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 		warnings = append(warnings, "This profile is inactive.")
 	}
 	if update != nil {
-		warnings = append(warnings, "Rollback also restores the previous subscription contents and traffic metadata.")
+		warnings = append(warnings, "Applying changes the subscription contents; rollback restores the previous contents and traffic metadata.")
 	}
 	if !d.status.Running {
 		warnings = append(warnings, "The core is stopped; applying only saves settings until the core is started.")

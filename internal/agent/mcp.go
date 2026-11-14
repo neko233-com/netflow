@@ -36,6 +36,15 @@ func NewMCP(client Client) *mcp.Server {
 		err := c.Call(ctx, "verge-script-rollback-preview", in, &out)
 		return nil, out, err
 	})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_preview_verge_subscription_update", Description: "Download a remote subscription with its saved network options, run its currently approved Verge scripts, and validate the result without applying it. Inspect all rules, configuration and warnings before separately applying the preview.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in ProfileArgs) (*mcp.CallToolResult, VergeScriptPreview, error) {
+		var out VergeScriptPreview
+		c := client
+		if c.Timeout <= 0 {
+			c.Timeout = 6 * time.Minute
+		}
+		err := c.Call(ctx, "verge-script-update-preview", in, &out)
+		return nil, out, err
+	})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_apply_verge_script", Description: "Apply an unexpired, validated script preview. This can reload the kernel and change routing; the previous setting can be previewed for rollback."}, func(ctx context.Context, _ *mcp.CallToolRequest, in ApplyArgs) (*mcp.CallToolResult, VergeScriptApplyResult, error) {
 		var out VergeScriptApplyResult
 		c := client
@@ -45,7 +54,7 @@ func NewMCP(client Client) *mcp.Server {
 		err := c.Call(ctx, "verge-script-apply", in, &out)
 		return nil, out, err
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "netflow_prune_verge_script_cache", Description: "Delete unreferenced NetFlow-managed script output cache files; current and previous settings are retained."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, VergeScriptCachePruneResult, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_prune_verge_script_cache", Description: "Delete unreferenced NetFlow-managed script outputs and retained subscription snapshots; current and previous settings are retained."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, VergeScriptCachePruneResult, error) {
 		var out VergeScriptCachePruneResult
 		c := client
 		if c.Timeout <= 0 {

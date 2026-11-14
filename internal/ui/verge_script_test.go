@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/neko233-com/netflow/internal/agent"
@@ -187,5 +188,29 @@ func TestVergeScriptUICacheCleanupIsBoundedToOneRequest(t *testing.T) {
 	done(agent.VergeScriptCachePruneResult{Removed: 2, Bytes: 42}, nil)
 	if m.VergeScriptPreview.Busy || m.VergeScriptPreview.PreviewID != "p" || m.VergeScriptPreview.CacheNotice == "" {
 		t.Fatal("cleanup lost preview or result")
+	}
+}
+
+func TestVergeScriptUIUpdateRequiresRemoteApprovedProfileAndPreview(t *testing.T) {
+	m := NewModel(HomeState{})
+	m.Profiles = []ProfileItem{{UID: "p", Type: "remote", Option: ProfileOption{VergeScriptGlobal: true}}}
+	m.Hooks.PreviewVergeScriptAsync = func(agent.VergeScriptPreviewArgs, func(agent.VergeScriptPreview, error)) func() { return nil }
+	m.Hooks.VergeScriptPreviewRules = func(agent.PreviewRulesArgs) (agent.PreviewRulesResult, error) { return agent.PreviewRulesResult{}, nil }
+	called := false
+	m.Hooks.PreviewVergeScriptUpdateAsync = func(id string, done func(agent.VergeScriptPreview, error)) func() {
+		called = id == "p"
+		done(agent.VergeScriptPreview{PreviewID: "update", Operation: "update-subscription"}, nil)
+		return nil
+	}
+	m.openVergeScriptPreview("p")
+	m.startVergeScriptUpdatePreview()
+	if !called || m.VergeScriptPreview.PreviewID != "update" || !strings.Contains(m.VergeScriptPreview.Summary, "更新订阅") {
+		t.Fatal("update preview was not shown")
+	}
+	m.VergeScriptPreview.Remote = false
+	called = false
+	m.startVergeScriptUpdatePreview()
+	if called || m.VergeScriptPreview.Error == "" {
+		t.Fatal("local profile accepted a subscription update")
 	}
 }

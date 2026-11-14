@@ -1661,7 +1661,14 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(verge, "profiles.yaml"), []byte("current: p1\nitems:\n  - {uid: p1, type: remote, name: Test, url: 'https://example.test/sub', file: p1.yaml, option: {proxies: p2, groups: g1, merge: m1, script: s1}}\n  - {uid: p2, type: proxies, file: p2.yaml}\n  - {uid: g1, type: groups, file: g1.yaml}\n  - {uid: m1, type: merge, file: m1.yaml}\n  - {uid: Merge, type: merge, file: Merge.yaml}\n  - {uid: Script, type: script, file: global.js}\n  - {uid: s1, type: script, file: local.js}\n"), 0600); err != nil {
+	var vmSubscription string
+	subscriptionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Subscription-Userinfo", "upload=1; download=2; total=100")
+		_, _ = io.WriteString(w, vmSubscription)
+	}))
+	defer subscriptionServer.Close()
+	vergeProfiles := fmt.Sprintf("current: p1\nitems:\n  - {uid: p1, type: remote, name: Test, url: %q, file: p1.yaml, option: {proxies: p2, groups: g1, merge: m1, script: s1}}\n  - {uid: p2, type: proxies, file: p2.yaml}\n  - {uid: g1, type: groups, file: g1.yaml}\n  - {uid: m1, type: merge, file: m1.yaml}\n  - {uid: Merge, type: merge, file: Merge.yaml}\n  - {uid: Script, type: script, file: global.js}\n  - {uid: s1, type: script, file: local.js}\n", subscriptionServer.URL+"?token=synthetic-secret")
+	if err := os.WriteFile(filepath.Join(verge, "profiles.yaml"), []byte(vergeProfiles), 0600); err != nil {
 		t.Fatal(err)
 	}
 	reservation, err := net.ListenPacket("udp4", "127.0.0.1:0")
@@ -1671,6 +1678,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	migrationDNS := reservation.LocalAddr().String()
 	_ = reservation.Close()
 	vergeConfig := fmt.Sprintf("mixed-port: 0\nport: 0\nsocks-port: 0\nipv6: false\nproxies: [{name: old, type: socks5, server: 127.0.0.1, port: 2}]\nproxy-groups: [{name: Select, type: select, proxies: [old, DIRECT]}]\ndns:\n  enable: true\n  listen: '%s'\n  enhanced-mode: redir-host\n  use-hosts: true\n  nameserver: ['127.0.0.1:3']\n  fallback: ['127.0.0.1:2']\nrules: ['RULE-SET,blocked,REJECT', 'MATCH,DIRECT']\n", migrationDNS)
+	vmSubscription = strings.Replace(vergeConfig, "'MATCH,DIRECT'", "'DOMAIN,updated-subscription.netflow-test.example,DIRECT', 'MATCH,DIRECT'", 1)
 	if err := os.WriteFile(filepath.Join(verge, "profiles", "p1.yaml"), []byte(vergeConfig), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -1907,6 +1915,18 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if err != nil || !strings.Contains(string(out), "local-script.netflow-test.example") {
 			t.Fatalf("script rules not active: %s %v", out, err)
 		}
+		out, err = callMigration("verge-script-update-preview", status.ActiveProfile)
+		if err != nil || strings.Contains(string(out), "synthetic-secret") || json.Unmarshal(out, &script) != nil || script.PreviewID == "" || script.Operation != "update-subscription" {
+			t.Fatalf("TUN subscription update preview failed: %s %v", out, err)
+		}
+		out, err = callMigration("verge-script-apply", script.PreviewID)
+		if err != nil || json.Unmarshal(out, &applied) != nil || !applied.Applied || !applied.Active {
+			t.Fatalf("TUN subscription update apply failed: %s %v", out, err)
+		}
+		out, err = callMigration("rules")
+		if err != nil || !strings.Contains(string(out), "updated-subscription.netflow-test.example") || !strings.Contains(string(out), "local-script.netflow-test.example") {
+			t.Fatalf("updated subscription or script rule missing: %s %v", out, err)
+		}
 		out, err = callMigration("verge-script-rollback-preview", status.ActiveProfile)
 		if err != nil || json.Unmarshal(out, &script) != nil || script.PreviewID == "" || script.Operation != "rollback" {
 			t.Fatalf("TUN script rollback preview failed: %s %v", out, err)
@@ -1914,6 +1934,22 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		out, err = callMigration("verge-script-apply", script.PreviewID)
 		if err != nil || json.Unmarshal(out, &applied) != nil || !applied.Applied {
 			t.Fatalf("TUN script rollback failed: %s %v", out, err)
+		}
+		out, err = callMigration("rules")
+		if err != nil || strings.Contains(string(out), "updated-subscription.netflow-test.example") || !strings.Contains(string(out), "local-script.netflow-test.example") {
+			t.Fatalf("subscription rollback did not restore old rules: %s %v", out, err)
+		}
+		disableCtx, disableCancel := context.WithTimeout(context.Background(), 90*time.Second)
+		disableCommand := vmCommand(disableCtx, agentExe, "--config-dir", migrationTarget, "verge-script-preview")
+		disableCommand.Stdin = strings.NewReader(`{"global":false,"profile":false}`)
+		out, err = disableCommand.CombinedOutput()
+		disableCancel()
+		if err != nil || json.Unmarshal(out, &script) != nil || script.PreviewID == "" || script.Operation != "disable" {
+			t.Fatalf("TUN script disable preview failed: %s %v", out, err)
+		}
+		out, err = callMigration("verge-script-apply", script.PreviewID)
+		if err != nil || json.Unmarshal(out, &applied) != nil || !applied.Applied {
+			t.Fatalf("TUN script disable failed: %s %v", out, err)
 		}
 		out, err = callMigration("status")
 		if err != nil || json.Unmarshal(out, &status) != nil || !status.TUN {

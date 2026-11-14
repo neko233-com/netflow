@@ -3,12 +3,9 @@ package app
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/neko233-com/netflow/internal/migration"
 	"github.com/neko233-com/netflow/internal/profile"
@@ -74,23 +71,26 @@ func (a *App) finishVergeSubscriptionUpdate(ctx context.Context, ready vergeScri
 		return false, scriptpreview.ErrSourcesChanged
 	}
 	nextFile := update.snapshot.File
-	if nextFile != "" {
-		retained, path, readErr := readProfileFile(a.dir, nextFile)
-		if readErr != nil || !bytes.Equal(retained, update.body) || d.hashes[path] != sha256.Sum256(retained) {
+	if nextFile == "" {
+		nextFile = ready.stagedFile
+	}
+	if nextFile == "" {
+		return false, scriptpreview.ErrSourcesChanged
+	}
+	retained, path, readErr := readProfileFile(a.dir, nextFile)
+	retainedHash := sha256.Sum256(retained)
+	if readErr != nil || !bytes.Equal(retained, update.body) {
+		return false, scriptpreview.ErrSourcesChanged
+	}
+	if previous, ok := d.hashes[path]; ok && previous != retainedHash {
+		return false, scriptpreview.ErrSourcesChanged
+	}
+	if update.snapshot.File != "" {
+		if _, ok := d.hashes[path]; !ok {
 			return false, scriptpreview.ErrSourcesChanged
 		}
-	} else {
-		var nonce [16]byte
-		if _, err := rand.Read(nonce[:]); err != nil {
-			return false, err
-		}
-		nextFile = filepath.Join("profiles", ".netflow-script-subscriptions", "netflow-"+hex.EncodeToString(nonce[:])+".yaml")
-		created, createErr := safepath.CreateExclusive(a.dir, nextFile, update.body, true)
-		if createErr != nil {
-			return false, createErr
-		}
-		defer created.Close()
 	}
+	d.hashes[path] = retainedHash
 	previous := &scriptmeta.Previous{VergeExtensions: item.Option.VergeExtensions, Subscription: &scriptmeta.SubscriptionSnapshot{File: item.File, Updated: item.Updated, Used: item.Used, Total: item.Total, Expire: item.Expire}}
 	if item.Option.VergeScriptApproval != nil {
 		copy := *item.Option.VergeScriptApproval

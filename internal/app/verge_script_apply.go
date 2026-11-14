@@ -19,6 +19,7 @@ type vergeScriptCommit struct {
 	approval   *scriptmeta.Approval
 	extensions bool
 	sources    map[string][32]byte
+	stagedFile string
 }
 
 // prepareVergeScriptCommit may run off the app event loop. It writes only an
@@ -95,7 +96,14 @@ func (a *App) prepareVergeScriptCommit(ctx context.Context, proposal vergeScript
 	if err := ctx.Err(); err != nil {
 		return empty, err
 	}
-	return vergeScriptCommit{proposal: proposal, approval: approval, extensions: extensions, sources: sources}, nil
+	var stagedFile string
+	if proposal.update != nil && proposal.update.snapshot.File == "" {
+		stagedFile, err = scriptapproval.StoreSubscription(ctx, a.dir, proposal.update.body)
+		if err != nil {
+			return empty, err
+		}
+	}
+	return vergeScriptCommit{proposal: proposal, approval: approval, extensions: extensions, sources: sources, stagedFile: stagedFile}, nil
 }
 
 // finishVergeScriptCommit is serialized on the app event loop. It commits

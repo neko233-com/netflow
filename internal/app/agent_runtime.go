@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -57,6 +58,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			return nil, ctx.Err()
 		}
 		var refs []scriptmeta.Approval
+		var profileRefs []string
 		var hash [32]byte
 		var captureErr error
 		executed := false
@@ -79,11 +81,15 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 				return
 			}
 			for _, item := range catalog.Items {
+				profileRefs = append(profileRefs, item.File)
 				if item.Option.VergeScriptApproval != nil {
 					refs = append(refs, *item.Option.VergeScriptApproval)
 				}
 				if item.Option.VergeScriptPrevious != nil && item.Option.VergeScriptPrevious.Approval != nil {
 					refs = append(refs, *item.Option.VergeScriptPrevious.Approval)
+				}
+				if previous := item.Option.VergeScriptPrevious; previous != nil && previous.Subscription != nil {
+					profileRefs = append(profileRefs, previous.Subscription.File)
 				}
 			}
 		})
@@ -96,7 +102,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			}
 			return nil, errors.New("profile catalog is unavailable")
 		}
-		result, err := scriptapproval.Prune(ctx, a.dir, refs, func() error {
+		guard := func() error {
 			var guardErr error
 			ran := false
 			a.runOnMain(func() {
@@ -117,16 +123,22 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 				return errors.New("application is shutting down")
 			}
 			return guardErr
-		})
+		}
+		result, err := scriptapproval.Prune(ctx, a.dir, refs, guard)
 		if err != nil {
 			return nil, err
 		}
-		return agent.VergeScriptCachePruneResult{Removed: result.Removed, Bytes: result.Bytes}, nil
+		profiles, err := scriptapproval.PruneSubscriptions(ctx, a.dir, profileRefs, guard)
+		if err != nil {
+			return nil, fmt.Errorf("script cache cleanup removed %d files before subscription cleanup failed: %w", result.Removed, err)
+		}
+		return agent.VergeScriptCachePruneResult{Removed: result.Removed + profiles.Removed, Bytes: result.Bytes + profiles.Bytes}, nil
 	}
-	if method == "verge-script-preview" || method == "verge-script-rollback-preview" {
+	if method == "verge-script-preview" || method == "verge-script-rollback-preview" || method == "verge-script-update-preview" {
 		var in agent.VergeScriptPreviewArgs
 		rollback := method == "verge-script-rollback-preview"
-		if rollback {
+		updating := method == "verge-script-update-preview"
+		if rollback || updating {
 			var request agent.ProfileArgs
 			if err := decodeStrict(args, &request); err != nil {
 				return nil, err
@@ -142,6 +154,8 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			return nil, ctx.Err()
 		}
 		var draft vergeScriptDraft
+		var client *http.Client
+		var lockedProfile string
 		var prepareErr error
 		executed := false
 		a.runOnMain(func() {
@@ -149,7 +163,25 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			if prepareErr = ctx.Err(); prepareErr == nil {
 				draft, prepareErr = a.captureVergeScriptDraft(in.ProfileID)
 			}
+			if prepareErr == nil && updating {
+				if draft.item.Type != "remote" || !profile.ValidURL(draft.item.URL) || draft.item.Option.VergeScriptApproval == nil {
+					prepareErr = errors.New("remote profile with approved scripts is required")
+				} else if a.profileUpdates[draft.target] {
+					prepareErr = errors.New("profile update is in progress")
+				} else if client, prepareErr = a.subscriptionClient(draft.item.Option, false); prepareErr == nil {
+					if a.profileUpdates == nil {
+						a.profileUpdates = make(map[string]bool)
+					}
+					a.profileUpdates[draft.target], lockedProfile = true, draft.target
+				}
+			}
 		})
+		if lockedProfile != "" {
+			defer func() { a.runOnMain(func() { delete(a.profileUpdates, lockedProfile) }) }()
+		}
+		if client != nil {
+			defer client.CloseIdleConnections()
+		}
 		if !executed {
 			return nil, errors.New("application is shutting down")
 		}
@@ -160,8 +192,28 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			return nil, errors.New("script preview configuration is unavailable or has changed")
 		}
 		var prepared scriptpreview.Prepared
+		var update *vergeSubscriptionUpdate
 		var err error
-		if rollback {
+		if updating {
+			var source profileSourceSnapshot
+			source, err = a.snapshotProfileSource(draft.item.File)
+			var response subscriptionResponse
+			if err == nil {
+				response, err = fetchProfileResponseContext(ctx, draft.item.URL, client, draft.item.Option.UserAgent)
+			}
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				return nil, errors.New("subscription download failed")
+			}
+			prepared, err = a.prepareVergeScriptUpdate(ctx, draft, source, response.body)
+			if err == nil {
+				metadata := draft.item
+				profile.ApplySubscriptionUserInfo(&metadata, response.headers)
+				update = &vergeSubscriptionUpdate{body: response.body, snapshot: scriptmeta.SubscriptionSnapshot{Updated: time.Now().UTC().Truncate(time.Second), Used: metadata.Used, Total: metadata.Total, Expire: metadata.Expire}}
+			}
+		} else if rollback {
 			prepared, err = a.prepareVergeScriptRollback(ctx, draft)
 		} else if !in.Global && !in.Profile {
 			prepared, err = a.prepareVergeScriptDisable(ctx, draft)
@@ -180,7 +232,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		a.runOnMain(func() {
 			executed = true
 			if finishErr = ctx.Err(); finishErr == nil {
-				result, finishErr = a.finishVergeScriptPreview(draft, prepared, rollback)
+				result, finishErr = a.finishVergeScriptPreview(draft, prepared, rollback, update)
 			}
 		})
 		if !executed {

@@ -9,14 +9,14 @@ import (
 )
 
 type VergeScriptDialog struct {
-	Open, Global, Profile, Busy, ConfigMode, Applying, Pruning, Enabled, HasPrevious bool
-	ProfileID, PreviewID, Error, Summary, PageText, Stage                            string
-	Page                                                                             agent.PreviewRulesResult
-	ConfigPage                                                                       agent.VergeScriptConfigPage
-	Warnings                                                                         []string
-	PreviousOffsets                                                                  []int
-	PreviousConfigOffsets                                                            []int
-	CacheNotice                                                                      string
+	Open, Global, Profile, Busy, ConfigMode, Applying, Pruning, Enabled, HasPrevious, Remote bool
+	ProfileID, PreviewID, Error, Summary, PageText, Stage                                    string
+	Page                                                                                     agent.PreviewRulesResult
+	ConfigPage                                                                               agent.VergeScriptConfigPage
+	Warnings                                                                                 []string
+	PreviousOffsets                                                                          []int
+	PreviousConfigOffsets                                                                    []int
+	CacheNotice                                                                              string
 }
 
 func vergeScriptWarning(s string) string {
@@ -43,6 +43,8 @@ func vergeScriptWarning(s string) string {
 		return "存档不可用或无效；恢复操作会同时关闭脚本和存档数据扩展。"
 	case "The core is stopped; applying only saves settings until the core is started.":
 		return "内核未运行；应用只保存设置，启动内核后才会生效。"
+	case "Applying changes the subscription contents; rollback restores the previous contents and traffic metadata.":
+		return "应用会更改订阅内容；回滚会恢复之前的内容和流量信息。"
 	default:
 		return s
 	}
@@ -60,6 +62,7 @@ func (m *Model) openVergeScriptPreview(id string) {
 			e := &m.VergeScriptPreview
 			e.Global, e.Profile = item.Option.VergeScriptGlobal, item.Option.VergeScriptProfile
 			e.Enabled, e.HasPrevious = e.Global || e.Profile, item.Option.VergeScriptHistory
+			e.Remote = item.Type == "remote"
 			break
 		}
 	}
@@ -105,6 +108,18 @@ func (m *Model) startVergeScriptRollbackPreview() {
 	})
 }
 
+func (m *Model) startVergeScriptUpdatePreview() {
+	e := &m.VergeScriptPreview
+	if !e.Remote || !e.Enabled || m.Hooks.PreviewVergeScriptUpdateAsync == nil {
+		e.Error = "只有启用脚本的远程订阅可以预览更新"
+		return
+	}
+	id := e.ProfileID
+	m.runVergeScriptPreview(func(done func(agent.VergeScriptPreview, error)) func() {
+		return m.Hooks.PreviewVergeScriptUpdateAsync(id, done)
+	})
+}
+
 func (m *Model) runVergeScriptPreview(start func(func(agent.VergeScriptPreview, error)) func()) {
 	m.clearVergeScriptPreview()
 	m.VergeScriptPreview.Busy = true
@@ -124,7 +139,7 @@ func (m *Model) runVergeScriptPreview(start func(func(agent.VergeScriptPreview, 
 			return
 		}
 		e.PreviewID = preview.PreviewID
-		operation := map[string]string{"enable": "启用", "disable": "关闭", "recover-disable": "恢复关闭", "rollback": "回滚"}[preview.Operation]
+		operation := map[string]string{"enable": "启用", "disable": "关闭", "recover-disable": "恢复关闭", "rollback": "回滚", "update-subscription": "更新订阅"}[preview.Operation]
 		e.Summary = fmt.Sprintf("%s：规则 %d → %d；变化字段：%s；其他字段：%d", operation, preview.RulesBefore.Total, preview.RulesAfter.Total, strings.Join(preview.ChangedFields, ", "), preview.OtherChangedFields)
 		e.Warnings = make([]string, 0, len(preview.Warnings))
 		for _, warning := range preview.Warnings {
@@ -309,6 +324,9 @@ func (m *Model) vergeScriptDialog(c *mygoui.Context, pal Palette) {
 			width = 300
 		}
 		bodyHeight := height - 155
+		if e.Remote && e.Enabled {
+			bodyHeight -= 36
+		}
 		if bodyHeight > 450 {
 			bodyHeight = 450
 		}
@@ -426,6 +444,9 @@ func (m *Model) vergeScriptDialog(c *mygoui.Context, pal Palette) {
 					m.pruneVergeScriptCache()
 				}
 			})
+			if e.Remote && e.Enabled && m.Hooks.PreviewVergeScriptUpdateAsync != nil && !e.Busy && filledButton(c, pal, "按已启用脚本预览订阅更新", "verge-script-update-preview", false) {
+				m.startVergeScriptUpdatePreview()
+			}
 		})
 	})
 	if !e.Open {
