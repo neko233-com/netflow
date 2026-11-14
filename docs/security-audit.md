@@ -6,6 +6,8 @@
 
 后续源码将 Go 更新至 1.27.4，并更新上述五个模块至数据库所列修复版本或更新版本。使用 Windows、`with_gvisor,no_tailscale` 标签的源码级扫描对 `./...` 返回 `No vulnerabilities found`；这不包括测试代码、非 Go 依赖、所有运行时配置或未知漏洞，也不替代对实际发布二进制的检查。`mihomo` 使用本项目公开分支，漏洞数据库对替换模块的覆盖可能不同。
 
+`0.2.100-alpha.1` 本地构建后，对实际 Windows `NetFlow.exe`、`netflow-agent.exe` 和 `netflow-kernel-worker.exe` 分别运行相同数据库的二进制扫描，均返回 `No vulnerabilities found`。构建版 GUI 文件副本的本机 Defender 不修复自定义扫描未报告威胁，单磁盘 Windows 来宾一次完整回归通过；这些结果不构成微软对 `0.2.99-alpha.1` 检测的裁定。
+
 可在受信任网络下重现源码扫描：
 
 ```powershell
