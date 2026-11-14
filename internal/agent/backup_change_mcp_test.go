@@ -38,3 +38,14 @@ func TestBackupOnChangeMCPForwardsOptIn(t *testing.T) {
 		t.Fatalf("MCP opt-in failed: %+v %v", result, err)
 	}
 }
+
+func TestBackupScheduleReportsFalseOnChange(t *testing.T) {
+	existing := BackupSchedule{OnChange: true}
+	data, err := json.Marshal(BackupSchedule{Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &existing); err != nil || existing.OnChange {
+		t.Fatalf("disabled state lost: %s %v", data, err)
+	}
+}

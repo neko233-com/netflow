@@ -138,7 +138,7 @@ type BackupJobArgs struct {
 }
 
 type BackupSchedule struct {
-	OnChange      bool      `json:"on_change,omitempty" jsonschema:"also back up configuration changes; explicitly enabled"`
+	OnChange      bool      `json:"on_change" jsonschema:"also back up configuration changes; explicitly enabled"`
 	Enabled       bool      `json:"enabled" jsonschema:"explicitly enable automatic local backups"`
 	Directory     string    `json:"directory,omitempty" jsonschema:"existing absolute directory outside the configuration"`
 	IntervalHours int       `json:"interval_hours,omitempty" jsonschema:"interval between 1 and 168 hours"`
