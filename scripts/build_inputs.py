@@ -72,7 +72,7 @@ def source_digest(root, go_environment):
 
 
 def go_environment():
-    env = dict(os.environ, GOWORK="off", CGO_ENABLED="0", GOFLAGS="-p=1 -tags=with_gvisor,no_tailscale")
+    env = dict(os.environ, GOWORK="off", CGO_ENABLED="0", GOFLAGS="-p=1 -tags=with_gvisor,no_tailscale -buildvcs=false")
     env.pop("GOOS", None)
     env.pop("GOARCH", None)
     output = subprocess.check_output(

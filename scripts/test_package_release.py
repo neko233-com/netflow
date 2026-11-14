@@ -1,9 +1,10 @@
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
-from package_release import check_icon_resource
+from package_release import check_icon_resource, check_tun_build_tags
 
 
 def pe_with_icons():
@@ -38,6 +39,19 @@ class IconResourceTest(unittest.TestCase):
             path.write_bytes(pe_with_icons()[:0x415])
             with self.assertRaises(ValueError):
                 check_icon_resource(path)
+
+
+class ReleaseBuildInfoTest(unittest.TestCase):
+    def test_requires_tags_and_rejects_embedded_workspace_metadata(self):
+        good = "program\n\tbuild\t-tags=with_gvisor,no_tailscale\n\tbuild\tGOAMD64=v1\n"
+        with patch("package_release.subprocess.check_output", return_value=good):
+            check_tun_build_tags(Path("program"))
+        with patch("package_release.subprocess.check_output", return_value=good + "\tbuild\tvcs.revision=stale\n"):
+            with self.assertRaisesRegex(ValueError, "VCS metadata"):
+                check_tun_build_tags(Path("program"))
+        with patch("package_release.subprocess.check_output", return_value="program\n"):
+            with self.assertRaisesRegex(ValueError, "TUN build tags"):
+                check_tun_build_tags(Path("program"))
 
 
 if __name__ == "__main__":

@@ -95,6 +95,10 @@ def check_tun_build_tags(path):
     lines = [line.split("-tags=", 1)[1].strip() for line in info.splitlines() if "-tags=" in line]
     if len(lines) != 1 or not {"with_gvisor", "no_tailscale"}.issubset(set(lines[0].split(","))):
         raise ValueError(f"missing TUN build tags: {path}")
+    for line in info.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0] == "build" and fields[1].startswith("vcs"):
+            raise ValueError(f"unexpected embedded VCS metadata: {path}")
 
 
 def check_macho(path):
@@ -153,9 +157,11 @@ def main():
     check_pe(windows / "netflow-kernel-worker.exe")
     check_icon_resource(windows / "netflow-kernel-worker.exe")
     check_tun_build_tags(windows / "NetFlow.exe")
+    check_tun_build_tags(windows / "netflow-agent.exe")
     check_tun_build_tags(windows / "netflow-kernel-worker.exe")
     check_macho(mac / "Contents/Resources/netflow-agent")
     check_macho(mac / "Contents/Resources/netflow-kernel-worker")
+    check_tun_build_tags(mac / "Contents/Resources/netflow-agent")
     check_tun_build_tags(mac / "Contents/Resources/netflow-kernel-worker")
     with (mac / "Contents" / "Info.plist").open("rb") as f:
         plist = plistlib.load(f)

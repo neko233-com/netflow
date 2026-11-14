@@ -193,7 +193,7 @@ go build -o build/NetFlow.exe ./cmd/clash-go
 
 Windows 默认将用户数据保存在 `%APPDATA%\netflow`。开发时可通过绝对路径环境变量 `NETFLOW_CONFIG_DIR` 指定隔离的配置目录。配置、订阅链接、日志、代理备份及其他用户数据不应提交到仓库。
 
-在 Windows 上安装 WiX Toolset 3.14 后，运行 `pwsh -File scripts/build-release.ps1` 可构建上述两个平台并生成 ZIP、Windows MSI 和 SHA-256 校验文件。发布脚本在构建前检查目标文件及排他锁，已有同版本产物时拒绝覆盖；构建完成后记录输入摘要和 Windows 文件哈希。打包脚本不创建 DMG，也不会替代 macOS 原机运行测试、签名或公证。更新依赖后运行 `python scripts/collect_licenses.py` 并检查 [第三方许可清单](LICENSES/third_party/README.md)。
+在 Windows 上安装 WiX Toolset 3.14 后，运行 `pwsh -File scripts/build-release.ps1` 可构建上述两个平台并生成 ZIP、Windows MSI 和 SHA-256 校验文件。发布脚本在构建前检查目标文件及排他锁，已有同版本产物时拒绝覆盖；构建完成后记录输入摘要和 Windows 文件哈希。程序不嵌入打包时可能尚未提交的 Git 工作区标记，可通过发行标签查看源码。打包脚本不创建 DMG，也不会替代 macOS 原机运行测试、签名或公证。更新依赖后运行 `python scripts/collect_licenses.py` 并检查 [第三方许可清单](LICENSES/third_party/README.md)。
 
 隔离 Windows 验证器可通过 `pwsh -File scripts/test-windows-vm.ps1` 运行：缺少当前版本的 MSI 时会先自动在本机构建，已有产物则复用；运行前核对构建输入、Go 设置、三个程序及 MSI 的哈希，发现修改或缺少记录时拒绝测试，需要更新版本后重新构建。摘要是本地一致性检查，不是数字签名或可复现构建证明。验证器需要 Go、MyGo 所需依赖、Python、WiX Toolset 3.14、支持嵌套 KVM 的 Docker Desktop、约 4 GB 内存和足够磁盘空间；首次运行从微软下载约 4.9 GB 的 Windows 10 LTSC 评估镜像，并在专用 Docker 卷中创建一个 32 GB 上限的稀疏虚拟磁盘，后续运行复用该磁盘。Dockerfile 提供来宾环境，PowerShell 脚本负责宿主机构建和调度。测试只在经过 QEMU、单磁盘及非提升令牌检查的来宾中执行，不会切换宿主机 TUN。来宾内为无人值守测试启用 UAC 但自动同意该来宾的管理员提示；不要将其用于日常工作。验证涵盖 MSI、Verge 迁入、TUN 流量和异常恢复，不代表所有生产场景均已验证。
 

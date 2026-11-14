@@ -6,7 +6,7 @@ try {
     Set-Location -LiteralPath $repo
     (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
     $env:GOMAXPROCS = '1'
-    $env:GOFLAGS = '-p=1 -tags=with_gvisor,no_tailscale'
+    $env:GOFLAGS = '-p=1 -tags=with_gvisor,no_tailscale -buildvcs=false'
     $env:CGO_ENABLED = '0'
     $env:GOWORK = 'off'
     $version = (Get-Content -Raw mygo.json | ConvertFrom-Json).version
