@@ -20,7 +20,7 @@ import (
 func (a *App) importURLAsync(raw string, done func(error)) {
 	go func() {
 		result, err := fetchProfileResponse(raw, &http.Client{Timeout: 20 * time.Second}, "")
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			if err == nil {
 				err = a.importURLData(raw, result.body, result.headers)
 			}
@@ -103,7 +103,7 @@ func (a *App) updateProfileWithOptionsAsync(uid string, forceProxy bool, done fu
 	go func() {
 		defer client.CloseIdleConnections()
 		result, err := fetchProfileResponse(item.URL, client, item.Option.UserAgent)
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			if err == nil {
 				err = a.updateProfileData(uid, item.URL, result.body, result.headers)
 			}
@@ -139,7 +139,7 @@ func (a *App) createProfileAsync(form ui.ProfileForm, done func(error)) {
 	go func() {
 		defer client.CloseIdleConnections()
 		result, err := fetchProfileResponse(raw, client, options.UserAgent)
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			if err == nil {
 				err = a.importURLData(raw, result.body, result.headers)
 				if err == nil {

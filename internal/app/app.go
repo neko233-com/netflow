@@ -97,6 +97,9 @@ type App struct {
 	webDAVProtected     string
 	webDAVProtectionErr error
 	localCoreFactory    func() coreEngine
+	dispatch            func(func())
+	headless            bool
+	headlessCancel      func()
 }
 
 // New checks options and fills the M1 defaults. It does not start the
@@ -184,6 +187,15 @@ func (a *App) Prepare() error {
 		}
 	}
 	a.settings = settings
+	// Headless startup always begins with TUN disabled; an explicit serve
+	// request turns it on after the Agent bridge is ready and host checks pass.
+	if a.headless && settings.TUN {
+		settings.TUN = false
+		if err := a.store.Save(settings); err != nil {
+			return fmt.Errorf("关闭上次的 TUN 状态: %w", err)
+		}
+		a.settings = settings
+	}
 	tunNeedsConsent := settings.TUN && !a.tunAllowed()
 	var tunPreflightErr error
 	if settings.TUN && a.tunAllowed() {

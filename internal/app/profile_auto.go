@@ -3,7 +3,6 @@ package app
 import (
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/neko233-com/netflow/internal/profile"
 )
 
@@ -35,7 +34,7 @@ func (a *App) startProfileAuto() {
 			case <-stop:
 				return
 			case now := <-ticker.C:
-				mygo.RunOnMain(func() { a.autoUpdateOne(now) })
+				a.runOnMain(func() { a.autoUpdateOne(now) })
 			}
 		}
 	}()

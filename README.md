@@ -8,6 +8,19 @@ NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 U
 
 从 [GitHub Releases](https://github.com/neko233-com/netflow/releases) 下载 Windows x64 MSI 或便携 ZIP，或 macOS 13 及以上 Apple Silicon 的应用 ZIP。MSI 为当前用户安装到 `%LOCALAPPDATA%\Programs\NetFlow`，卸载和升级保留 `%APPDATA%\netflow` 中的用户数据。macOS 包在 Windows 上交叉构建，未在 Mac 上运行验证，也未进行 Apple 开发者签名和公证；Gatekeeper 可能阻止打开。Windows 文件同样未进行代码签名。
 
+## GUI 与无界面模式
+
+安装包同时包含图形界面和命令行。双击 `NetFlow.exe` 启动图形界面；在终端运行以下命令启动前台无界面服务，默认启用 TUN：
+
+```powershell
+$agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
+& $agent serve
+```
+
+Windows 开启 TUN 可能请求管理员授权；服务就绪后会输出包含 `ready`、`headless` 和 `tun` 的 JSON。在另一个终端可运行 `& $agent status`、`& $agent shutdown` 及下面的 Agent 命令；`shutdown` 确认收到关闭请求后返回，GUI 实例会拒绝此命令。等待 `serve` 进程退出，确认内核已停止并恢复路由。前台终端按 Ctrl+C 也会请求干净退出；若启动器意外退出，子进程会检测控制管道关闭并退出。测试和诊断时可以使用 `serve --tun=false` 启动内核而不启用 TUN，再用 `tun on` 显式开启；不会修改系统代理设置。
+
+GUI 与无界面服务使用同一配置目录锁，不能同时操作同一个目录；如需独立实例，可在命令名前提供 `--config-dir <绝对路径>` 并确保网络端口、TUN 和路由不冲突。无界面模式不创建应用窗口；Agent MCP 的 `netflow_shutdown_headless` 可请求关闭。macOS 构建包含相同入口，但尚未在 Mac 上验证运行。
+
 ## 当前状态
 
 - 已接入 mihomo 内核、订阅 URL 导入、配置激活、代理组切换、节点测速、代理与规则集合更新、模式切换、规则和连接显示、日志与托盘界面。部分功能仍需更完整的真实环境回归。

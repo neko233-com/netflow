@@ -245,7 +245,7 @@ def main():
             mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n"); mcp.stdin.flush()
             response = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
             names = {item["name"] for item in response["result"]["tools"]}
-            expected = {"netflow_status", "netflow_diagnostics", "netflow_set_tun", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
+            expected = {"netflow_status", "netflow_diagnostics", "netflow_shutdown_headless", "netflow_set_tun", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
                         "netflow_providers", "netflow_update_provider", "netflow_provider_job_status",
                         "netflow_select_proxy", "netflow_set_mode", "netflow_use_profile", "netflow_close_connection",
                         "netflow_migration_preview", "netflow_migration_import", "netflow_migration_export"}
@@ -278,7 +278,42 @@ def main():
                 time.sleep(0.2)
         finally:
             mcp.terminate(); mcp.wait(timeout=10)
-        print(f"Windows {'installed' if installed else 'portable'}: routing, CLI rewrites and expiry, diagnostics and MCP checks passed.")
+        headless_dir = sandbox / "headless-data"
+        headless_dir.mkdir()
+        (headless_dir / "config.yaml").write_text(
+            "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\n"
+            "dns: {enable: false}\ntun: {enable: false}\nrules: ['MATCH,DIRECT']\n",
+            encoding="utf-8",
+        )
+        with (sandbox / "headless.log").open("wb") as headless_log:
+            headless = subprocess.Popen([agent, "--config-dir", str(headless_dir), "serve", "--tun=false"],
+                stdout=headless_log, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+            try:
+                deadline = time.monotonic() + 30
+                while True:
+                    if headless.poll() is not None:
+                        raise RuntimeError(f"headless exited early: {headless.returncode}")
+                    result = subprocess.run([agent, "--config-dir", str(headless_dir), "status"], capture_output=True,
+                        text=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+                    if result.returncode == 0:
+                        status = json.loads(result.stdout)
+                        if status.get("headless") and status.get("running") and not status.get("tun"):
+                            break
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("headless Agent did not become ready")
+                    time.sleep(0.2)
+                result = subprocess.run([agent, "--config-dir", str(headless_dir), "shutdown"], capture_output=True,
+                    text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+                if result.returncode or not json.loads(result.stdout).get("ok"):
+                    raise RuntimeError(f"headless shutdown failed: {result.stderr}")
+                if headless.wait(timeout=30) != 0:
+                    raise RuntimeError("headless service exited with an error")
+            finally:
+                if headless.poll() is None:
+                    headless.terminate()
+                    headless.wait(timeout=10)
+        print(f"Windows {'installed' if installed else 'portable'}: GUI routing, headless CLI, rewrites and expiry, diagnostics and MCP checks passed.")
     finally:
         if app and app.poll() is None:
             app.terminate()

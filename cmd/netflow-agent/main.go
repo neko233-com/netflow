@@ -24,7 +24,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags := flag.NewFlagSet("netflow-agent", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: version, status, diagnostics, update-geo, tun on|off, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-export PATH, backup-restore PATH")
+		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, update-geo, tun on|off, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-export PATH, backup-restore PATH")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -58,6 +58,11 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	}
 	ctx := context.Background()
 	switch flags.Arg(0) {
+	case "serve":
+		if *pid != 0 {
+			return errors.New("--pid is not applicable to serve")
+		}
+		return runServe(*dir, flags.Args()[1:], output)
 	case "backup-export", "backup-restore":
 		if flags.NArg() != 2 || *pid != 0 || !filepath.IsAbs(flags.Arg(1)) {
 			return errors.New("backup command requires an absolute archive path; --pid is not applicable")
@@ -102,11 +107,11 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	case "help":
 		flags.Usage()
 		return nil
-	case "diagnostics", "update-geo", "groups", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
+	case "diagnostics", "shutdown", "update-geo", "groups", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
 		method := flags.Arg(0)
 		var input any
 		switch method {
-		case "diagnostics", "update-geo", "groups", "providers":
+		case "diagnostics", "shutdown", "update-geo", "groups", "providers":
 			if flags.NArg() != 1 {
 				return fmt.Errorf("%s takes no arguments", method)
 			}

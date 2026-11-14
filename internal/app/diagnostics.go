@@ -17,6 +17,7 @@ func (a *App) diagnostics() agent.Diagnostics {
 	if a == nil {
 		return out
 	}
+	out.Headless = a.headless
 	out.TUNPending, out.TUNHasError, out.PrivilegedKernel = a.tunBusy, a.tunLastError != "", a.privilegedTUN
 	if !a.started.IsZero() {
 		if uptime := time.Since(a.started); uptime > 0 {

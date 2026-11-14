@@ -29,6 +29,12 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "diagnostics", nil, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_shutdown_headless", Description: "Stop a headless NetFlow instance and restore its TUN routes. GUI instances reject this request."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, ActionResult, error) {
+			var out ActionResult
+			err := client.Call(ctx, "shutdown", nil, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_set_tun", Description: "Request TUN on or off; enabling may show a Windows administrator consent prompt. If pending, poll netflow_status for tun_pending and tun_error."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in TunArgs) (*mcp.CallToolResult, TunResult, error) {
 			var out TunResult

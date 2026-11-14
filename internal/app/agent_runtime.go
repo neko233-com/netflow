@@ -9,7 +9,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/neko233-com/netflow/internal/agent"
 )
 
@@ -44,7 +43,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var draft previewDraft
 		var prepareErr error
 		executed := false
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			executed = true
 			if prepareErr = ctx.Err(); prepareErr == nil {
 				draft, prepareErr = a.prepareAgentPreview(change)
@@ -66,7 +65,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var result agent.Preview
 		var finishErr error
 		executed = false
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			executed = true
 			if finishErr = ctx.Err(); finishErr == nil {
 				result, finishErr = a.finishAgentPreview(draft, checked)
@@ -80,13 +79,17 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 	var value any
 	var callErr error
 	executed := false
-	mygo.RunOnMain(func() {
+	a.runOnMain(func() {
 		executed = true
 		if err := ctx.Err(); err != nil {
 			callErr = err
 			return
 		}
 		if method == "show" {
+			if a.headless {
+				callErr = errors.New("headless instance has no window")
+				return
+			}
 			a.showMain()
 			value = map[string]bool{"shown": true}
 			return
@@ -105,6 +108,12 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		value, callErr = a.agentStatus()
 	case "diagnostics":
 		value = a.diagnostics()
+	case "shutdown":
+		if !a.headless || a.headlessCancel == nil {
+			callErr = errors.New("shutdown is available only for a headless instance")
+		} else {
+			value = agent.AfterResponse{Result: agent.ActionResult{OK: true}, After: a.headlessCancel}
+		}
 	case "preview":
 		var change agent.Change
 		if callErr = decodeStrict(args, &change); callErr == nil {
@@ -269,7 +278,7 @@ func (a *App) expiryLoop(stop <-chan struct{}) {
 			if !expired {
 				continue
 			}
-			mygo.RunOnMain(func() {
+			a.runOnMain(func() {
 				if err := a.expireRules(time.Now()); err != nil && a.model != nil {
 					a.model.Notice = "Agent 临时规则清理失败: " + err.Error()
 					if a.win != nil {

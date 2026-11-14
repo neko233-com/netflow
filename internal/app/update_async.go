@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/neko233-com/netflow/internal/ui"
 	"github.com/neko233-com/netflow/internal/update"
 )
@@ -21,7 +20,7 @@ func (a *App) checkUpdateAsync(done func(update.Result, error)) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		result, err := update.Check(ctx, nil, "", ui.AppVersion)
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			done(result, err)
 			if a.win != nil {
 				a.win.Invalidate()

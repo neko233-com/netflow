@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/neko233-com/netflow/internal/geoupdate"
 )
 
@@ -35,7 +34,7 @@ func (a *App) updateGeoAsync(done func(int, error)) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		count, err := geoupdate.Prepare(ctx, dir, config, status.MixedPort)
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			a.geoBusy = false
 			if err != nil {
 				a.geoLastError = err.Error()

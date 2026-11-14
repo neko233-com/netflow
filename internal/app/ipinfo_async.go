@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/neko233-com/netflow/internal/ipinfo"
 	"github.com/neko233-com/netflow/internal/unlock"
 )
@@ -28,7 +27,7 @@ func (a *App) queryIPAsync(done func(ipinfo.Result, error)) {
 		defer cancel()
 		client := unlock.ProxyClient(endpoint, 8*time.Second)
 		result, err := ipinfo.Fetch(ctx, client, "")
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			done(result, err)
 			if a.win != nil {
 				a.win.Invalidate()

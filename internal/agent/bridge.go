@@ -34,6 +34,14 @@ type endpoint struct {
 }
 type Handler func(context.Context, string, json.RawMessage) (any, error)
 
+// AfterResponse performs a local action after the bridge has written its reply.
+// It is used for graceful shutdown, where closing the server before replying
+// would make the caller unable to tell whether its request was accepted.
+type AfterResponse struct {
+	Result any
+	After  func()
+}
+
 type Bridge struct {
 	server   *http.Server
 	listener net.Listener
@@ -122,12 +130,21 @@ func Start(dir string, handle Handler) (*Bridge, error) {
 			_ = json.NewEncoder(w).Encode(response{Error: err.Error()})
 			return
 		}
+		var after func()
+		if deferred, ok := result.(AfterResponse); ok {
+			result, after = deferred.Result, deferred.After
+		}
 		payload, err := json.Marshal(result)
 		if err != nil {
 			_ = json.NewEncoder(w).Encode(response{Error: "encode response failed"})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(response{Result: payload})
+		if err := json.NewEncoder(w).Encode(response{Result: payload}); err == nil && after != nil {
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			after()
+		}
 	})}
 	go func() { _ = b.server.Serve(listener) }()
 	return b, nil

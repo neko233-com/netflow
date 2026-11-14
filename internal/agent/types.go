@@ -14,6 +14,7 @@ type Profile struct {
 }
 type Status struct {
 	Running              bool          `json:"running"`
+	Headless             bool          `json:"headless"`
 	TUN                  bool          `json:"tun"`
 	TUNPending           bool          `json:"tun_pending"`
 	TUNError             string        `json:"tun_error,omitempty"`
@@ -40,6 +41,7 @@ type Diagnostics struct {
 	Architecture           string `json:"architecture"`
 	GoVersion              string `json:"go_version"`
 	CoreRunning            bool   `json:"core_running"`
+	Headless               bool   `json:"headless"`
 	CoreHasError           bool   `json:"core_has_error"`
 	Mode                   string `json:"mode"`
 	TUN                    bool   `json:"tun"`

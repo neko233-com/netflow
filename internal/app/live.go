@@ -5,7 +5,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/neko233-com/netflow/internal/clashlog"
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/rules"
@@ -77,7 +76,7 @@ func (a *App) liveLoop(stop <-chan struct{}) {
 		case <-tick.C:
 			n++
 			sampleConn := n%10 == 0
-			mygo.RunOnMain(func() {
+			a.runOnMain(func() {
 				if a.model == nil || a.logs == nil {
 					return
 				}

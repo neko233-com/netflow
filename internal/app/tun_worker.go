@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/tun"
 )
@@ -57,7 +56,7 @@ func (a *App) requestTUN(on bool, done func(error)) {
 		defer cancel()
 		worker, err := launchTUNWorker(ctx)
 		ran := false
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			ran = true
 			defer func() { a.tunBusy = false }()
 			if err == nil {

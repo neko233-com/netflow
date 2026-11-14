@@ -4,7 +4,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/egoist/mygo"
 	"github.com/neko233-com/netflow/internal/core"
 )
 
@@ -20,7 +19,7 @@ func (a *App) probeSiteAsync(url string, done func(int, error)) {
 		}
 		defer func() { <-slots }()
 		ms, err := a.probeSite(url)
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			done(ms, err)
 			if a.win != nil {
 				a.win.Invalidate()
@@ -39,7 +38,7 @@ func (a *App) testProxyAsync(group, name, url string, done func(int, error)) {
 		}
 		defer func() { <-slots }()
 		ms, err := a.core.TestDelay(group, name, url, 10*time.Second)
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			done(ms, err)
 			if a.win != nil {
 				a.win.Invalidate()
@@ -58,7 +57,7 @@ func (a *App) checkUnlockAsync(name string, done func(string, string, int, error
 		}
 		defer func() { <-slots }()
 		status, region, ms, err := a.checkUnlock(name)
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			done(status, region, ms, err)
 			if a.win != nil {
 				a.win.Invalidate()
@@ -78,7 +77,7 @@ func (a *App) updateProxyProviderAsync(name string, done func(error)) {
 		}
 		defer func() { <-slots }()
 		err := a.updateProviderForProfile("proxy", name, profileID)
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			if err == nil && a.core.ProfileID() == profileID {
 				a.loadGroups()
 				a.refreshHome()
@@ -102,7 +101,7 @@ func (a *App) updateRuleProviderAsync(name string, done func(error)) {
 		}
 		defer func() { <-slots }()
 		err := a.updateProviderForProfile("rule", name, profileID)
-		mygo.RunOnMain(func() {
+		a.runOnMain(func() {
 			done(err)
 			if a.win != nil {
 				a.win.Invalidate()

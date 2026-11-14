@@ -126,6 +126,200 @@ func vmHash(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), err
 }
 
+func vmVisibleWindows(pid uint32) int {
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	enum := user32.NewProc("EnumWindows")
+	windowPID := user32.NewProc("GetWindowThreadProcessId")
+	visible := user32.NewProc("IsWindowVisible")
+	count := 0
+	callback := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+		var owner uint32
+		windowPID.Call(hwnd, uintptr(unsafe.Pointer(&owner)))
+		if owner == pid {
+			if shown, _, _ := visible.Call(hwnd); shown != 0 {
+				count++
+			}
+		}
+		return 1
+	})
+	if result, _, _ := enum.Call(callback, 0); result == 0 {
+		return -1
+	}
+	return count
+}
+
+func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := os.CreateTemp(t.TempDir(), "headless-*.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logFile.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server := vmCommand(ctx, agentExe, "--config-dir", dir, "serve")
+	server.Stdout, server.Stderr = logFile, logFile
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- server.Wait() }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			_ = server.Process.Kill()
+			<-finished
+		}
+		if t.Failed() {
+			_ = logFile.Sync()
+			data, _ := os.ReadFile(logFile.Name())
+			if len(data) > 65536 {
+				data = data[len(data)-65536:]
+			}
+			t.Logf("headless log tail: %s", data)
+		}
+	}()
+	call := func(args ...string) ([]byte, error) {
+		c, done := context.WithTimeout(context.Background(), 10*time.Second)
+		defer done()
+		return vmCommand(c, agentExe, append([]string{"--config-dir", dir}, args...)...).CombinedOutput()
+	}
+	var status agent.Status
+	deadline := time.Now().Add(100 * time.Second)
+	for time.Now().Before(deadline) {
+		out, callErr := call("status")
+		if callErr == nil && json.Unmarshal(out, &status) == nil && !status.TUNPending && status.TUN {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !status.TUN || !status.Headless {
+		t.Fatalf("headless TUN did not start: %+v", status)
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "agent"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("headless endpoint unavailable: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "agent", entries[0].Name()))
+	var endpoint struct {
+		PID uint32 `json:"pid"`
+	}
+	if err != nil || json.Unmarshal(data, &endpoint) != nil || endpoint.PID == 0 {
+		t.Fatal("invalid headless endpoint")
+	}
+	if windows := vmVisibleWindows(endpoint.PID); windows != 0 {
+		t.Fatalf("headless process has %d visible windows", windows)
+	}
+	input := `{"scope":"global","operation":"set","layer":{"prepend":["DOMAIN,headless.example,DIRECT"]}}`
+	c, done := context.WithTimeout(context.Background(), 30*time.Second)
+	preview := vmCommand(c, agentExe, "--config-dir", dir, "preview")
+	preview.Stdin = strings.NewReader(input)
+	out, err := preview.CombinedOutput()
+	done()
+	var proposal agent.Preview
+	if err != nil || json.Unmarshal(out, &proposal) != nil || proposal.ProposalID == "" {
+		t.Fatalf("headless preview failed: %s %v", out, err)
+	}
+	if out, err = call("apply", proposal.ProposalID); err != nil {
+		t.Fatalf("headless apply failed: %s %v", out, err)
+	}
+	if out, err = call("shutdown"); err != nil {
+		t.Fatalf("headless shutdown failed: %s %v", out, err)
+	}
+	select {
+	case err := <-finished:
+		stopped = true
+		if err != nil {
+			t.Fatalf("headless process exit: %v", err)
+		}
+	case <-time.After(45 * time.Second):
+		t.Fatal("headless process did not stop")
+	}
+	_ = logFile.Sync()
+	readyOutput, err := os.ReadFile(logFile.Name())
+	if err != nil || !strings.Contains(string(readyOutput), `"ready":true`) || !strings.Contains(string(readyOutput), `"headless":true`) {
+		t.Fatal("headless CLI did not emit its readiness result")
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, dns, e := vmNetworkSnapshot()
+		if e == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatal("headless shutdown did not restore routes and DNS")
+}
+
+func vmHeadlessParentExit(t *testing.T, agentExe, dir string) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := os.CreateTemp(t.TempDir(), "headless-parent-*.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logFile.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server := vmCommand(ctx, agentExe, "--config-dir", dir, "serve")
+	server.Stdout, server.Stderr = logFile, logFile
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- server.Wait() }()
+	reaped := false
+	defer func() {
+		if !reaped {
+			_ = server.Process.Kill()
+			<-finished
+		}
+		if t.Failed() {
+			_ = logFile.Sync()
+			data, _ := os.ReadFile(logFile.Name())
+			if len(data) > 65536 {
+				data = data[len(data)-65536:]
+			}
+			t.Logf("headless parent-exit log: %s", data)
+		}
+	}()
+	client := agent.Client{Dir: dir, Timeout: 3 * time.Second}
+	deadline := time.Now().Add(100 * time.Second)
+	var status agent.Status
+	for time.Now().Before(deadline) {
+		if err := client.Call(context.Background(), "status", nil, &status); err == nil && status.Headless && status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !status.TUN {
+		t.Fatal("headless parent-exit test did not reach TUN")
+	}
+	if err := server.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	<-finished
+	reaped = true
+	deadline = time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		var current agent.Status
+		bridgeErr := client.Call(context.Background(), "status", nil, &current)
+		routes, dns, snapshotErr := vmNetworkSnapshot()
+		if bridgeErr != nil && snapshotErr == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatal("headless child did not clean up after its launcher exited")
+}
+
 // This test exercises the shipped MSI and real Wintun only inside the isolated,
 // single-disk QEMU guest; it must never run against a workstation's routes.
 func TestWindowsVMEndToEnd(t *testing.T) {
@@ -593,6 +787,10 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		}
 	}()
 	t.Log("migrated DNS, hosts, proxy and group extensions applied by installed GUI")
+	vmHeadlessRoundTrip(t, agentExe, backupTarget)
+	t.Log("installed headless CLI activated TUN, applied a rewrite without visible windows, and restored networking on shutdown")
+	vmHeadlessParentExit(t, agentExe, backupTarget)
+	t.Log("headless child restored networking after its CLI launcher was forcibly terminated")
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
 	if err != nil {
 		t.Fatal(err)
