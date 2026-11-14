@@ -1,5 +1,19 @@
 #!/bin/sh
 set -eu
+# Opt-in validation of the host retry path. The marker is unique to this run
+# and stored only on the owned validation volume; ordinary runs never use it.
+if [ "${NETFLOW_TEST_BOOT_FAILURE:-}" = "1" ]; then
+  case "${NETFLOW_RUN_ID:-}" in
+    *[!0-9a-f]*|'') echo 'Invalid retry test run ID' >&2; exit 1 ;;
+  esac
+  marker="/storage/.netflow-retry-test-$NETFLOW_RUN_ID"
+  if [ ! -f "$marker" ]; then
+    : > "$marker"
+    echo 'NETFLOW_TEST_SIMULATED: Timeout while waiting for QEMU to boot the machine, terminating...' >&2
+    exit 1
+  fi
+  rm -f -- "$marker"
+fi
 python3 /opt/netflow/bridge.py &
 bridge=$!
 i=0

@@ -1,12 +1,33 @@
-param([int]$TimeoutMinutes = 45)
+param([int]$TimeoutMinutes = 45, [switch]$TestPolicyOnly, [switch]$VerifyBootRetry)
 $ErrorActionPreference = 'Stop'
+function Test-NetFlowBootRetry([int]$Attempt, [bool]$HasResult, [string]$Log) {
+    return $Attempt -lt 2 -and -not $HasResult -and $Log.Contains('Timeout while waiting for QEMU to boot the machine, terminating...')
+}
+function Protect-NetFlowDiagnostic([string]$Log) {
+    return [regex]::Replace($Log, '(?i)https?://[^\s"\\<>]+', '[URL redacted]')
+}
+if ($TestPolicyOnly) {
+    $message = 'Timeout while waiting for QEMU to boot the machine, terminating...'
+    if (-not (Test-NetFlowBootRetry 1 $false $message)) { throw 'Expected one boot retry' }
+    if ((Test-NetFlowBootRetry 2 $false $message) -or (Test-NetFlowBootRetry 1 $true $message) -or (Test-NetFlowBootRetry 1 $false 'unrelated failure')) { throw 'Unsafe boot retry decision' }
+    $redacted = Protect-NetFlowDiagnostic 'failure https://example.invalid/path?token=synthetic-secret retained'
+    if ($redacted.Contains('synthetic-secret') -or -not $redacted.Contains('retained')) { throw 'Diagnostic redaction failed' }
+    Write-Output 'Boot retry policy passed'
+    return
+}
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $previous = Get-Location
 $guestStarted = $false
+$runLock = $null
 try {
     Set-Location -LiteralPath $repo
     (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
     $env:GOMAXPROCS = '1'; $env:CGO_ENABLED = '0'
+    $buildRoot = Join-Path $repo 'build'
+    New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
+    try {
+        $runLock = [IO.File]::Open((Join-Path $buildRoot 'windows-vm-validator.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    } catch { throw 'Another Windows validation may be running; refusing to start a concurrent run.' }
     $volume = 'netflow-windows-vm-v1'; $container = 'netflow-windows-vm-validation'
     $label = 'netflow.windows-vm'
     $context = Join-Path $repo 'build/windows-vm-context'
@@ -20,8 +41,8 @@ try {
     if ($existing) {
         $owned = docker inspect --format '{{ index .Config.Labels "netflow.windows-vm" }}' $existing
         if ($owned -ne '1') { throw 'Refusing to replace a container without the NetFlow validation label' }
-        docker stop --time 120 $existing | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'Could not stop the existing validation guest' }
+        $running = docker inspect --format '{{.State.Running}}' $existing
+        if ($running -ne 'false') { throw 'An existing validation guest is running or unavailable; refusing to interrupt it.' }
         docker rm $existing | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Could not remove the stopped validation container' }
     }
@@ -60,13 +81,43 @@ try {
     $runID = [guid]::NewGuid().ToString('N')
     [IO.File]::WriteAllText((Join-Path $payload 'media-id.txt'), $runID, [Text.UTF8Encoding]::new($false))
     $guestPassword = [guid]::NewGuid().ToString('N') + 'Aa1!'
-    docker run -d --name $container --label "$label=1" --cpus=1 --memory=5g --device=/dev/kvm --mount "type=volume,source=$volume,target=/storage" --mount "type=bind,source=$payload,target=/payload,readonly" -e "NETFLOW_RUN_ID=$runID" -e USERNAME=NetFlowTest -e "PASSWORD=$guestPassword" netflow-windows-vm:local | Out-Null
+    $testEnv = @()
+    if ($VerifyBootRetry) { $testEnv = @('-e', 'NETFLOW_TEST_BOOT_FAILURE=1') }
+    docker run -d --name $container --label "$label=1" --cpus=1 --memory=5g --device=/dev/kvm --mount "type=volume,source=$volume,target=/storage" --mount "type=bind,source=$payload,target=/payload,readonly" -e "NETFLOW_RUN_ID=$runID" -e USERNAME=NetFlowTest -e "PASSWORD=$guestPassword" @testEnv netflow-windows-vm:local | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not start Windows validation guest' }
     $guestStarted = $true
     $until = (Get-Date).AddMinutes($TimeoutMinutes)
+    $bootAttempt = 1
     while ((Get-Date) -lt $until) {
         $state = docker inspect --format '{{.State.Running}}' $container
-        if ($state -ne 'true') { docker logs --tail 100 $container; throw 'Windows guest stopped before validation completed' }
+        if ($state -ne 'true') {
+            # A result can be written immediately before the guest exits.
+            # Preserve it before deciding whether a boot retry is safe.
+            $localResult = Join-Path $repo "build/windows-vm-result-$runID.json"
+            docker cp "${container}:/storage/netflow-results/$runID.json" $localResult 2>$null
+            $hasResult = $LASTEXITCODE -eq 0
+            if ($hasResult) {
+                $record = Get-Content -Raw -LiteralPath $localResult | ConvertFrom-Json
+                $record.output
+                if (-not $record.ok) { throw "Windows validation failed: $($record.error)" }
+                Write-Output "Windows validation passed: $runID"
+                return
+            }
+            $logs = Protect-NetFlowDiagnostic (docker logs --tail 100 $container 2>&1 | Out-String)
+            $logPath = Join-Path $repo "build/windows-vm-boot-$runID-attempt-$bootAttempt.log"
+            [IO.File]::WriteAllText($logPath, $logs, [Text.UTF8Encoding]::new($false))
+            Write-Output $logs
+            if (Test-NetFlowBootRetry $bootAttempt $hasResult $logs) {
+                $owned = docker inspect --format '{{ index .Config.Labels "netflow.windows-vm" }}' $container
+                if ($owned -ne '1') { throw 'Refusing to restart an unowned validation container' }
+                $bootAttempt++
+                Write-Warning 'Boot watchdog expired before a result; retrying the owned guest once.'
+                docker start $container | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw 'Could not restart the validation guest' }
+                continue
+            }
+            throw 'Windows guest stopped before validation completed'
+        }
         $result = docker exec $container sh -c "test ! -f /storage/netflow-results/$runID.json || cat /storage/netflow-results/$runID.json"
         if ($result) {
             $record = $result | ConvertFrom-Json
@@ -94,5 +145,6 @@ try {
             }
         } catch { Write-Warning "Could not stop the owned validation guest: $_" }
     }
+    if ($null -ne $runLock) { $runLock.Dispose() }
     Set-Location -LiteralPath $previous
 }
