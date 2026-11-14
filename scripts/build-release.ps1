@@ -1,17 +1,29 @@
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $oldLocation = Get-Location
+$releaseLock = $null
 try {
     Set-Location -LiteralPath $repo
     (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
     $env:GOMAXPROCS = '1'
     $env:GOFLAGS = '-p=1 -tags=with_gvisor,no_tailscale'
     $env:CGO_ENABLED = '0'
+    $env:GOWORK = 'off'
     $version = (Get-Content -Raw mygo.json | ConvertFrom-Json).version
     $numericVersion = $version.Split('-')[0]
     if ($numericVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid MSI version' }
     $buildDir = "build/release-artifacts-$version"
     $msiDir = "build/msi/$version"
+    & python scripts/build_inputs.py check-output
+    if ($LASTEXITCODE -ne 0) { throw 'Release destination is unsafe, occupied, or the version is invalid.' }
+    New-Item -ItemType Directory -Force -Path build | Out-Null
+    try {
+        $releaseLock = [IO.File]::Open((Join-Path $repo 'build/netflow-release.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    } catch { throw 'Another release build may be running; refusing to share its staging files.' }
+    & python scripts/build_inputs.py check-output
+    if ($LASTEXITCODE -ne 0) { throw 'Release assets already exist or the version is invalid; refusing to overwrite them.' }
+    $inputDigest = (& python scripts/build_inputs.py fingerprint | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $inputDigest -notmatch '^[0-9a-f]{64}$') { throw 'Could not fingerprint release inputs' }
     New-Item -ItemType Directory -Force resources/windows-amd64,resources/darwin-arm64,$msiDir | Out-Null
     $env:GOOS = 'windows'; $env:GOARCH = 'amd64'
     & go build -trimpath '-ldflags=-s -w' -o resources/windows-amd64/netflow-agent.exe ./cmd/netflow-agent
@@ -41,6 +53,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'WiX link failed' }
     & python scripts/package_release.py
     if ($LASTEXITCODE -ne 0) { throw "Packaging failed with exit code $LASTEXITCODE" }
+    & python scripts/build_inputs.py record $inputDigest
+    if ($LASTEXITCODE -ne 0) { throw 'Release provenance could not be recorded; the artifacts are unverified.' }
 } finally {
+    if ($null -ne $releaseLock) { $releaseLock.Dispose() }
     Set-Location -LiteralPath $oldLocation
 }

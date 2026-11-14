@@ -10,6 +10,10 @@ function Protect-NetFlowDiagnostic([string]$Log, [string[]]$Secrets = @()) {
     }
     return $safe
 }
+function Assert-NetFlowReleaseCurrent {
+    & python scripts/build_inputs.py verify
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot validate stale, modified or unrecorded release artifacts.' }
+}
 if ($TestPolicyOnly) {
     $message = 'Timeout while waiting for QEMU to boot the machine, terminating...'
     if (-not (Test-NetFlowBootRetry 1 $false $message)) { throw 'Expected one boot retry' }
@@ -26,12 +30,16 @@ $runLock = $null
 try {
     Set-Location -LiteralPath $repo
     (Get-Process -Id $PID).PriorityClass = 'BelowNormal'
-    $env:GOMAXPROCS = '1'; $env:CGO_ENABLED = '0'
+    $env:GOMAXPROCS = '1'; $env:CGO_ENABLED = '0'; $env:GOWORK = 'off'
     $buildRoot = Join-Path $repo 'build'
+    & python scripts/build_inputs.py check-vm
+    if ($LASTEXITCODE -ne 0) { throw 'Windows validation paths are unsafe.' }
     New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
     try {
         $runLock = [IO.File]::Open((Join-Path $buildRoot 'windows-vm-validator.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     } catch { throw 'Another Windows validation may be running; refusing to start a concurrent run.' }
+    & python scripts/build_inputs.py check-vm
+    if ($LASTEXITCODE -ne 0) { throw 'Windows validation paths changed or are unsafe.' }
     $volume = 'netflow-windows-vm-v1'; $container = 'netflow-windows-vm-validation'
     $label = 'netflow.windows-vm'
     $context = Join-Path $repo 'build/windows-vm-context'
@@ -41,6 +49,14 @@ try {
     # Docker Desktop's Linux VM may not load the nested KVM driver until needed.
     wsl.exe -d docker-desktop -u root -- sh -c 'test -c /dev/kvm || { if grep -q AuthenticAMD /proc/cpuinfo; then modprobe kvm-amd; else modprobe kvm-intel; fi; }; test -c /dev/kvm'
     if ($LASTEXITCODE -ne 0) { throw 'Nested KVM is unavailable; a real Windows guest is required' }
+    $version = (Get-Content -Raw mygo.json | ConvertFrom-Json).version
+    $msi = Join-Path $repo "build/releases/$version/NetFlow-$version-windows-amd64.msi"
+    if (-not (Test-Path -LiteralPath $msi -PathType Leaf)) {
+        Write-Output 'Release MSI is absent; building it locally before validation.'
+        & pwsh -NoProfile -File (Join-Path $repo 'scripts/build-release.ps1')
+        if ($LASTEXITCODE -ne 0) { throw 'Automatic local release build failed' }
+    }
+    Assert-NetFlowReleaseCurrent
     $existing = docker ps -a --filter "name=^/$container`$" --format '{{.ID}}'
     if ($existing) {
         $owned = docker inspect --format '{{ index .Config.Labels "netflow.windows-vm" }}' $existing
@@ -69,10 +85,7 @@ try {
     go test -p 1 '-tags=integration,with_gvisor,no_tailscale' '-ldflags=-s -w -H=windowsgui' -c -o (Join-Path $payload 'netflow-app.test.exe') ./internal/app
     if ($LASTEXITCODE -ne 0) { throw 'Could not build Windows integration test' }
     Remove-Item Env:GOOS,Env:GOARCH
-    $version = (Get-Content -Raw mygo.json | ConvertFrom-Json).version
     $source = Join-Path $repo "build/release-artifacts-$version/windows-amd64"
-    $msi = Join-Path $repo "build/releases/$version/NetFlow-$version-windows-amd64.msi"
-    if (-not (Test-Path -LiteralPath $msi)) { throw 'Build the release MSI first using scripts/build-release.ps1' }
     Copy-Item -LiteralPath $msi -Destination (Join-Path $payload 'NetFlow.msi') -Force
     $hashes = [ordered]@{}
     foreach ($name in @('NetFlow.exe','netflow-agent.exe','netflow-kernel-worker.exe')) {
@@ -80,6 +93,7 @@ try {
     }
     [IO.File]::WriteAllText((Join-Path $payload 'expected.json'), ($hashes | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $payload 'ready'), 'ready', [Text.UTF8Encoding]::new($false))
+    Assert-NetFlowReleaseCurrent
     docker build -t netflow-windows-vm:local $context
     if ($LASTEXITCODE -ne 0) { throw 'Docker image build failed' }
     docker run --rm --network none --cpus=1 --entrypoint python3 netflow-windows-vm:local /opt/netflow/test_monitor.py
@@ -106,6 +120,7 @@ try {
                 $record = Get-Content -Raw -LiteralPath $localResult | ConvertFrom-Json
                 $record.output
                 if (-not $record.ok) { throw "Windows validation failed: $($record.error)" }
+                Assert-NetFlowReleaseCurrent
                 Write-Output "Windows validation passed: $runID"
                 return
             }
@@ -131,6 +146,7 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'Could not preserve the validation result' }
             $record.output
             if (-not $record.ok) { throw "Windows validation failed: $($record.error)" }
+            Assert-NetFlowReleaseCurrent
             # Once a bootable disk has passed validation, the verified ISO is
             # no longer needed. Keep the virtual disk and all result records.
             docker exec $container sh -c 'if test -f /storage/windows.system || test -f /storage/windows.boot; then rm -f -- /storage/netflow-media/win10x64-enterprise-ltsc-eval.iso /storage/netflow-media/win10x64-enterprise-ltsc-eval.iso.aria2; fi'

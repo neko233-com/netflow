@@ -6,6 +6,10 @@ build Windows amd64 and macOS arm64, checks the binary formats and macOS
 minimum version, makes portable ZIPs with Unix executable permissions, and
 calculates SHA-256 checksums. WiX Toolset 3.14 is required for the per-user MSI.
 The destination must not already contain files with the same release names.
+The build checks this before touching staging files, uses an exclusive build
+lock, and records the source/Go environment fingerprint and Windows artifact
+hashes in the ignored staging directory. It refuses to stamp a build if inputs
+changed while it was running.
 
 `python scripts/smoke_windows.py -Quiet` extracts the portable executable into a
 unique directory inside `build`, starts it with an isolated configuration,
@@ -31,6 +35,14 @@ validate Windows Wintun, macOS utun or IPv6 routing.
 
 These checks do not verify Windows TUN, code signatures, Apple notarization,
 or running the macOS app on a Mac.
+
+`pwsh -File scripts/test-windows-vm.ps1` checks Docker/KVM, builds the current
+release locally if its MSI is absent, and verifies the recorded inputs and
+Windows hashes before staging, after staging, and after guest testing. Repeated runs reuse a
+matching build and the owned virtual disk. A stale or unrecorded release is
+rejected; bump the version before rebuilding. This is a consistency check,
+not a digital signature, and the Docker image still needs host-side Go,
+Python, MyGo dependencies and WiX to build a missing release.
 
 The Windows background worker icon is generated from `resources/icon.ico`:
 `windres --input scripts/netflow-worker.rc --input-format rc --output-format coff --target pe-x86-64 --output cmd/netflow-kernel-worker/icon_windows_amd64.syso`.
