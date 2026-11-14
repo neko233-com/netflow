@@ -4,6 +4,8 @@ NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 U
 
 **目前是开发预览版，尚未达到 Clash Verge 功能对等，也不建议替代现有稳定客户端。** 本项目从 [Clash Go](https://github.com/charlzyx/clash-go) 的 `0a0fd79` 版本开始，保留上游 MIT 许可和署名，正进行 Windows 适配。
 
+`0.2.99-alpha.1` 的 Windows 程序曾被隔离来宾 Defender 阻止，尚无微软误报裁定；依赖扫描与验证限制见 [安全检查记录](docs/security-audit.md)。
+
 ## 下载
 
 从 [GitHub Releases](https://github.com/neko233-com/netflow/releases) 下载 Windows x64 MSI 或便携 ZIP，或 macOS 13 及以上 Apple Silicon 的应用 ZIP。MSI 为当前用户安装到 `%LOCALAPPDATA%\Programs\NetFlow`，卸载和升级保留 `%APPDATA%\netflow` 中的用户数据。macOS 包在 Windows 上交叉构建，未在 Mac 上运行验证，也未进行 Apple 开发者签名和公证；Gatekeeper 可能阻止打开。Windows 文件同样未进行代码签名。
