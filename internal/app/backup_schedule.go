@@ -58,7 +58,7 @@ func (a *App) setBackupSchedule(enabled bool, directory string, hours int, now t
 		if a.model != nil {
 			a.model.BackupSchedule = s
 		}
-		a.backupRetry, a.backupScheduleError = time.Time{}, ""
+		a.backupRetry, a.backupCheckAfter, a.backupScheduleError = time.Time{}, time.Time{}, ""
 		return s, nil
 	}
 	if !validArchivePath(directory) || hours < 1 || hours > 168 {
@@ -88,7 +88,7 @@ func (a *App) setBackupSchedule(enabled bool, directory string, hours int, now t
 		a.model.BackupSchedule = s
 		a.model.BackupHours = fmt.Sprint(hours)
 	}
-	a.backupRetry, a.backupScheduleError = time.Time{}, ""
+	a.backupRetry, a.backupCheckAfter, a.backupScheduleError = time.Time{}, time.Time{}, ""
 	return s, nil
 }
 
@@ -132,7 +132,7 @@ func scheduledDestination(ctx context.Context, directory string, now time.Time) 
 }
 
 func (a *App) autoBackupOne(now time.Time) {
-	if a.backupBusy || a.tunBusy || now.Before(a.backupRetry) {
+	if a.backupBusy || a.tunBusy || now.Before(a.backupRetry) || now.Before(a.backupCheckAfter) {
 		return
 	}
 	s, err := a.loadBackupSchedule()
@@ -140,7 +140,15 @@ func (a *App) autoBackupOne(now time.Time) {
 		a.backupRetry, a.backupScheduleError = now.Add(autoRetryDelay), "cannot read automatic backup schedule"
 		return
 	}
-	if !s.Enabled || now.Before(s.NextRun) {
+	if !s.Enabled {
+		a.backupCheckAfter = now.Add(time.Minute)
+		return
+	}
+	if now.Before(s.NextRun) {
+		a.backupCheckAfter = s.NextRun
+		if limit := now.Add(time.Minute); a.backupCheckAfter.After(limit) {
+			a.backupCheckAfter = limit
+		}
 		return
 	}
 	dir := a.dir

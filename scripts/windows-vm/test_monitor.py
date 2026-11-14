@@ -9,6 +9,10 @@ import subprocess
 import tempfile
 import time
 
+entry = Path("/run/entry.sh").read_text()
+if entry.count('waitForBoot "$pid" 120 &') != 1:
+    raise RuntimeError("nested-KVM boot timeout override missing")
+
 source = Path("/opt/netflow/bridge.py")
 tree = ast.parse(source.read_text(encoding="utf-8"), str(source))
 functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {"monitor_command", "detach_setup_media", "desktop_ready", "start_media_from_desktop", "drive_order", "bootstrap_media_agent"}]

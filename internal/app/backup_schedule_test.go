@@ -94,3 +94,34 @@ func TestAutomaticBackupLimitNeverDeletesFiles(t *testing.T) {
 		t.Fatal("existing archives changed", err)
 	}
 }
+
+func TestBackupScheduleChecksAreThrottledAndReconfigurationWakesThem(t *testing.T) {
+	dir, dest := t.TempDir(), t.TempDir()
+	a := &App{dir: dir, core: diagnosticsTestEngine{}}
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	a.autoBackupOne(now)
+	if !a.backupCheckAfter.Equal(now.Add(time.Minute)) {
+		t.Fatal("disabled schedule did not throttle disk reads")
+	}
+	if err := os.WriteFile(filepath.Join(dir, scheduleFile), []byte("invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.autoBackupOne(now.Add(5 * time.Second))
+	if a.backupScheduleError != "" {
+		t.Fatal("read schedule before the throttle elapsed")
+	}
+	a.autoBackupOne(now.Add(time.Minute))
+	if a.backupScheduleError == "" {
+		t.Fatal("failed to recheck an externally changed schedule")
+	}
+	if _, err := a.setBackupSchedule(true, dest, 24, now); err != nil {
+		t.Fatal(err)
+	}
+	if !a.backupCheckAfter.IsZero() || !a.backupRetry.IsZero() {
+		t.Fatal("explicit reconfiguration did not wake the scheduler")
+	}
+	a.autoBackupOne(now.Add(5 * time.Second))
+	if !a.backupCheckAfter.Equal(now.Add(65 * time.Second)) {
+		t.Fatal("future schedule was not throttled")
+	}
+}

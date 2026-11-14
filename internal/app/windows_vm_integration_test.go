@@ -383,6 +383,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if err := os.Mkdir(scheduledDir, 0700); err != nil {
 		t.Fatal(err)
 	}
+	scheduledStart := time.Now()
 	payload, err = call("backup-schedule-set", "on", scheduledDir, "1")
 	var schedule agent.BackupSchedule
 	if err != nil || json.Unmarshal(payload, &schedule) != nil || !schedule.Enabled {
@@ -413,7 +414,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if payload, err := call("backup-schedule-set", "off"); err != nil {
 		t.Fatalf("disable schedule: %s %v", payload, err)
 	}
-	t.Log("installed headless Agent scheduled a live TUN backup and disabled its schedule")
+	t.Logf("installed headless Agent scheduled a live TUN backup and disabled its schedule in %s", time.Since(scheduledStart).Round(time.Millisecond))
 	liveArchive := filepath.Join(backupRoot, "live.zip")
 	payload, err = call("backup-create", liveArchive)
 	var backupJob agent.BackupJob

@@ -103,6 +103,7 @@ type App struct {
 	backupCancel        func()
 	backupDone          chan struct{}
 	backupRetry         time.Time
+	backupCheckAfter    time.Time
 	backupScheduleError string
 	webDAVProtected     string
 	webDAVProtectionErr error

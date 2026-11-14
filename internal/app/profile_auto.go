@@ -27,14 +27,18 @@ func (a *App) startProfileAuto() {
 	a.profileAutoRetry = make(map[string]time.Time)
 	stop := a.profileAutoStop
 	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
+		profileTicker := time.NewTicker(time.Minute)
+		backupTicker := time.NewTicker(5 * time.Second)
+		defer profileTicker.Stop()
+		defer backupTicker.Stop()
 		for {
 			select {
 			case <-stop:
 				return
-			case now := <-ticker.C:
-				a.runOnMain(func() { a.autoUpdateOne(now); a.autoBackupOne(now) })
+			case now := <-profileTicker.C:
+				a.runOnMain(func() { a.autoUpdateOne(now) })
+			case now := <-backupTicker.C:
+				a.runOnMain(func() { a.autoBackupOne(now) })
 			}
 		}
 	}()
