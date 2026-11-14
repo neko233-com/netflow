@@ -1002,6 +1002,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if payload, err := call("backup-on-change", "on"); err != nil {
 		t.Fatalf("enable WebDAV baseline: %s %v", payload, err)
 	}
+	var automaticArchive string
 	select {
 	case got := <-webdavReceived:
 		archives, err := os.ReadDir(scheduledDir)
@@ -1013,6 +1014,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 			hash, err := vmHash(filepath.Join(scheduledDir, item.Name()))
 			if err == nil && hash == hex.EncodeToString(got[:]) {
 				matched = true
+				automaticArchive = item.Name()
 				break
 			}
 		}
@@ -1033,6 +1035,64 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if err != nil || schedule.WebDAVPending != 0 {
 		t.Fatalf("automatic WebDAV queue not drained: %s %v", payload, err)
 	}
+	// Fill the local cap and make an existing snapshot pending while the
+	// local timer is due. An actual local failure must not starve its upload.
+	existing, err := os.ReadDir(scheduledDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := len(existing); i < scheduleLimit; i++ {
+		name := fmt.Sprintf("netflow-auto-fill-%02d.zip", i)
+		if err := os.WriteFile(filepath.Join(scheduledDir, name), []byte("keep"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archiveHash, err := vmHash(filepath.Join(scheduledDir, automaticArchive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduleReader := &App{dir: dir}
+	state, raw, err := scheduleReader.readBackupSchedule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.NextRun = time.Now().UTC().Add(-time.Minute)
+	state.WebDAVQueue = []queuedWebDAVBackup{{Name: automaticArchive, Digest: archiveHash}}
+	if err := scheduleReader.writeBackupState(state, raw); err != nil {
+		t.Fatal(err)
+	}
+	until = time.Now().Add(90 * time.Second)
+	for time.Now().Before(until) {
+		payload, err = call("backup-schedule")
+		if err == nil && json.Unmarshal(payload, &schedule) == nil && schedule.LastError != "" && schedule.NextRetry.After(time.Now()) {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil || schedule.LastError == "" || !schedule.NextRetry.After(time.Now()) {
+		t.Fatalf("local cap did not trigger backoff: %s %v", payload, err)
+	}
+	select {
+	case got := <-webdavReceived:
+		if hex.EncodeToString(got[:]) != archiveHash {
+			t.Fatal("queued upload changed")
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("local backoff starved queued upload")
+	}
+	until = time.Now().Add(30 * time.Second)
+	for time.Now().Before(until) {
+		payload, err = call("backup-schedule")
+		if err == nil && json.Unmarshal(payload, &schedule) == nil && schedule.WebDAVPending == 0 {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	kept, err := os.ReadDir(scheduledDir)
+	if err != nil || len(kept) != scheduleLimit || schedule.WebDAVPending != 0 {
+		t.Fatalf("queued upload or local retention failed: %s %v", payload, err)
+	}
+	t.Log("installed Agent drained a queued WebDAV upload during local backup capacity backoff without deleting archives")
 	if payload, err = call("backup-webdav", "off"); err != nil || json.Unmarshal(payload, &schedule) != nil || schedule.WebDAV {
 		t.Fatalf("disable automatic WebDAV: %s %v", payload, err)
 	}

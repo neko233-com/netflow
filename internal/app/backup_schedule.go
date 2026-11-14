@@ -347,12 +347,13 @@ func (a *App) startBackupScan(state backupScheduleState, raw []byte, now time.Ti
 }
 
 func (a *App) autoBackupOne(now time.Time) {
-	if a.backupBusy || a.backupScanBusy || a.tunBusy || now.Before(a.backupRetry) || now.Before(a.backupCheckAfter) {
+	if a.backupBusy || a.backupScanBusy || a.tunBusy || now.Before(a.backupCheckAfter) {
 		return
 	}
 	state, raw, err := a.readBackupSchedule()
 	if err != nil {
 		a.backupRetry, a.backupScheduleError = now.Add(autoRetryDelay), "cannot read automatic backup schedule"
+		a.backupCheckAfter = a.backupRetry
 		return
 	}
 	s := state.BackupSchedule
@@ -361,6 +362,22 @@ func (a *App) autoBackupOne(now time.Time) {
 		return
 	}
 	due := !now.Before(s.NextRun) || (s.OnChange && (state.Baseline == "" || (!a.backupChangeDue.IsZero() && !now.Before(a.backupChangeDue))))
+	// A local scan or archive failure must not block an independent queued
+	// upload. Preserve each retry deadline and wake at the earliest one.
+	if now.Before(a.backupRetry) {
+		if s.WebDAV && len(state.WebDAVQueue) > 0 && !now.Before(a.backupWebDAVRetry) {
+			a.startScheduledWebDAV(state, raw, now)
+			return
+		}
+		a.backupCheckAfter = now.Add(time.Minute)
+		if a.backupRetry.Before(a.backupCheckAfter) {
+			a.backupCheckAfter = a.backupRetry
+		}
+		if s.WebDAV && len(state.WebDAVQueue) > 0 && now.Before(a.backupWebDAVRetry) && a.backupWebDAVRetry.Before(a.backupCheckAfter) {
+			a.backupCheckAfter = a.backupWebDAVRetry
+		}
+		return
+	}
 	if !due && s.WebDAV && len(state.WebDAVQueue) > 0 && !now.Before(a.backupWebDAVRetry) {
 		a.startScheduledWebDAV(state, raw, now)
 		return
@@ -416,6 +433,7 @@ func (a *App) autoBackupOne(now time.Time) {
 		}
 		if jobErr != nil {
 			a.backupRetry = time.Now().Add(autoRetryDelay)
+			a.backupCheckAfter = time.Time{}
 			a.backupScheduleError = "automatic backup failed; check destination, archive limit and configuration activity"
 			if a.model != nil {
 				a.model.Notice = "自动备份失败；检查目录、备份数量和配置变动，15 分钟后重试"

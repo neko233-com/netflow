@@ -3,6 +3,10 @@
 package app
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +19,7 @@ import (
 
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appconfig"
+	"github.com/neko233-com/netflow/internal/backup"
 	"github.com/neko233-com/netflow/internal/webdav"
 )
 
@@ -183,5 +188,110 @@ func TestAutomaticWebDAVStopsWhenCredentialsChange(t *testing.T) {
 	updated, _, err := a.readBackupSchedule()
 	if err != nil || updated.WebDAVBinding != binding {
 		t.Fatal("explicit re-enable did not bind new settings", err)
+	}
+}
+
+func TestAutomaticWebDAVDrainsWhileLocalBackupIsInBackoff(t *testing.T) {
+	var uploads atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		uploads.Add(1)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+	dir, dest := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("rules: []"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(dest, "netflow-auto-pending.zip")
+	if _, err := backup.ExportRunning(context.Background(), dir, archive); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(content)
+	for i := 1; i < scheduleLimit; i++ {
+		if err := os.WriteFile(filepath.Join(dest, fmt.Sprintf("netflow-auto-%02d.zip", i)), []byte("retained"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := appconfig.NewMemory(dir)
+	d := newSerialDispatcher()
+	a := &App{dir: dir, store: store, core: diagnosticsTestEngine{}, dispatch: d.call, webDAVClient: &webdav.Client{HTTP: server.Client()}}
+	defer func() { d.close(); a.stopBackup() }()
+	var setupErr error
+	d.call(func() {
+		_, setupErr = a.setBackupSchedule(true, dest, 1, time.Now().Add(-2*time.Hour))
+		if setupErr != nil {
+			return
+		}
+		setupErr = a.saveWebDAVConfig(agent.WebDAVConfigArgs{URL: server.URL})
+		if setupErr != nil {
+			return
+		}
+		_, setupErr = a.setBackupWebDAV(true)
+		if setupErr != nil {
+			return
+		}
+		state, raw, err := a.readBackupSchedule()
+		if err != nil {
+			setupErr = err
+			return
+		}
+		state.WebDAVQueue = []queuedWebDAVBackup{{Name: filepath.Base(archive), Digest: hex.EncodeToString(digest[:])}}
+		setupErr = a.writeBackupState(state, raw)
+		if setupErr == nil {
+			a.autoBackupOne(time.Now())
+		}
+	})
+	if setupErr != nil {
+		t.Fatal(setupErr)
+	}
+	wait := func() {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			var busy bool
+			d.call(func() { busy = a.backupBusy })
+			if !busy {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("job timed out")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	wait()
+	var retry time.Time
+	d.call(func() { retry = a.backupRetry })
+	if retry.IsZero() {
+		t.Fatal("local capacity did not enter backoff")
+	}
+	now := time.Now()
+	var next time.Time
+	d.call(func() {
+		a.backupWebDAVRetry = now.Add(30 * time.Second)
+		a.autoBackupOne(now)
+		next = a.backupCheckAfter
+	})
+	if !next.Equal(now.Add(30 * time.Second)) {
+		t.Fatalf("did not honor earliest retry: %v", next)
+	}
+	d.call(func() { a.autoBackupOne(now.Add(29 * time.Second)) })
+	if uploads.Load() != 0 {
+		t.Fatal("remote retry ran prematurely")
+	}
+	d.call(func() { a.autoBackupOne(now.Add(31 * time.Second)) })
+	wait()
+	state, _, err := a.readBackupSchedule()
+	if err != nil || len(state.WebDAVQueue) != 0 || uploads.Load() != 1 {
+		t.Fatalf("local backoff starved pending upload: queue=%d uploads=%d err=%v", len(state.WebDAVQueue), uploads.Load(), err)
+	}
+	files, err := os.ReadDir(dest)
+	if err != nil || len(files) != scheduleLimit {
+		t.Fatal("automatic backup deleted existing archives", err)
 	}
 }
