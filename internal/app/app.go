@@ -112,6 +112,8 @@ type App struct {
 	backupRetry         time.Time
 	backupCheckAfter    time.Time
 	backupScheduleError string
+	backupWebDAVRetry   time.Time
+	backupWebDAVError   string
 	backupScanCancel    func()
 	backupScanDone      chan struct{}
 	backupScanBusy      bool

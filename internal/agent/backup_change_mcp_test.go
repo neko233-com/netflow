@@ -11,11 +11,22 @@ import (
 func TestBackupOnChangeMCPForwardsOptIn(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := Start(dir, func(_ context.Context, method string, args json.RawMessage) (any, error) {
-		var in BackupOnChangeArgs
-		if method != "backup-on-change" || json.Unmarshal(args, &in) != nil || !in.Enabled {
-			return nil, errors.New("invalid opt-in request")
+		switch method {
+		case "backup-on-change":
+			var in BackupOnChangeArgs
+			if json.Unmarshal(args, &in) != nil || !in.Enabled {
+				return nil, errors.New("invalid change opt-in")
+			}
+			return BackupSchedule{Enabled: true, OnChange: true}, nil
+		case "backup-webdav":
+			var in BackupWebDAVArgs
+			if json.Unmarshal(args, &in) != nil || !in.Enabled {
+				return nil, errors.New("invalid WebDAV opt-in")
+			}
+			return BackupSchedule{Enabled: true, WebDAV: true}, nil
+		default:
+			return nil, errors.New("unknown method")
 		}
-		return BackupSchedule{Enabled: true, OnChange: true}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -36,6 +47,10 @@ func TestBackupOnChangeMCPForwardsOptIn(t *testing.T) {
 	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "netflow_backup_on_change", Arguments: map[string]any{"enabled": true}})
 	if err != nil || result.IsError {
 		t.Fatalf("MCP opt-in failed: %+v %v", result, err)
+	}
+	result, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "netflow_backup_webdav", Arguments: map[string]any{"enabled": true}})
+	if err != nil || result.IsError {
+		t.Fatalf("MCP WebDAV opt-in failed: %+v %v", result, err)
 	}
 }
 

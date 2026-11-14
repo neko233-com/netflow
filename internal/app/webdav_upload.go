@@ -63,6 +63,11 @@ func (a *App) webDAVCredentials(url, user, password string, useSaved bool) (webd
 }
 
 func (a *App) beginWebDAVUpload(args agent.WebDAVUploadArgs, now time.Time, done func(string, error)) (agent.BackupJob, error) {
+	return a.beginWebDAVUploadChecked(args, now, done, nil)
+}
+
+// expected binds an automatic upload to the exact locally-created archive.
+func (a *App) beginWebDAVUploadChecked(args agent.WebDAVUploadArgs, now time.Time, done func(string, error), expected *[32]byte) (agent.BackupJob, error) {
 	if !validArchivePath(args.Archive) {
 		return agent.BackupJob{}, errors.New("backup archive must be an absolute path")
 	}
@@ -100,6 +105,9 @@ func (a *App) beginWebDAVUpload(args agent.WebDAVUploadArgs, now time.Time, done
 		first, err := archiveDigest(ctx, f, before.Size())
 		if err != nil {
 			return errors.New("backup archive could not be read")
+		}
+		if expected != nil && first != *expected {
+			return errors.New("automatic backup archive changed")
 		}
 		if _, err := backup.InspectFile(ctx, f); err != nil {
 			return errors.New("backup archive is invalid")

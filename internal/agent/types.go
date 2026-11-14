@@ -138,6 +138,10 @@ type BackupJobArgs struct {
 }
 
 type BackupSchedule struct {
+	WebDAV        bool      `json:"webdav" jsonschema:"explicitly upload automatic backups to saved WebDAV"`
+	WebDAVPending int       `json:"webdav_pending" jsonschema:"automatic uploads awaiting completion"`
+	WebDAVError   string    `json:"webdav_error,omitempty"`
+	WebDAVRetry   time.Time `json:"webdav_retry,omitempty"`
 	OnChange      bool      `json:"on_change" jsonschema:"also back up configuration changes; explicitly enabled"`
 	Enabled       bool      `json:"enabled" jsonschema:"explicitly enable automatic local backups"`
 	Directory     string    `json:"directory,omitempty" jsonschema:"existing absolute directory outside the configuration"`
@@ -145,6 +149,10 @@ type BackupSchedule struct {
 	NextRun       time.Time `json:"next_run,omitempty"`
 	LastError     string    `json:"last_error,omitempty"`
 	NextRetry     time.Time `json:"next_retry,omitempty"`
+}
+
+type BackupWebDAVArgs struct {
+	Enabled bool `json:"enabled" jsonschema:"explicitly enable automatic upload of unencrypted backups"`
 }
 
 type BackupOnChangeArgs struct {

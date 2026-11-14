@@ -993,6 +993,53 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatal("WebDAV restore lost profile catalog")
 	}
 	t.Log("installed headless Agent restored the remote backup into a new directory and removed its temporary download")
+	if payload, err := call("backup-schedule-set", "on", scheduledDir, "1"); err != nil {
+		t.Fatalf("enable WebDAV schedule: %s %v", payload, err)
+	}
+	if payload, err := call("backup-webdav", "on"); err != nil || json.Unmarshal(payload, &schedule) != nil || !schedule.WebDAV {
+		t.Fatalf("enable automatic WebDAV: %s %v", payload, err)
+	}
+	if payload, err := call("backup-on-change", "on"); err != nil {
+		t.Fatalf("enable WebDAV baseline: %s %v", payload, err)
+	}
+	select {
+	case got := <-webdavReceived:
+		archives, err := os.ReadDir(scheduledDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matched := false
+		for _, item := range archives {
+			hash, err := vmHash(filepath.Join(scheduledDir, item.Name()))
+			if err == nil && hash == hex.EncodeToString(got[:]) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Fatal("automatic WebDAV upload did not match a local snapshot")
+		}
+	case <-time.After(90 * time.Second):
+		t.Fatal("automatic WebDAV upload timed out")
+	}
+	until = time.Now().Add(30 * time.Second)
+	for time.Now().Before(until) {
+		payload, err = call("backup-schedule")
+		if err == nil && json.Unmarshal(payload, &schedule) == nil && schedule.WebDAV && schedule.WebDAVPending == 0 {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil || schedule.WebDAVPending != 0 {
+		t.Fatalf("automatic WebDAV queue not drained: %s %v", payload, err)
+	}
+	if payload, err = call("backup-webdav", "off"); err != nil || json.Unmarshal(payload, &schedule) != nil || schedule.WebDAV {
+		t.Fatalf("disable automatic WebDAV: %s %v", payload, err)
+	}
+	if payload, err = call("backup-schedule-set", "off"); err != nil {
+		t.Fatalf("disable WebDAV schedule: %s %v", payload, err)
+	}
+	t.Log("installed headless Agent automatically uploaded a scheduled snapshot with saved protected credentials")
 	if payload, err := call("webdav-clear"); err != nil || strings.Contains(string(payload), "synthetic-webdav") {
 		t.Fatalf("WebDAV protected clear failed: %v", err)
 	}

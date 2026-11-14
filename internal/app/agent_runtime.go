@@ -399,12 +399,18 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 			var schedule agent.BackupSchedule
 			schedule, callErr = a.loadBackupSchedule()
 			schedule.LastError, schedule.NextRetry = a.backupScheduleError, a.backupRetry
+			schedule.WebDAVError, schedule.WebDAVRetry = a.backupWebDAVError, a.backupWebDAVRetry
 			value = schedule
 		}
 	case "backup-schedule-set":
 		var input agent.BackupScheduleArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {
 			value, callErr = a.setBackupSchedule(input.Enabled, input.Directory, input.IntervalHours, time.Now())
+		}
+	case "backup-webdav":
+		var input agent.BackupWebDAVArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.setBackupWebDAV(input.Enabled)
 		}
 	case "backup-on-change":
 		var input agent.BackupOnChangeArgs

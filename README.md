@@ -80,6 +80,9 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 & $agent backup-on-change on  # 可选：显式启用配置变更备份
 & $agent backup-schedule
 & $agent backup-on-change off
+# 可选：先保存受账户保护的 WebDAV 配置，再显式启用自动上传
+& $agent backup-webdav on
+& $agent backup-webdav off
 & $agent backup-schedule-set off
 ```
 
@@ -89,7 +92,7 @@ WebDAV 上传需要明确选择已有的 NetFlow 备份 ZIP。界面可输入本
 
 CLI 的 `webdav-upload` 从标准输入读取 JSON，包含绝对路径 `archive`，以及 `url`、`user`、`password`，也可用 `use_saved: true` 使用已保存配置。对应 MCP 工具为 `netflow_webdav_upload`，任务通过 `backup-job-status` 或 `netflow_backup_job_status` 查询；结果中的 `remote_name` 是新生成的远端文件名。恢复时可通过界面读取列表并选择文件，也可向 CLI `webdav-list` / MCP `netflow_webdav_list` 提供凭据字段并从任务结果的 `remote_names` 读取文件名；随后通过 CLI `webdav-restore` / MCP `netflow_webdav_restore` 提供 `remote_name`、不存在的绝对路径 `destination` 和同样的凭据字段。列表仅包含所选目录下本程序生成格式的直接子项，超过 512 个符合条件的文件时返回错误。
 
-传输只接受 HTTPS，不跟随重定向，也不使用系统代理环境变量；服务器会接收未加密的完整备份。客户端先验证归档并检查文件是否变化，使用随机文件名和 HTTP 条件请求避免符合协议的服务器覆盖同名文件；无法保证服务器正确实现条件请求或持久化数据。失败、取消或网络中断可能在远端留下不完整文件，客户端不会自动删除远端文件。远端恢复先将文件下载到目标上一级目录中的随机临时文件，再完整校验并恢复至全新目录；临时文件和恢复数据的访问权限受目标目录影响，应选择受保护的位置。正常结束或取消时尝试删除临时文件，异常终止可能留下该文件或不完整的新目录，需要手动检查。WebDAV 定时上传尚未实现。
+传输只接受 HTTPS，不跟随重定向，也不使用系统代理环境变量；服务器会接收未加密的完整备份。客户端先验证归档并检查文件是否变化，使用随机文件名和 HTTP 条件请求避免符合协议的服务器覆盖同名文件；无法保证服务器正确实现条件请求或持久化数据。失败、取消或网络中断可能在远端留下不完整文件，客户端不会自动删除远端文件。远端恢复先将文件下载到目标上一级目录中的随机临时文件，再完整校验并恢复至全新目录；临时文件和恢复数据的访问权限受目标目录影响，应选择受保护的位置。正常结束或取消时尝试删除临时文件，异常终止可能留下该文件或不完整的新目录，需要手动检查。定时或配置变更备份可通过界面、CLI `backup-webdav on` 或 MCP `netflow_backup_webdav` 显式启用自动上传，默认关闭；需要先保存当前 Windows 账户保护的 WebDAV 配置。程序持久记录待上传的本地备份及内容摘要，失败约 15 分钟后重试；设置被外部修改、保存的凭据变化或归档内容改变时停止发送并在备份状态中报告。队列最多 30 项，满时暂停创建新的自动备份直到有空间；关闭自动上传会放弃待传队列，但不会删除本地或远端文件。上传成功后若程序在记录成功前异常退出，重试可能产生重复远端文件；中断也可能留下不完整文件，均需用户自行检查和清理。
 
 ## Agent 规则重写
 

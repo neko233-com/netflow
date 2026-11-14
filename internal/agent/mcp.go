@@ -228,6 +228,12 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "backup-schedule-set", args, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_backup_webdav", Description: "Explicitly enable or disable automatic WebDAV uploads for a local backup schedule. Requires saved account-protected credentials. Unencrypted backups may contain credentials; failed uploads can leave partial or duplicate remote files. Disabling discards queued uploads but does not delete files."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args BackupWebDAVArgs) (*mcp.CallToolResult, BackupSchedule, error) {
+			var out BackupSchedule
+			err := client.Call(ctx, "backup-webdav", args, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_backup_on_change", Description: "Explicitly enable or disable backups on configuration changes for an existing local schedule. Enabling creates an initial unencrypted snapshot; scans occur while running, with periodic content reconciliation. The 30 archive limit applies."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args BackupOnChangeArgs) (*mcp.CallToolResult, BackupSchedule, error) {
 			var out BackupSchedule

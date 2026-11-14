@@ -251,10 +251,10 @@ func TestManualRestoreUsesNewDirectoryAndAllowsCopy(t *testing.T) {
 func TestBackupActionsFitMinimumWindowHeight(t *testing.T) {
 	m := DemoModel()
 	m.Dialogs.Backup = true
-	m.BackupSchedule = agent.BackupSchedule{Enabled: true, Directory: `C:\Backups`, IntervalHours: 24}
+	m.BackupSchedule = agent.BackupSchedule{Enabled: true, Directory: `C:\Backups`, IntervalHours: 24, OnChange: true, WebDAV: true, WebDAVPending: 30}
 	m.RestorePath = `C:\Restore\new`
 	tt := renderModel(m, WindowWidth, WindowMinHeight, false)
-	for _, id := range []string{"backup-create", "backup-restore", "backup-copy-restore", "webdav-open", "close-备份设置"} {
+	for _, id := range []string{"backup-on-change", "backup-webdav", "backup-create", "backup-restore", "backup-copy-restore", "webdav-open", "close-备份设置"} {
 		element, ok := tt.Find(id)
 		if !ok || element.Y < 0 || element.Y+element.H > WindowMinHeight {
 			t.Fatalf("backup action %s is outside the minimum window: %+v", id, element)
@@ -282,5 +282,28 @@ func TestChangeBackupRequiresExplicitToggle(t *testing.T) {
 	}
 	if !called || !m.BackupSchedule.OnChange {
 		t.Fatal("explicit change backup toggle did not apply")
+	}
+}
+
+func TestAutomaticWebDAVToggleRequiresExplicitAction(t *testing.T) {
+	m := DemoModel()
+	m.Dialogs.Backup = true
+	m.BackupSchedule = agent.BackupSchedule{Enabled: true, Directory: `C:\Backups`, IntervalHours: 24}
+	called := false
+	m.Hooks.SetBackupWebDAV = func(on bool) (agent.BackupSchedule, error) {
+		called = on
+		s := m.BackupSchedule
+		s.WebDAV = on
+		return s, nil
+	}
+	tt := renderModel(m, WindowWidth, WindowHeight, false)
+	if called || m.BackupSchedule.WebDAV {
+		t.Fatal("automatic remote upload enabled implicitly")
+	}
+	if err := tt.Click("backup-webdav"); err != nil {
+		t.Fatal(err)
+	}
+	if !called || !m.BackupSchedule.WebDAV {
+		t.Fatal("explicit upload toggle did not apply")
 	}
 }
