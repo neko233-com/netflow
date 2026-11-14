@@ -101,6 +101,17 @@ type WebDAVListArgs struct {
 	Password string `json:"password,omitempty" jsonschema:"optional WebDAV password"`
 	UseSaved bool   `json:"use_saved,omitempty" jsonschema:"use existing saved WebDAV credentials"`
 }
+
+type WebDAVConfigArgs struct {
+	URL      string `json:"url" jsonschema:"HTTPS WebDAV collection URL; may contain secrets"`
+	User     string `json:"user,omitempty" jsonschema:"optional WebDAV username"`
+	Password string `json:"password,omitempty" jsonschema:"optional WebDAV password"`
+}
+
+type WebDAVConfigStatus struct {
+	Saved                     bool `json:"saved"`
+	ProtectedStorageAvailable bool `json:"protected_storage_available"`
+}
 type Status struct {
 	Running              bool          `json:"running"`
 	Headless             bool          `json:"headless"`

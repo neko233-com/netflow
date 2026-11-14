@@ -171,6 +171,29 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		if callErr = decodeStrict(args, &input); callErr == nil {
 			value, callErr = a.getProfileJob(input.JobID, time.Now())
 		}
+	case "webdav-config":
+		var input agent.Empty
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.webDAVConfigStatus()
+		} else {
+			callErr = errors.New("invalid WebDAV configuration request")
+		}
+	case "webdav-save":
+		var input agent.WebDAVConfigArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			callErr = a.saveWebDAVConfig(input)
+			value = agent.ActionResult{OK: callErr == nil}
+		} else {
+			callErr = errors.New("invalid WebDAV configuration")
+		}
+	case "webdav-clear":
+		var input agent.Empty
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			callErr = a.clearWebDAVConfig()
+			value = agent.ActionResult{OK: callErr == nil}
+		} else {
+			callErr = errors.New("invalid WebDAV configuration request")
+		}
 	case "webdav-list":
 		var input agent.WebDAVListArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {

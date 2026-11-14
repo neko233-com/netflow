@@ -71,6 +71,24 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "profiles", nil, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_webdav_config", Description: "Read whether WebDAV credentials are saved and account-protected storage is available. Never returns credential values.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args Empty) (*mcp.CallToolResult, WebDAVConfigStatus, error) {
+			var out WebDAVConfigStatus
+			err := client.Call(ctx, "webdav-config", args, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_webdav_save", Description: "Explicitly replace saved WebDAV credentials using account-protected storage. Does not connect to the server; fails when protected storage is unavailable."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args WebDAVConfigArgs) (*mcp.CallToolResult, ActionResult, error) {
+			var out ActionResult
+			err := client.Call(ctx, "webdav-save", args, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_webdav_clear", Description: "Permanently delete the saved WebDAV address and credentials. Does not delete remote backups."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args Empty) (*mcp.CallToolResult, ActionResult, error) {
+			var out ActionResult
+			err := client.Call(ctx, "webdav-clear", args, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_webdav_list", Description: "Read generated backup filenames from an HTTPS WebDAV collection; poll netflow_backup_job_status."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args WebDAVListArgs) (*mcp.CallToolResult, BackupJob, error) {
 			var out BackupJob

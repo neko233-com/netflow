@@ -240,6 +240,9 @@ func (a *App) savedWebDAV() (webDAVCredentials, error) {
 // clearWebDAVSecret removes only the separately stored password. URL and user
 // remain intact; any credentials embedded in the URL are not altered.
 func (a *App) clearWebDAVSecret() error {
+	if a.backupBusy {
+		return errors.New("wait for the active backup task to finish")
+	}
 	data, err := prefsMap(a.settings.Prefs)
 	if err != nil {
 		return err

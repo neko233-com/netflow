@@ -699,7 +699,11 @@ func (m *Model) webdavBody(c *mygoui.Context, pal Palette) {
 		mygoui.Text(c, "密码").FontSize(13)
 		mygoui.TextInput(c, &m.WebDAVPasswordDraft).Password().Grow(1).Label("webdav-password")
 	})
-	mygoui.Text(c, "新凭据仅在此对话框中使用，不保存；传输后清除密码。").FontSize(12).TextColor(pal.TextMuted)
+	credentialTip := "凭据默认不保存；保存会替换旧配置并使用账户保护。传输后清除密码。"
+	if runtime.GOOS != "windows" {
+		credentialTip = "本平台暂不支持安全保存；凭据仅在对话框中使用。传输后清除密码。"
+	}
+	mygoui.Text(c, credentialTip).FontSize(12).TextColor(pal.TextMuted)
 	mygoui.Row(c).Gap(6).Children(func() {
 		if backupButton(c, pal, "选择备份并上传", "webdav-upload", m.BackupBusy) {
 			m.webdavUpload(false)
@@ -729,12 +733,26 @@ func (m *Model) webdavBody(c *mygoui.Context, pal Palette) {
 		if m.WebDAVSecretStored && backupButton(c, pal, "用已存配置读取", "webdav-list-saved", m.BackupBusy) {
 			m.webdavList(true)
 		}
+		if backupButton(c, pal, "保存/替换配置", "webdav-save", m.BackupBusy) {
+			if m.Hooks.SaveWebDAVConfig == nil {
+				m.Notice = "无法保存 WebDAV 配置"
+				return
+			}
+			err := m.Hooks.SaveWebDAVConfig(agent.WebDAVConfigArgs{URL: m.WebDAVURLDraft, User: m.WebDAVUserDraft, Password: m.WebDAVPasswordDraft})
+			if err != nil {
+				m.Notice = "保存失败: " + err.Error()
+			} else {
+				m.WebDAVSecretStored = true
+				m.WebDAVURLDraft, m.WebDAVUserDraft, m.WebDAVPasswordDraft = "", "", ""
+				m.Notice = "已保存账户保护的 WebDAV 配置"
+			}
+		}
 	})
 	if m.RestorePath != "" && backupButton(c, pal, "复制恢复目录", "webdav-copy-restore", false) {
 		m.copy(m.RestorePath)
 	}
 	if m.WebDAVSecretStored {
-		mygoui.Text(c, "检测到旧版 WebDAV 配置。Windows 会尝试使用当前账户保护；其他平台可能仍以明文保存。复制会写入剪贴板。").FontSize(12).TextColor(pal.TextMuted)
+		mygoui.Text(c, "已保存配置：旧版数据在其他平台可能仍为明文。复制会写入剪贴板。").FontSize(12).TextColor(pal.TextMuted)
 		mygoui.Row(c).Gap(4).Children(func() {
 			for _, field := range []struct{ label, key string }{{"地址", "url"}, {"用户名", "user"}, {"密码", "password"}} {
 				if filledButton(c, pal, "复制"+field.label, "webdav-copy-"+field.key, false) {
@@ -749,7 +767,7 @@ func (m *Model) webdavBody(c *mygoui.Context, pal Palette) {
 					m.Notice = "已复制" + field.label + "到剪贴板"
 				}
 			}
-			if filledButton(c, pal, "清除密码", "webdav-clear-secret", false) {
+			if backupButton(c, pal, "清除密码", "webdav-clear-secret", m.BackupBusy) {
 				if m.Hooks.ClearWebDAVSecret == nil {
 					m.Notice = "无法清除已保存密码"
 					return
@@ -760,6 +778,19 @@ func (m *Model) webdavBody(c *mygoui.Context, pal Palette) {
 				}
 				m.Prefs.WebDAVPassword = ""
 				m.Notice = "已清除单独保存的密码；地址中的凭据不受影响"
+			}
+			if backupButton(c, pal, "删除配置", "webdav-clear", m.BackupBusy) {
+				if m.Hooks.ClearWebDAVConfig == nil {
+					m.Notice = "无法删除已保存配置"
+					return
+				}
+				if err := m.Hooks.ClearWebDAVConfig(); err != nil {
+					m.Notice = "删除失败: " + err.Error()
+					return
+				}
+				m.WebDAVSecretStored = false
+				m.WebDAVRemoteNames, m.WebDAVRemoteDraft = nil, ""
+				m.Notice = "已删除保存的 WebDAV 地址和凭据"
 			}
 		})
 	}

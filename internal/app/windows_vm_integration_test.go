@@ -433,9 +433,27 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if backupJob.State != "succeeded" {
 		t.Fatalf("live backup did not complete: %+v", backupJob)
 	}
-	webdavArgs, _ := json.Marshal(agent.WebDAVUploadArgs{Archive: liveArchive, URL: webdavServer.URL + "/collection/?token=synthetic-webdav-token", User: "vm-user", Password: "synthetic-webdav-secret"})
+	configArgs, _ := json.Marshal(agent.WebDAVConfigArgs{URL: webdavServer.URL + "/collection/?token=synthetic-webdav-token", User: "vm-user", Password: "synthetic-webdav-secret"})
 	requestCtx, requestDone := context.WithTimeout(context.Background(), 30*time.Second)
-	request := vmCommand(requestCtx, agentExe, "--config-dir", dir, "webdav-upload")
+	request := vmCommand(requestCtx, agentExe, "--config-dir", dir, "webdav-save")
+	request.Stdin = strings.NewReader(string(configArgs))
+	payload, err = request.CombinedOutput()
+	requestDone()
+	if err != nil || strings.Contains(string(payload), "synthetic-webdav") {
+		t.Fatalf("WebDAV protected save failed or leaked credentials: %v", err)
+	}
+	payload, err = call("webdav-config")
+	var configStatus agent.WebDAVConfigStatus
+	if err != nil || json.Unmarshal(payload, &configStatus) != nil || !configStatus.Saved || !configStatus.ProtectedStorageAvailable {
+		t.Fatal("WebDAV protected status incorrect")
+	}
+	settingsData, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil || strings.Contains(string(settingsData), "synthetic-webdav") || strings.Contains(string(settingsData), "vm-user") {
+		t.Fatal("WebDAV credentials were stored as plaintext")
+	}
+	webdavArgs, _ := json.Marshal(agent.WebDAVUploadArgs{Archive: liveArchive, UseSaved: true})
+	requestCtx, requestDone = context.WithTimeout(context.Background(), 30*time.Second)
+	request = vmCommand(requestCtx, agentExe, "--config-dir", dir, "webdav-upload")
 	request.Stdin = strings.NewReader(string(webdavArgs))
 	payload, err = request.CombinedOutput()
 	requestDone()
@@ -466,7 +484,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatal("WebDAV server did not receive backup")
 	}
 	t.Log("installed headless Agent uploaded a validated backup to a local TLS WebDAV server without leaking credentials")
-	listArgs, _ := json.Marshal(agent.WebDAVListArgs{URL: webdavServer.URL + "/collection/?token=synthetic-webdav-token", User: "vm-user", Password: "synthetic-webdav-secret"})
+	listArgs, _ := json.Marshal(agent.WebDAVListArgs{UseSaved: true})
 	requestCtx, requestDone = context.WithTimeout(context.Background(), 30*time.Second)
 	request = vmCommand(requestCtx, agentExe, "--config-dir", dir, "webdav-list")
 	request.Stdin = strings.NewReader(string(listArgs))
@@ -492,7 +510,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	t.Log("installed headless Agent listed the uploaded backup without exposing credentials")
 	remoteParent := t.TempDir()
 	remoteDestination := filepath.Join(remoteParent, "restored")
-	remoteArgs, _ := json.Marshal(agent.WebDAVRestoreArgs{RemoteName: uploadJob.RemoteName, Destination: remoteDestination, URL: webdavServer.URL + "/collection/?token=synthetic-webdav-token", User: "vm-user", Password: "synthetic-webdav-secret"})
+	remoteArgs, _ := json.Marshal(agent.WebDAVRestoreArgs{RemoteName: uploadJob.RemoteName, Destination: remoteDestination, UseSaved: true})
 	requestCtx, requestDone = context.WithTimeout(context.Background(), 30*time.Second)
 	request = vmCommand(requestCtx, agentExe, "--config-dir", dir, "webdav-restore")
 	request.Stdin = strings.NewReader(string(remoteArgs))
@@ -522,6 +540,14 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatal("WebDAV restore lost profile catalog")
 	}
 	t.Log("installed headless Agent restored the remote backup into a new directory and removed its temporary download")
+	if payload, err := call("webdav-clear"); err != nil || strings.Contains(string(payload), "synthetic-webdav") {
+		t.Fatalf("WebDAV protected clear failed: %v", err)
+	}
+	payload, err = call("webdav-config")
+	if err != nil || json.Unmarshal(payload, &configStatus) != nil || configStatus.Saved {
+		t.Fatal("WebDAV protected configuration was not cleared")
+	}
+	t.Log("installed headless Agent protected, used and cleared saved WebDAV credentials")
 	restored := filepath.Join(backupRoot, "restored")
 	payload, err = call("restore-create", liveArchive, restored)
 	var restoreJob agent.BackupJob

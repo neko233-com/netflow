@@ -69,6 +69,8 @@ type Hooks struct {
 	SetKernelPorts             func(PortSet) error
 	SavePrefs                  func(Prefs) error
 	ClearWebDAVSecret          func() error
+	SaveWebDAVConfig           func(agent.WebDAVConfigArgs) error
+	ClearWebDAVConfig          func() error
 	CopyWebDAVField            func(string) error
 	OpenDir                    func(kind string)
 	RestartCore                func() error

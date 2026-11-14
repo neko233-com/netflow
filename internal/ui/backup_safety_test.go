@@ -93,11 +93,43 @@ func TestWebDAVActionsFitMinimumWindowHeight(t *testing.T) {
 	m := DemoModel()
 	m.Dialogs.WebDAV, m.WebDAVSecretStored = true, true
 	tt := renderModel(m, WindowWidth, WindowMinHeight, false)
-	for _, id := range []string{"webdav-upload", "webdav-upload-saved", "webdav-list", "webdav-list-saved", "webdav-restore", "webdav-restore-saved", "webdav-clear-secret", "close-WebDAV"} {
+	for _, id := range []string{"webdav-upload", "webdav-upload-saved", "webdav-list", "webdav-list-saved", "webdav-save", "webdav-restore", "webdav-restore-saved", "webdav-clear-secret", "webdav-clear", "close-WebDAV"} {
 		element, ok := tt.Find(id)
 		if !ok || element.Y < 0 || element.Y+element.H > WindowMinHeight {
 			t.Fatalf("WebDAV action %s is outside the minimum window: %+v", id, element)
 		}
+	}
+}
+
+func TestWebDAVSaveAndClearRequireExplicitActions(t *testing.T) {
+	m := DemoModel()
+	m.Dialogs.WebDAV = true
+	m.WebDAVURLDraft, m.WebDAVUserDraft, m.WebDAVPasswordDraft = "https://backup.invalid/dav", "user", "synthetic-password"
+	saved, cleared := false, false
+	m.Hooks.SaveWebDAVConfig = func(args agent.WebDAVConfigArgs) error {
+		saved = true
+		if args.Password != "synthetic-password" {
+			t.Error("password was not passed to protected storage")
+		}
+		return nil
+	}
+	m.Hooks.ClearWebDAVConfig = func() error { cleared = true; return nil }
+	tt := renderModel(m, WindowWidth, WindowHeight, false)
+	if saved || cleared {
+		t.Fatal("configuration changed without explicit action")
+	}
+	if err := tt.Click("webdav-save"); err != nil {
+		t.Fatal(err)
+	}
+	if !saved || !m.WebDAVSecretStored || m.WebDAVPasswordDraft != "" || m.WebDAVURLDraft != "" {
+		t.Fatal("save did not clear drafts")
+	}
+	tt = renderModel(m, WindowWidth, WindowHeight, false)
+	if err := tt.Click("webdav-clear"); err != nil {
+		t.Fatal(err)
+	}
+	if !cleared || m.WebDAVSecretStored {
+		t.Fatal("clear did not remove stored configuration state")
 	}
 }
 

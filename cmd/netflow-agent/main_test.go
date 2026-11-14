@@ -97,6 +97,26 @@ func TestWebDAVCLIReadsCredentialsFromStdinWithoutEcho(t *testing.T) {
 	}
 }
 
+func TestWebDAVSaveCLIUsesStdinAndDoesNotEchoSecrets(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		var input agent.WebDAVConfigArgs
+		if method != "webdav-save" || json.Unmarshal(raw, &input) != nil || input.Password != "synthetic-secret" {
+			return nil, errors.New("unexpected request")
+		}
+		return agent.ActionResult{OK: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	var output bytes.Buffer
+	err = run([]string{"--config-dir", dir, "webdav-save"}, strings.NewReader(`{"url":"https://example.invalid/?token=synthetic-token","password":"synthetic-secret"}`), &output)
+	if err != nil || strings.Contains(output.String(), "synthetic-") || !strings.Contains(output.String(), `"ok":true`) {
+		t.Fatalf("unexpected CLI result: %s %v", output.String(), err)
+	}
+}
+
 func TestRealVergeImportThroughCLI(t *testing.T) {
 	source := os.Getenv("NETFLOW_TEST_VERGE_SOURCE")
 	if source == "" {

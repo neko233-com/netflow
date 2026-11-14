@@ -1182,6 +1182,8 @@ func (a *App) bindHooks() {
 		SetKernelPorts:      a.SetKernelPorts,
 		SavePrefs:           a.savePrefs,
 		ClearWebDAVSecret:   a.clearWebDAVSecret,
+		SaveWebDAVConfig:    a.saveWebDAVConfig,
+		ClearWebDAVConfig:   a.clearWebDAVConfig,
 		CopyWebDAVField:     a.copyWebDAVField,
 		ProbeSite:           a.probeSite,
 		SaveSites:           a.saveSites,
