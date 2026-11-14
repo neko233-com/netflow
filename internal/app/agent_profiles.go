@@ -28,7 +28,11 @@ func (a *App) agentProfiles() (agent.ProfileList, error) {
 func profilePage(catalog profile.File, active string, in agent.PageArgs) (agent.ProfileList, error) {
 	items := make([]agent.Profile, 0, len(catalog.Items))
 	for _, item := range catalog.Items {
-		items = append(items, agent.Profile{ID: item.UID, Name: profile.SafeDisplayName(item), Active: item.UID == active})
+		entry := agent.Profile{ID: item.UID, Name: profile.SafeDisplayName(item), Active: item.UID == active, VergeArchive: item.Option.VergeArchive != "" && item.Option.VergeUID != "", VergeScriptRollback: item.Option.VergeScriptPrevious != nil}
+		if approval := item.Option.VergeScriptApproval; approval != nil {
+			entry.VergeGlobalScript, entry.VergeProfileScript = approval.Global, approval.Profile
+		}
+		items = append(items, entry)
 	}
 	page, offset, next, err := boundedAgentPage(items, in.Offset, in.Limit, maxAgentPageBytes)
 	if err != nil {

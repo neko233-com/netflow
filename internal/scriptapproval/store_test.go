@@ -166,3 +166,40 @@ func TestCacheLimitKeepsExistingOutputsWithoutDeletingFiles(t *testing.T) {
 		t.Fatal("existing file removed", err)
 	}
 }
+
+func TestPruneKeepsReferencesAndUnknownFiles(t *testing.T) {
+	root, item, base, c := candidateFixture(t)
+	ctx := context.Background()
+	keep, err := Store(ctx, root, c, base, item.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := scriptpreview.Build(ctx, root, item.Option.VergeArchive, item.Option.VergeUID, base, item.Name, migration.ScriptSelection{Profile: true}, c.Clock.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	drop, err := Store(ctx, root, other, base, item.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := filepath.Join(root, "verge-script-outputs", "user-file.txt")
+	if err := os.WriteFile(unknown, []byte("user"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := Prune(ctx, root, []Approval{keep}, func() error { return errors.New("changed") }); err == nil || result.Removed != 0 {
+		t.Fatal("guard failure removed data", err)
+	}
+	result, err := Prune(ctx, root, []Approval{keep}, func() error { return nil })
+	if err != nil || result.Removed != 1 {
+		t.Fatal("prune result incorrect", result, err)
+	}
+	if _, err := Resolve(ctx, root, keep, base, item.Name, item.Option.VergeArchive, item.Option.VergeUID); err != nil {
+		t.Fatal("referenced output removed", err)
+	}
+	if _, err := Resolve(ctx, root, drop, base, item.Name, item.Option.VergeArchive, item.Option.VergeUID); !errors.Is(err, ErrChanged) {
+		t.Fatal("unreferenced output not removed", err)
+	}
+	if data, err := os.ReadFile(unknown); err != nil || string(data) != "user" {
+		t.Fatal("unknown file changed", err)
+	}
+}

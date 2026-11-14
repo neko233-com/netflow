@@ -120,3 +120,72 @@ func TestVergeScriptConfigRevealsOnlyOnExplicitRequestAndPages(t *testing.T) {
 		t.Fatal("private config retained after closing preview")
 	}
 }
+
+func TestVergeScriptUIRequiresPreviewBeforeApplyAndSupportsRollback(t *testing.T) {
+	m := NewModel(HomeState{})
+	m.Profiles = []ProfileItem{{UID: "p", Option: ProfileOption{VergeScriptGlobal: true, VergeScriptHistory: true}}}
+	var calls []string
+	m.Hooks.VergeScriptPreviewRules = func(agent.PreviewRulesArgs) (agent.PreviewRulesResult, error) { return agent.PreviewRulesResult{}, nil }
+	m.Hooks.PreviewVergeScriptAsync = func(in agent.VergeScriptPreviewArgs, done func(agent.VergeScriptPreview, error)) func() {
+		calls = append(calls, "preview")
+		if in.Global || in.Profile {
+			t.Fatal("disable preview selected scripts")
+		}
+		done(agent.VergeScriptPreview{PreviewID: "disable", Operation: "disable"}, nil)
+		return func() {}
+	}
+	m.Hooks.PreviewVergeScriptRollbackAsync = func(id string, done func(agent.VergeScriptPreview, error)) func() {
+		calls = append(calls, "rollback-preview")
+		if id != "p" {
+			t.Fatal("wrong profile")
+		}
+		done(agent.VergeScriptPreview{PreviewID: "rollback", Operation: "rollback"}, nil)
+		return func() {}
+	}
+	m.Hooks.ApplyVergeScriptAsync = func(id string, done func(agent.VergeScriptApplyResult, error)) func() {
+		calls = append(calls, "apply:"+id)
+		done(agent.VergeScriptApplyResult{Applied: true, Active: true}, nil)
+		return func() {}
+	}
+	m.openVergeScriptPreview("p")
+	if !m.VergeScriptPreview.Enabled || !m.VergeScriptPreview.Global || !m.VergeScriptPreview.HasPrevious {
+		t.Fatal("current script setting not displayed")
+	}
+	m.applyVergeScriptPreview()
+	if len(calls) != 0 {
+		t.Fatal("apply ran without preview")
+	}
+	m.VergeScriptPreview.Global = false
+	m.startVergeScriptPreview()
+	m.applyVergeScriptPreview()
+	if m.VergeScriptPreview.Open || len(calls) != 2 || calls[1] != "apply:disable" {
+		t.Fatal("disable preview was not applied")
+	}
+	m.openVergeScriptPreview("p")
+	m.startVergeScriptRollbackPreview()
+	m.applyVergeScriptPreview()
+	if len(calls) != 4 || calls[2] != "rollback-preview" || calls[3] != "apply:rollback" {
+		t.Fatal("rollback preview was not applied")
+	}
+}
+
+func TestVergeScriptUICacheCleanupIsBoundedToOneRequest(t *testing.T) {
+	m := NewModel(HomeState{})
+	m.VergeScriptPreview = VergeScriptDialog{Open: true, PreviewID: "p"}
+	var done func(agent.VergeScriptCachePruneResult, error)
+	requests := 0
+	m.Hooks.PruneVergeScriptCacheAsync = func(cb func(agent.VergeScriptCachePruneResult, error)) func() {
+		requests++
+		done = cb
+		return func() {}
+	}
+	m.pruneVergeScriptCache()
+	m.pruneVergeScriptCache()
+	if requests != 1 || !m.VergeScriptPreview.Pruning {
+		t.Fatal("cleanup was not serialized")
+	}
+	done(agent.VergeScriptCachePruneResult{Removed: 2, Bytes: 42}, nil)
+	if m.VergeScriptPreview.Busy || m.VergeScriptPreview.PreviewID != "p" || m.VergeScriptPreview.CacheNotice == "" {
+		t.Fatal("cleanup lost preview or result")
+	}
+}

@@ -18,3 +18,10 @@ type Approval struct {
 	ArchiveSHA256 string    `json:"archive_sha256"`
 	OutputSHA256  string    `json:"output_sha256"`
 }
+
+// Previous is the exact script setting before the last committed change.
+// An absent Approval represents the previous data-only configuration.
+type Previous struct {
+	Approval        *Approval `json:"approval,omitempty"`
+	VergeExtensions bool      `json:"verge_extensions,omitempty"`
+}

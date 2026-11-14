@@ -128,6 +128,7 @@ type App struct {
 	localCoreFactory    func() coreEngine
 	dispatch            func(func())
 	headless            bool
+	headlessRecovery    bool
 	headlessCancel      func()
 }
 
@@ -363,6 +364,10 @@ func (a *App) loadProfiles() {
 				HasVergeArchive: it.Option.VergeArchive != "" && it.Option.VergeUID != "",
 			},
 		}
+		if approval := it.Option.VergeScriptApproval; approval != nil {
+			item.Option.VergeScriptGlobal, item.Option.VergeScriptProfile = approval.Global, approval.Profile
+		}
+		item.Option.VergeScriptHistory = it.Option.VergeScriptPrevious != nil
 		for _, sel := range it.Selected {
 			item.Selected = append(item.Selected, ui.ProfileSelected{Name: sel.Name, Now: sel.Now})
 		}
@@ -1192,41 +1197,44 @@ func (a *App) bindHooks() {
 				a.logs.Clear()
 			}
 		},
-		ImportURL:                 a.ImportURL,
-		ImportLocal:               a.ImportLocal,
-		DeleteProfile:             a.DeleteProfile,
-		UpdateProfile:             a.UpdateProfile,
-		LoadRewrite:               a.loadRewrite,
-		PreviewRewriteAsync:       a.previewRewriteAsync,
-		RewriteHistory:            a.agentRewriteHistory,
-		PreviewRollbackAsync:      a.previewRollbackAsync,
-		DiscardRewriteProposal:    func(id string) { delete(a.agentProposals, id) },
-		PreviewVergeScriptAsync:   a.previewVergeScriptAsync,
-		VergeScriptPreviewRules:   a.vergeScriptPreviewRules,
-		VergeScriptPreviewConfig:  a.vergeScriptPreviewConfig,
-		DiscardVergeScriptPreview: func(id string) { delete(a.agentScriptPreviews, id) },
-		ApplyRewrite:              a.agentApply,
-		SaveProfileMetadata:       a.saveProfileMetadata,
-		SetProfileDNS:             a.setProfileDNS,
-		LoadEffectiveConfig:       a.effectiveConfig,
-		Diagnostics:               a.diagnosticsText,
-		OpenProfileFile:           a.openProfileFile,
-		SetKernelOption:           a.SetKernelOption,
-		SetKernelPorts:            a.SetKernelPorts,
-		SavePrefs:                 a.savePrefs,
-		ClearWebDAVSecret:         a.clearWebDAVSecret,
-		SaveWebDAVConfig:          a.saveWebDAVConfig,
-		ClearWebDAVConfig:         a.clearWebDAVConfig,
-		CopyWebDAVField:           a.copyWebDAVField,
-		ProbeSite:                 a.probeSite,
-		SaveSites:                 a.saveSites,
-		InstallService:            a.InstallService,
-		UninstallService:          a.UninstallService,
-		CheckUnlock:               a.checkUnlock,
-		OpenDir:                   a.openDir,
-		RestartCore:               a.restartCore,
-		Copy:                      writeClipboard,
-		Quit:                      func() { mygo.App.Quit() },
+		ImportURL:                       a.ImportURL,
+		ImportLocal:                     a.ImportLocal,
+		DeleteProfile:                   a.DeleteProfile,
+		UpdateProfile:                   a.UpdateProfile,
+		LoadRewrite:                     a.loadRewrite,
+		PreviewRewriteAsync:             a.previewRewriteAsync,
+		RewriteHistory:                  a.agentRewriteHistory,
+		PreviewRollbackAsync:            a.previewRollbackAsync,
+		DiscardRewriteProposal:          func(id string) { delete(a.agentProposals, id) },
+		PreviewVergeScriptAsync:         a.previewVergeScriptAsync,
+		PreviewVergeScriptRollbackAsync: a.previewVergeScriptRollbackAsync,
+		ApplyVergeScriptAsync:           a.applyVergeScriptAsync,
+		PruneVergeScriptCacheAsync:      a.pruneVergeScriptCacheAsync,
+		VergeScriptPreviewRules:         a.vergeScriptPreviewRules,
+		VergeScriptPreviewConfig:        a.vergeScriptPreviewConfig,
+		DiscardVergeScriptPreview:       func(id string) { delete(a.agentScriptPreviews, id) },
+		ApplyRewrite:                    a.agentApply,
+		SaveProfileMetadata:             a.saveProfileMetadata,
+		SetProfileDNS:                   a.setProfileDNS,
+		LoadEffectiveConfig:             a.effectiveConfig,
+		Diagnostics:                     a.diagnosticsText,
+		OpenProfileFile:                 a.openProfileFile,
+		SetKernelOption:                 a.SetKernelOption,
+		SetKernelPorts:                  a.SetKernelPorts,
+		SavePrefs:                       a.savePrefs,
+		ClearWebDAVSecret:               a.clearWebDAVSecret,
+		SaveWebDAVConfig:                a.saveWebDAVConfig,
+		ClearWebDAVConfig:               a.clearWebDAVConfig,
+		CopyWebDAVField:                 a.copyWebDAVField,
+		ProbeSite:                       a.probeSite,
+		SaveSites:                       a.saveSites,
+		InstallService:                  a.InstallService,
+		UninstallService:                a.UninstallService,
+		CheckUnlock:                     a.checkUnlock,
+		OpenDir:                         a.openDir,
+		RestartCore:                     a.restartCore,
+		Copy:                            writeClipboard,
+		Quit:                            func() { mygo.App.Quit() },
 	}
 }
 

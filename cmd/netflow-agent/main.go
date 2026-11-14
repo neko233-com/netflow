@@ -27,7 +27,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags.Usage = func() {
 		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, kernel-options, kernel-option NAME VALUE|inherit, update-geo, tun on|off, profiles, profile-settings ID, profile-settings-set|profile-url-set (JSON stdin), import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, rewrite-history, clear-rewrite-history, preview|rollback-preview (JSON stdin), chain-status, chain-preview (JSON stdin), chain-apply ID, chain-cancel-preview ID, chain-disconnect, preview-rules ID before|after [OFFSET [LIMIT]], cancel-preview ID, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, backup-on-change on|off, backup-webdav on|off, webdav-config, webdav-clear, webdav-save|webdav-list|webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
 		fmt.Fprintln(output, "tun-autostart [on|off] sets the GUI startup preference; connections, profiles and groups accept [OFFSET [LIMIT]]; group-nodes GROUP and provider-page proxy|rule accept [OFFSET [LIMIT]]")
-		fmt.Fprintln(output, "verge-script-preview (JSON stdin), verge-script-preview-rules|verge-script-preview-config ID before|after [OFFSET [LIMIT]], verge-script-preview-cancel ID: read-only archived script preview; config contains private data")
+		fmt.Fprintln(output, "verge-script-preview (JSON stdin), verge-script-rollback-preview PROFILE, verge-script-apply ID, verge-script-preview-rules|verge-script-preview-config ID before|after [OFFSET [LIMIT]], verge-script-preview-cancel ID, verge-script-cache-prune; config contains private data")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -110,16 +110,16 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	case "help":
 		flags.Usage()
 		return nil
-	case "chain-status", "chain-disconnect", "chain-apply", "chain-cancel-preview", "verge-script-preview-cancel", "diagnostics", "shutdown", "rewrite-history", "clear-rewrite-history", "preview-rules", "verge-script-preview-rules", "verge-script-preview-config", "kernel-options", "kernel-option", "update-geo", "groups", "group-nodes", "profiles", "profile-settings", "profile-settings-set", "profile-url-set", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "backup-on-change", "backup-webdav", "webdav-config", "webdav-save", "webdav-clear", "webdav-list", "webdav-upload", "webdav-restore", "providers", "provider-page", "update-provider", "provider-job-status", "rules", "connections", "select", "mode", "use-profile", "close-connection", "tun", "tun-autostart":
+	case "chain-status", "chain-disconnect", "chain-apply", "chain-cancel-preview", "verge-script-preview-cancel", "verge-script-apply", "verge-script-rollback-preview", "verge-script-cache-prune", "diagnostics", "shutdown", "rewrite-history", "clear-rewrite-history", "preview-rules", "verge-script-preview-rules", "verge-script-preview-config", "kernel-options", "kernel-option", "update-geo", "groups", "group-nodes", "profiles", "profile-settings", "profile-settings-set", "profile-url-set", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "backup-on-change", "backup-webdav", "webdav-config", "webdav-save", "webdav-clear", "webdav-list", "webdav-upload", "webdav-restore", "providers", "provider-page", "update-provider", "provider-job-status", "rules", "connections", "select", "mode", "use-profile", "close-connection", "tun", "tun-autostart":
 		method := flags.Arg(0)
 		stdin := input
 		var input any
 		switch method {
-		case "chain-status", "chain-disconnect", "diagnostics", "shutdown", "rewrite-history", "clear-rewrite-history", "kernel-options", "update-geo", "providers", "backup-schedule", "webdav-config", "webdav-clear":
+		case "chain-status", "chain-disconnect", "diagnostics", "shutdown", "rewrite-history", "clear-rewrite-history", "verge-script-cache-prune", "kernel-options", "update-geo", "providers", "backup-schedule", "webdav-config", "webdav-clear":
 			if flags.NArg() != 1 {
 				return fmt.Errorf("%s takes no arguments", method)
 			}
-		case "chain-apply", "chain-cancel-preview", "verge-script-preview-cancel":
+		case "chain-apply", "chain-cancel-preview", "verge-script-preview-cancel", "verge-script-apply":
 			if flags.NArg() != 2 || flags.Arg(1) == "" {
 				return fmt.Errorf("%s requires a proposal id", method)
 			}
@@ -365,7 +365,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 			if err != nil {
 				return err
 			}
-		case "use-profile", "update-profile", "delete-profile", "profile-settings":
+		case "use-profile", "update-profile", "delete-profile", "profile-settings", "verge-script-rollback-preview":
 			if flags.NArg() != 2 {
 				return fmt.Errorf("%s requires a profile ID", method)
 			}
@@ -375,6 +375,9 @@ func run(args []string, input io.Reader, output io.Writer) error {
 				return errors.New("close-connection requires a connection ID")
 			}
 			input = agent.ConnectionArgs{ConnectionID: flags.Arg(1)}
+		}
+		if method == "verge-script-apply" || method == "verge-script-rollback-preview" || method == "verge-script-cache-prune" {
+			client.Timeout = 90 * time.Second
 		}
 		var out json.RawMessage
 		if err := client.Call(ctx, method, input, &out); err != nil {

@@ -143,3 +143,23 @@ func TestCandidateCheckCurrentRejectsStaleOrTamperedInputs(t *testing.T) {
 		t.Fatal("changed archive accepted")
 	}
 }
+
+func TestDataOnlyRecoveryRequiresExactBaseAndNoScripts(t *testing.T) {
+	root, item, base := fixture(t)
+	clock := time.Now().UTC()
+	c := Candidate{Body: append([]byte(nil), base...), BaseSHA256: sha256.Sum256(base), ProfileNameSHA256: sha256.Sum256([]byte(item.Name)), OutputSHA256: sha256.Sum256(base), ArchiveRelative: item.Option.VergeArchive, VergeUID: item.Option.VergeUID, Clock: clock, DataOnlyWithoutArchive: true}
+	if err := c.CheckCurrent(context.Background(), root, base, item.Name, migration.ScriptSelection{}, clock); err != nil {
+		t.Fatal(err)
+	}
+	c.Body = append(c.Body, '\n')
+	c.OutputSHA256 = sha256.Sum256(c.Body)
+	if err := c.CheckCurrent(context.Background(), root, base, item.Name, migration.ScriptSelection{}, clock); err == nil {
+		t.Fatal("recovery changed raw base")
+	}
+	c.Body = append([]byte(nil), base...)
+	c.OutputSHA256 = sha256.Sum256(base)
+	c.Selection.Profile = true
+	if err := c.CheckCurrent(context.Background(), root, base, item.Name, c.Selection, clock); err == nil {
+		t.Fatal("recovery selected a script")
+	}
+}

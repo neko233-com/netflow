@@ -32,6 +32,9 @@ type Candidate struct {
 	Clock             time.Time
 	Selection         migration.ScriptSelection
 	Steps             []Step
+	// DataOnlyWithoutArchive is a recovery candidate whose body is exactly the
+	// raw base; it intentionally disables all archived extensions and scripts.
+	DataOnlyWithoutArchive bool
 }
 
 // Build reads one archive snapshot, applies selected scripts with a fixed
@@ -111,6 +114,12 @@ func (c Candidate) CheckCurrent(ctx context.Context, root string, base []byte, p
 	}
 	if c.Clock.IsZero() || !c.Clock.Equal(clock) || c.Selection != selection || c.BaseSHA256 != sha256.Sum256(base) || c.ProfileNameSHA256 != sha256.Sum256([]byte(profileName)) || c.OutputSHA256 != sha256.Sum256(c.Body) {
 		return errors.New("script preview changed; preview again")
+	}
+	if c.DataOnlyWithoutArchive {
+		if selection.Global || selection.Profile || len(c.Steps) != 0 || c.OutputSHA256 != c.BaseSHA256 {
+			return errors.New("invalid data-only recovery candidate")
+		}
+		return nil
 	}
 	snapshot, _, err := migration.ReadArchivedCompositionSelected(root, c.ArchiveRelative, c.VergeUID, selection)
 	if err := ctx.Err(); err != nil {

@@ -20,6 +20,7 @@ import (
 	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/scriptapproval"
+	"github.com/neko233-com/netflow/internal/scriptmeta"
 	"github.com/neko233-com/netflow/internal/scriptpreview"
 	"github.com/neko233-com/netflow/internal/tun"
 	"github.com/neko233-com/netflow/internal/validation"
@@ -39,6 +40,7 @@ type vergeScriptDraft struct {
 	tunSetting            bool
 	chain                 *activeChain
 	clock                 time.Time
+	baselineUnknown       *bool
 }
 
 type vergeScriptPreviewPages struct {
@@ -46,16 +48,28 @@ type vergeScriptPreviewPages struct {
 	beforeConfig, afterConfig []byte
 	bytes                     int
 	expires                   time.Time
+	draft                     vergeScriptDraft
+	prepared                  scriptpreview.Prepared
+	rollback                  bool
+	rollbackTarget            *scriptmeta.Previous
 }
 
 func (a *App) previewVergeScriptAsync(in agent.VergeScriptPreviewArgs, done func(agent.VergeScriptPreview, error)) func() {
+	return a.previewVergeScriptOperationAsync("verge-script-preview", in, done)
+}
+
+func (a *App) previewVergeScriptRollbackAsync(id string, done func(agent.VergeScriptPreview, error)) func() {
+	return a.previewVergeScriptOperationAsync("verge-script-rollback-preview", agent.ProfileArgs{ProfileID: id}, done)
+}
+
+func (a *App) previewVergeScriptOperationAsync(method string, in any, done func(agent.VergeScriptPreview, error)) func() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		defer cancel()
 		body, err := json.Marshal(in)
 		var value any
 		if err == nil {
-			value, err = a.dispatchAgent(ctx, "verge-script-preview", body)
+			value, err = a.dispatchAgent(ctx, method, body)
 		}
 		var result agent.VergeScriptPreview
 		if err == nil {
@@ -75,7 +89,57 @@ func (a *App) previewVergeScriptAsync(in agent.VergeScriptPreviewArgs, done func
 	return cancel
 }
 
-func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepared) (agent.VergeScriptPreview, error) {
+func (a *App) applyVergeScriptAsync(id string, done func(agent.VergeScriptApplyResult, error)) func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		defer cancel()
+		body, err := json.Marshal(agent.ApplyArgs{ProposalID: id})
+		var value any
+		if err == nil {
+			value, err = a.dispatchAgent(ctx, "verge-script-apply", body)
+		}
+		var result agent.VergeScriptApplyResult
+		if err == nil {
+			var ok bool
+			result, ok = value.(agent.VergeScriptApplyResult)
+			if !ok {
+				err = errors.New("invalid script apply result")
+			}
+		}
+		a.runOnMain(func() {
+			done(result, err)
+			if a.win != nil {
+				a.win.Invalidate()
+			}
+		})
+	}()
+	return cancel
+}
+
+func (a *App) pruneVergeScriptCacheAsync(done func(agent.VergeScriptCachePruneResult, error)) func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		defer cancel()
+		value, err := a.dispatchAgent(ctx, "verge-script-cache-prune", json.RawMessage(`{}`))
+		var result agent.VergeScriptCachePruneResult
+		if err == nil {
+			var ok bool
+			result, ok = value.(agent.VergeScriptCachePruneResult)
+			if !ok {
+				err = errors.New("invalid cache cleanup result")
+			}
+		}
+		a.runOnMain(func() {
+			done(result, err)
+			if a.win != nil {
+				a.win.Invalidate()
+			}
+		})
+	}()
+	return cancel
+}
+
+func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepared, rollback bool) (agent.VergeScriptPreview, error) {
 	var result agent.VergeScriptPreview
 	if err := a.checkVergeScriptDraft(d); err != nil {
 		return result, err
@@ -94,6 +158,22 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 		return result, err
 	}
 	bytes += len(p.Baseline) + len(p.Effective)
+	bytes += len(p.Candidate.Body) + len(d.base) + len(d.activeEffective)
+	catalogBytes, err := json.Marshal(d.catalog)
+	if err != nil || len(catalogBytes) > 8<<20 {
+		return result, errors.New("profile catalog is too large for script preview")
+	}
+	stateBytes, err := json.Marshal(d.state)
+	if err != nil || len(stateBytes) > 8<<20 {
+		return result, errors.New("rule state is too large for script preview")
+	}
+	bytes += len(catalogBytes) + len(stateBytes)
+	for path := range d.hashes {
+		bytes += len(path) + 64
+	}
+	for path := range p.Validation.Sources {
+		bytes += len(path) + 64
+	}
 	used := 0
 	for _, preview := range a.agentScriptPreviews {
 		used += preview.bytes
@@ -120,13 +200,40 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 	}
 	id := hex.EncodeToString(token[:])
 	expires := now.Add(2 * time.Minute)
+	for _, connection := range d.state.Connections {
+		if connection.ProfileID == d.target && connection.ExpiresAt.After(d.clock) && connection.ExpiresAt.Before(expires) {
+			expires = connection.ExpiresAt
+		}
+	}
+	if !expires.After(now) {
+		return result, scriptpreview.ErrSourcesChanged
+	}
 	if a.agentScriptPreviews == nil {
 		a.agentScriptPreviews = map[string]vergeScriptPreviewPages{}
 	}
-	a.agentScriptPreviews[id] = vergeScriptPreviewPages{before: p.BeforeRules, after: p.AfterRules, beforeConfig: p.Baseline, afterConfig: p.Effective, bytes: bytes, expires: expires}
+	var target *scriptmeta.Previous
+	operation := "enable"
+	if rollback {
+		if d.item.Option.VergeScriptPrevious == nil {
+			return result, errors.New("no previous script setting is available")
+		}
+		value := *d.item.Option.VergeScriptPrevious
+		if value.Approval != nil {
+			copy := *value.Approval
+			value.Approval = &copy
+		}
+		target = &value
+		operation = "rollback"
+	} else if p.Candidate.DataOnlyWithoutArchive {
+		operation = "recover-disable"
+	} else if !p.Candidate.Selection.Global && !p.Candidate.Selection.Profile {
+		operation = "disable"
+	}
+	a.agentScriptPreviews[id] = vergeScriptPreviewPages{before: p.BeforeRules, after: p.AfterRules, beforeConfig: p.Baseline, afterConfig: p.Effective, bytes: bytes, expires: expires, draft: d, prepared: p, rollback: rollback, rollbackTarget: target}
 	warnings := []string{
-		"Read-only preview: scripts are not enabled and this preview cannot be applied.",
+		"Preview does not change script settings. Apply the unexpired preview separately.",
 		"Scripts use a fixed preview time and deterministic random values; behavior can differ from Clash Verge.",
+		"NetFlow preserves managed ports, TUN, mode and controller settings; script changes to them are ignored.",
 		"Agent-managed rules are applied after Verge scripts. Existing connections are not rerouted.",
 		"The summary shows field names and rules only. Explicitly inspect the full configuration; it may contain credentials.",
 	}
@@ -136,8 +243,17 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 	if d.target != d.active {
 		warnings = append(warnings, "This profile is inactive.")
 	}
+	if !d.status.Running {
+		warnings = append(warnings, "The core is stopped; applying only saves settings until the core is started.")
+	}
+	if p.Candidate.DataOnlyWithoutArchive {
+		warnings = append(warnings, "The archive is unavailable or invalid; recovery disables both scripts and archived data extensions.")
+	}
+	if d.baselineUnknown != nil && *d.baselineUnknown {
+		warnings = append(warnings, "The previous script output is unavailable; the before view is a data-only estimate and rollback may fail.")
+	}
 	warnings = append(warnings, p.Validation.Warnings...)
-	return agent.VergeScriptPreview{PreviewID: id, TargetProfile: d.target, ChangedFields: p.Changes.Fields, OtherChangedFields: p.Changes.OtherCount, RulesBefore: before, RulesAfter: after, Warnings: warnings, ExpiresAt: expires}, nil
+	return agent.VergeScriptPreview{PreviewID: id, Operation: operation, TargetProfile: d.target, ChangedFields: p.Changes.Fields, OtherChangedFields: p.Changes.OtherCount, RulesBefore: before, RulesAfter: after, Warnings: warnings, ExpiresAt: expires}, nil
 }
 
 func (a *App) vergeScriptPreviewRules(in agent.PreviewRulesArgs) (agent.PreviewRulesResult, error) {
@@ -201,8 +317,8 @@ func (a *App) captureVergeScriptDraft(target string) (vergeScriptDraft, error) {
 		d.options = &value
 	}
 	d.status = a.core.Status()
-	if !d.status.Running || a.tunBusy {
-		return d, errors.New("core is stopped or TUN is changing")
+	if a.tunBusy {
+		return d, errors.New("TUN is changing")
 	}
 	if a.settings.TUN && (tunCIBlocked() || !a.tunAllowed()) {
 		return d, tun.ErrNeedService
@@ -233,7 +349,7 @@ func (a *App) captureVergeScriptDraft(target string) (vergeScriptDraft, error) {
 	if target == d.active {
 		path = filepath.Join(a.dir, "config.yaml")
 		d.base, err = safepath.ReadFile(a.dir, "config.yaml")
-		if err == nil {
+		if err == nil && d.status.Running {
 			d.activeEffective, err = a.core.EffectiveConfig()
 		}
 	} else {
@@ -259,6 +375,7 @@ func (a *App) captureVergeScriptDraft(target string) (vergeScriptDraft, error) {
 	}
 	d.state = a.rewrites.Snapshot()
 	d.tunSetting, d.chain, d.clock = a.settings.TUN, a.chain.Load(), time.Now().UTC()
+	d.baselineUnknown = new(bool)
 	return d, nil
 }
 
@@ -301,11 +418,17 @@ func (a *App) checkVergeScriptDraft(d vergeScriptDraft) error {
 		return scriptpreview.ErrSourcesChanged
 	}
 	status := a.core.Status()
-	if !status.Running || a.tunBusy || a.core.ProfileID() != d.active || a.rewrites.Snapshot().Revision != d.state.Revision || status.TUN != d.status.TUN || status.Mode != d.status.Mode || a.settings.TUN != d.tunSetting || a.chain.Load() != d.chain {
+	if status.Running != d.status.Running || a.tunBusy || a.core.ProfileID() != d.active || a.rewrites.Snapshot().Revision != d.state.Revision || status.TUN != d.status.TUN || status.Mode != d.status.Mode || a.settings.TUN != d.tunSetting || a.chain.Load() != d.chain {
 		return scriptpreview.ErrSourcesChanged
 	}
 	if (a.kernelOptions == nil) != (d.options == nil) || (d.options != nil && !reflect.DeepEqual(a.kernelOptions.Snapshot(), *d.options)) {
 		return scriptpreview.ErrSourcesChanged
+	}
+	if d.target == d.active && d.status.Running {
+		current, err := a.core.EffectiveConfig()
+		if err != nil || sha256.Sum256(current) != sha256.Sum256(d.activeEffective) {
+			return scriptpreview.ErrSourcesChanged
+		}
 	}
 	for _, connection := range d.state.Connections {
 		if connection.ProfileID == d.target && connection.ExpiresAt.After(d.clock) && !connection.ExpiresAt.After(time.Now()) {
@@ -317,8 +440,7 @@ func (a *App) checkVergeScriptDraft(d vergeScriptDraft) error {
 
 // prepareVergeScript runs only outside the app event loop. It previews one
 // profile, without persisting or applying a script selection.
-func (a *App) prepareVergeScript(ctx context.Context, d vergeScriptDraft, selection migration.ScriptSelection) (scriptpreview.Prepared, error) {
-	var empty scriptpreview.Prepared
+func (a *App) vergeScriptBaseline(ctx context.Context, d vergeScriptDraft) ([]byte, []byte, error) {
 	var managed, baseline []byte
 	var err error
 	if d.item.Option.VergeScriptApproval != nil {
@@ -330,7 +452,7 @@ func (a *App) prepareVergeScript(ctx context.Context, d vergeScriptDraft, select
 		}
 		for path, hash := range resolved.Sources {
 			if previous, ok := d.hashes[path]; ok && previous != hash {
-				return empty, scriptpreview.ErrSourcesChanged
+				return nil, nil, scriptpreview.ErrSourcesChanged
 			}
 			d.hashes[path] = hash
 		}
@@ -346,22 +468,51 @@ func (a *App) prepareVergeScript(ctx context.Context, d vergeScriptDraft, select
 			baseline = d.base
 		}
 	}
+	if err != nil && ctx.Err() != nil {
+		return nil, nil, ctx.Err()
+	}
+	if err != nil && d.item.Option.VergeScriptApproval != nil {
+		var path string
+		var hash [32]byte
+		managed, path, hash, err = migration.ComposeArchived(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, d.base)
+		if err == nil {
+			d.hashes[path] = hash
+			if d.target == d.active && d.status.Running {
+				baseline = d.activeEffective
+			} else {
+				baseline = d.base
+				if d.item.Option.VergeExtensions {
+					baseline = managed
+				}
+				if d.baselineUnknown != nil {
+					*d.baselineUnknown = true
+				}
+			}
+		}
+	}
 	if err != nil {
-		return empty, scriptpreview.ErrCandidate
+		return nil, nil, scriptpreview.ErrCandidate
+	}
+	if d.target == d.active && d.status.Running {
+		return d.activeEffective, managed, nil
 	}
 	baseline, err = d.finalize(baseline)
 	if err != nil {
-		return empty, scriptpreview.ErrFinalize
+		return nil, nil, scriptpreview.ErrFinalize
 	}
-	if d.target == d.active {
-		baseline = d.activeEffective
-	}
-	return scriptpreview.Prepare(ctx, scriptpreview.PrepareInput{
-		Root: a.dir, Archive: d.item.Option.VergeArchive, UID: d.item.Option.VergeUID, ProfileName: d.item.Name, Base: d.base, Baseline: baseline, Selection: selection, Clock: d.clock,
+	return baseline, managed, nil
+}
+
+func (a *App) vergeScriptPreviewInput(d vergeScriptDraft, baseline, managed []byte, selection migration.ScriptSelection, clock time.Time, protect bool) scriptpreview.PrepareInput {
+	return scriptpreview.PrepareInput{
+		Root: a.dir, Archive: d.item.Option.VergeArchive, UID: d.item.Option.VergeUID, ProfileName: d.item.Name, Base: d.base, Baseline: baseline, Selection: selection, Clock: clock,
 		Finalize: func(ctx context.Context, body []byte) ([]byte, error) {
-			body, err := profile.RestoreVergeManagedFields(ctx, body, managed)
-			if err != nil {
-				return nil, err
+			if protect {
+				var err error
+				body, err = profile.RestoreVergeManagedFields(ctx, body, managed)
+				if err != nil {
+					return nil, err
+				}
 			}
 			return d.finalize(body)
 		},
@@ -391,5 +542,13 @@ func (a *App) prepareVergeScript(ctx context.Context, d vergeScriptDraft, select
 			}
 			return checkErr
 		},
-	})
+	}
+}
+
+func (a *App) prepareVergeScript(ctx context.Context, d vergeScriptDraft, selection migration.ScriptSelection) (scriptpreview.Prepared, error) {
+	baseline, managed, err := a.vergeScriptBaseline(ctx, d)
+	if err != nil {
+		return scriptpreview.Prepared{}, err
+	}
+	return scriptpreview.Prepare(ctx, a.vergeScriptPreviewInput(d, baseline, managed, selection, d.clock, true))
 }

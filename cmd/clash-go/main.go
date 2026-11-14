@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/neko233-com/netflow/internal/app"
+	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/validation"
 )
 
@@ -39,12 +40,16 @@ func main() {
 func runHeadless(args []string) error {
 	flags := flag.NewFlagSet("NetFlow --headless", flag.ContinueOnError)
 	tun := flags.Bool("tun", true, "enable TUN at startup")
+	recovery := flags.Bool("recovery", false, "allow a stopped core for configuration recovery")
 	parentStdin := flags.Bool("parent-stdin", false, "stop when the controlling CLI closes its pipe")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected headless arguments")
+	}
+	if *recovery && *tun {
+		return fmt.Errorf("recovery requires --tun=false")
 	}
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
@@ -57,9 +62,10 @@ func runHeadless(args []string) error {
 		}()
 	}
 	return app.New(app.Options{}).RunHeadless(ctx, app.HeadlessOptions{
-		EnableTUN: *tun,
-		Ready: func(tun bool) {
-			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"ready": true, "headless": true, "tun": tun})
+		EnableTUN:    *tun,
+		AllowStopped: *recovery,
+		ReadyStatus: func(status core.Status) {
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"ready": true, "headless": true, "tun": status.TUN, "core_running": status.Running, "recovery": *recovery})
 		},
 	})
 }

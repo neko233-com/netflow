@@ -23,7 +23,7 @@ import (
 )
 
 var ErrChanged = errors.New("approved script inputs or output changed; preview again")
-var ErrCacheFull = errors.New("approved script output storage limit reached")
+var ErrCacheFull = errors.New("approved script output storage limit reached; use verge-script-cache-prune")
 var cacheMu sync.Mutex
 
 // Approval is metadata only; it does not prove core validation.
@@ -75,10 +75,10 @@ func checkCacheLimit(root string, added int) error {
 		if err != nil || !info.Mode().IsRegular() {
 			return ErrChanged
 		}
-		total += info.Size()
-		if total > 256<<20 {
+		if info.Size() < 0 || info.Size() > (256<<20)-total {
 			return ErrCacheFull
 		}
+		total += info.Size()
 	}
 	return nil
 }
@@ -155,6 +155,7 @@ func Resolve(ctx context.Context, root string, approval Approval, base []byte, n
 type Resolved struct {
 	Body, Managed []byte
 	Sources       map[string][32]byte
+	Snapshot      migration.ArchivedScriptSnapshot
 }
 
 // ResolveSnapshot returns the data-only composition and exact archive/cache
@@ -189,7 +190,7 @@ func ResolveSnapshot(ctx context.Context, root string, approval Approval, base [
 	if err := ctx.Err(); err != nil {
 		return empty, err
 	}
-	return Resolved{Body: body, Managed: managed, Sources: map[string][32]byte{snapshot.ArchivePath: snapshot.ArchiveSHA256, filepath.Join(root, path): sha256.Sum256(body)}}, nil
+	return Resolved{Body: body, Managed: managed, Sources: map[string][32]byte{snapshot.ArchivePath: snapshot.ArchiveSHA256, filepath.Join(root, path): sha256.Sum256(body)}, Snapshot: snapshot}, nil
 }
 
 func cleanError(ctx context.Context) error {

@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appconfig"
 	"github.com/neko233-com/netflow/internal/appdir"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/migration"
+	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/scriptapproval"
 	"github.com/neko233-com/netflow/internal/scriptpreview"
@@ -23,19 +25,60 @@ import (
 	"github.com/neko233-com/netflow/internal/tun"
 )
 
+type scriptCatalogChangeEngine struct {
+	coreEngine
+	app *App
+}
+
+func (e *scriptCatalogChangeEngine) Reload() error {
+	catalog, err := e.app.profiles.Load()
+	if err != nil {
+		return err
+	}
+	catalog.Items[0].Description = "concurrent external edit"
+	if err := e.app.profiles.Save(catalog); err != nil {
+		return err
+	}
+	return errors.New("synthetic reload failure")
+}
+
+func TestVergeScriptCacheCleanupRejectsMissingCatalog(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "verge-script-outputs")
+	if err := os.Mkdir(cacheDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(cacheDir, strings.Repeat("a", 64)+".json")
+	if err := os.WriteFile(path, []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := New(Options{})
+	a.dir = dir
+	a.profiles = profile.NewStore(dir)
+	a.dispatch = func(fn func()) { fn() }
+	if _, err := a.dispatchAgent(context.Background(), "verge-script-cache-prune", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("missing catalog accepted")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("cache deleted without catalog", err)
+	}
+}
+
 func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T) {
 	source := t.TempDir()
 	if err := os.Mkdir(filepath.Join(source, "profiles"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	files := map[string]string{
-		"profiles.yaml":       "current: p1\nitems:\n  - {uid: p1, type: local, name: Test, file: p1.yaml, option: {merge: m1, script: s1}}\n  - {uid: p2, type: local, name: Invalid, file: p2.yaml, option: {script: s2}}\n  - {uid: m1, type: merge, file: m1.yaml}\n  - {uid: Script, type: script, file: global.js}\n  - {uid: s1, type: script, file: profile.js}\n  - {uid: s2, type: script, file: bad.js}\n",
-		"profiles/p1.yaml":    fmt.Sprintf("mixed-port: %d\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\ntun: {enable: false}\nrules: ['MATCH,DIRECT']\n", freePort(t)),
-		"profiles/m1.yaml":    "profile: {store-selected: true}\n",
-		"profiles/p2.yaml":    "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\ntun: {enable: false}\nrules: ['MATCH,DIRECT']\n",
-		"profiles/global.js":  `function main(c){c.rules.unshift("DOMAIN,global.test,DIRECT");c.tun.enable=true;c["mixed-port"]=1;c.mode="global";c["external-controller"]="0.0.0.0:9090";return c}`,
-		"profiles/profile.js": `function main(c){c.rules.unshift("DOMAIN,profile.test,DIRECT");return c}`,
-		"profiles/bad.js":     `function main(c){c.rules.unshift("DOMAIN,invalid.test,MissingPolicy");return c}`,
+		"profiles.yaml":        "current: p1\nitems:\n  - {uid: p1, type: local, name: Test, file: p1.yaml, option: {merge: m1, script: s1}}\n  - {uid: p2, type: local, name: Invalid, file: p2.yaml, option: {script: s2}}\n  - {uid: p3, type: local, name: Inactive, file: p3.yaml, option: {script: s3}}\n  - {uid: m1, type: merge, file: m1.yaml}\n  - {uid: Script, type: script, file: global.js}\n  - {uid: s1, type: script, file: profile.js}\n  - {uid: s2, type: script, file: bad.js}\n  - {uid: s3, type: script, file: inactive.js}\n",
+		"profiles/p1.yaml":     fmt.Sprintf("mixed-port: %d\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\ntun: {enable: false}\nrules: ['MATCH,DIRECT']\n", freePort(t)),
+		"profiles/m1.yaml":     "profile: {store-selected: true}\n",
+		"profiles/p2.yaml":     "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\ntun: {enable: false}\nrules: ['MATCH,DIRECT']\n",
+		"profiles/p3.yaml":     "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\ntun: {enable: false}\nrules: ['MATCH,DIRECT']\n",
+		"profiles/global.js":   `function main(c){c.rules.unshift("DOMAIN,global.test,DIRECT");c.tun.enable=true;c["mixed-port"]=1;c.mode="global";c["external-controller"]="0.0.0.0:9090";return c}`,
+		"profiles/profile.js":  `function main(c){c.rules.unshift("DOMAIN,profile.test,DIRECT");return c}`,
+		"profiles/bad.js":      `function main(c){c.rules.unshift("DOMAIN,invalid.test,MissingPolicy");return c}`,
+		"profiles/inactive.js": `function main(c){c.rules.unshift("DOMAIN,inactive.test,DIRECT");return c}`,
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(source, filepath.FromSlash(name)), []byte(body), 0600); err != nil {
@@ -145,27 +188,81 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	if _, err := a.prepareVergeScript(context.Background(), badDraft, migration.ScriptSelection{Profile: true}); !errors.Is(err, scriptpreview.ErrValidation) {
 		t.Fatalf("invalid script output accepted or not validated: %v", err)
 	}
-	// Exercise the persisted-output runtime building block. There is no public
-	// script apply operation until the transaction and rollback paths are ready.
-	approval, err := scriptapproval.Store(context.Background(), dir, prepared.Candidate, draft.base, draft.item.Name)
+	// Commit is still internal until the explicit rollback preview is wired.
+	scriptProposal := a.agentScriptPreviews[viaBridge.PreviewID]
+	ready, err := a.prepareVergeScriptCommit(context.Background(), scriptProposal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, snapshot, err := a.profiles.LoadForUpdate()
+	_, oldCatalog, err := a.profiles.LoadForUpdate()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := range catalog.Items {
-		if catalog.Items[i].UID == draft.target {
-			catalog.Items[i].Option.VergeScriptApproval = &approval
-			catalog.Items[i].Option.VergeExtensions = true
+	a.tunBusy = true
+	if _, err := a.finishVergeScriptCommit(context.Background(), ready); err == nil {
+		t.Fatal("script apply accepted a TUN transition")
+	}
+	a.tunBusy = false
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := a.finishVergeScriptCommit(canceled, ready); !errors.Is(err, context.Canceled) {
+		t.Fatal("canceled script apply was accepted", err)
+	}
+	changed, previous, err := a.profiles.LoadForUpdate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed.Items[0].Description = "synthetic external change"
+	if err := a.profiles.SaveIfUnchanged(changed, previous); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.finishVergeScriptCommit(context.Background(), ready); err == nil {
+		t.Fatal("script apply accepted a changed catalog")
+	}
+	if err := a.profiles.RestoreSnapshotIfUnchanged(changed, previous); err != nil {
+		t.Fatal(err)
+	}
+	coreBeforeFailure := a.core
+	a.core = &scriptCatalogChangeEngine{coreEngine: coreBeforeFailure, app: a}
+	if _, err := a.finishVergeScriptCommit(context.Background(), ready); err == nil {
+		t.Fatal("reload failure with external edit was accepted")
+	}
+	modified, err := a.profiles.Load()
+	if err != nil || modified.Items[0].Description != "concurrent external edit" {
+		t.Fatal("rollback overwrote an external catalog edit", err)
+	}
+	if err := a.profiles.RestoreSnapshotIfUnchanged(modified, oldCatalog); err != nil {
+		t.Fatal(err)
+	}
+	a.core = &chainFailReloadEngine{coreEngine: coreBeforeFailure, failures: 1}
+	if _, err := a.finishVergeScriptCommit(context.Background(), ready); err == nil {
+		t.Fatal("injected reload failure accepted")
+	}
+	a.core = coreBeforeFailure
+	_, restoredCatalog, err := a.profiles.LoadForUpdate()
+	if err != nil || !bytes.Equal(oldCatalog, restoredCatalog) {
+		t.Fatal("failed apply did not restore exact catalog", err)
+	}
+	if current, err := a.core.EffectiveConfig(); err != nil || !bytes.Equal(before, current) {
+		t.Fatal("failed apply did not restore core", err)
+	}
+	if active, err := a.finishVergeScriptCommit(context.Background(), ready); err != nil || !active {
+		t.Fatal("script commit failed", err)
+	}
+	approval := *ready.approval
+	commitDraft := ready.proposal.draft
+	listing, err := a.agentProfiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visible bool
+	for _, item := range listing.Profiles {
+		if item.ID == draft.target {
+			visible = item.VergeArchive && item.VergeGlobalScript && item.VergeProfileScript && item.VergeScriptRollback
 		}
 	}
-	if err := a.profiles.SaveIfUnchanged(catalog, snapshot); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.core.Reload(); err != nil {
-		t.Fatal("cached script reload failed", err)
+	if !visible {
+		t.Fatal("Agent profile list omitted script status")
 	}
 	active, err := a.core.EffectiveConfig()
 	if err != nil || !bytes.Contains(active, []byte("DOMAIN,profile.test,DIRECT")) {
@@ -173,6 +270,115 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	}
 	if bytes.Contains(active, []byte("0.0.0.0:9090")) || a.core.Status().TUN || a.core.Status().Mode == "global" {
 		t.Fatal("cached script modified protected runtime controls")
+	}
+	// Preview and commit the previous data-only configuration, then preview
+	// the reverse transition. Both directions go through offline validation.
+	for step := 0; step < 2; step++ {
+		raw, _ := json.Marshal(agent.ProfileArgs{ProfileID: draft.target})
+		value, err := a.dispatchAgent(context.Background(), "verge-script-rollback-preview", raw)
+		if err != nil {
+			t.Fatal("rollback preview failed", err)
+		}
+		rbPreview := value.(agent.VergeScriptPreview)
+		if rbPreview.Operation != "rollback" {
+			t.Fatal("rollback preview operation missing")
+		}
+		applyRaw, _ := json.Marshal(agent.ApplyArgs{ProposalID: rbPreview.PreviewID})
+		value, err = a.dispatchAgent(context.Background(), "verge-script-apply", applyRaw)
+		if err != nil || !value.(agent.VergeScriptApplyResult).Applied || !value.(agent.VergeScriptApplyResult).Active {
+			t.Fatal("rollback apply failed", err)
+		}
+		if _, err := a.dispatchAgent(context.Background(), "verge-script-apply", applyRaw); err == nil {
+			t.Fatal("script preview applied twice")
+		}
+		current, err := a.core.EffectiveConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		contains := bytes.Contains(current, []byte("DOMAIN,profile.test,DIRECT"))
+		if contains != (step == 1) {
+			t.Fatal("rollback did not restore exact script setting")
+		}
+	}
+	// Explicitly preview disabling all scripts, then restore them with a new
+	// preview. Existing connections and host TUN are not touched by the test.
+	for step := 0; step < 2; step++ {
+		request := agent.VergeScriptPreviewArgs{ProfileID: draft.target, Global: step == 1, Profile: step == 1}
+		raw, _ := json.Marshal(request)
+		value, err := a.dispatchAgent(context.Background(), "verge-script-preview", raw)
+		if err != nil {
+			t.Fatal("disable/enable preview failed", err)
+		}
+		preview := value.(agent.VergeScriptPreview)
+		if step == 0 && preview.Operation != "disable" {
+			t.Fatal("disable operation missing")
+		}
+		applyRaw, _ := json.Marshal(agent.ApplyArgs{ProposalID: preview.PreviewID})
+		value, err = a.dispatchAgent(context.Background(), "verge-script-apply", applyRaw)
+		if err != nil || !value.(agent.VergeScriptApplyResult).Applied {
+			t.Fatal("disable/enable apply failed", err)
+		}
+		current, err := a.core.EffectiveConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(current, []byte("DOMAIN,profile.test,DIRECT")) != (step == 1) {
+			t.Fatal("disable/enable output incorrect")
+		}
+	}
+	catalog, err = a.profiles.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range catalog.Items {
+		if item.UID == draft.target {
+			if item.Option.VergeScriptApproval == nil {
+				t.Fatal("enabled script approval missing")
+			}
+			approval = *item.Option.VergeScriptApproval
+		}
+	}
+	var other string
+	for _, item := range catalog.Items {
+		if item.Name == "Inactive" {
+			other = item.UID
+		}
+	}
+	if other == "" {
+		t.Fatal("inactive script profile missing")
+	}
+	beforeInactive, err := a.core.EffectiveConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherArgs, _ := json.Marshal(agent.VergeScriptPreviewArgs{ProfileID: other, Profile: true})
+	value, err = a.dispatchAgent(context.Background(), "verge-script-preview", otherArgs)
+	if err != nil {
+		t.Fatal("inactive preview failed", err)
+	}
+	otherPreview := value.(agent.VergeScriptPreview)
+	otherApply, _ := json.Marshal(agent.ApplyArgs{ProposalID: otherPreview.PreviewID})
+	value, err = a.dispatchAgent(context.Background(), "verge-script-apply", otherApply)
+	if err != nil || !value.(agent.VergeScriptApplyResult).Applied || value.(agent.VergeScriptApplyResult).Active {
+		t.Fatal("inactive script apply failed", err)
+	}
+	unchanged, err := a.core.EffectiveConfig()
+	if err != nil || !bytes.Equal(beforeInactive, unchanged) {
+		t.Fatal("inactive apply changed running core", err)
+	}
+	if err := a.UseProfile(other); err != nil {
+		t.Fatal("could not activate approved inactive profile", err)
+	}
+	selected, err := a.core.EffectiveConfig()
+	if err != nil || !bytes.Contains(selected, []byte("DOMAIN,inactive.test,DIRECT")) {
+		t.Fatal("inactive script output did not activate", err)
+	}
+	if err := a.UseProfile(draft.target); err != nil {
+		t.Fatal("could not restore original profile", err)
+	}
+	value, err = a.dispatchAgent(context.Background(), "verge-script-cache-prune", json.RawMessage(`{}`))
+	if err != nil || value.(agent.VergeScriptCachePruneResult).Removed < 1 {
+		t.Fatal("unreferenced script cache was not pruned", err)
 	}
 	if err := a.core.Stop(); err != nil {
 		t.Fatal(err)
@@ -188,7 +394,7 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	if err != nil || len(proposal.RulesAfter) == 0 || proposal.RulesAfter[0] != "DOMAIN,agent.test,DIRECT" {
 		t.Fatal("Agent rule did not override script", err)
 	}
-	resolved, err := scriptapproval.ResolveSnapshot(context.Background(), dir, approval, draft.base, draft.item.Name, draft.item.Option.VergeArchive, draft.item.Option.VergeUID)
+	resolved, err := scriptapproval.ResolveSnapshot(context.Background(), dir, approval, commitDraft.base, commitDraft.item.Name, commitDraft.item.Option.VergeArchive, commitDraft.item.Option.VergeUID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,6 +419,75 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	stillActive, err := a.core.EffectiveConfig()
 	if err != nil || !bytes.Equal(active, stillActive) {
 		t.Fatal("failed reload changed running core", err)
+	}
+	archive := filepath.Join(dir, commitDraft.item.Option.VergeArchive)
+	if err := os.Rename(archive, archive+".missing"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.core.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	state := a.rewrites.Snapshot()
+	state.Connections = append(state.Connections, rewrite.Connection{ID: "expired-recovery-fixture", ProfileID: draft.target, Rule: "DOMAIN,expired.test,DIRECT", ExpiresAt: time.Now().Add(-time.Minute)})
+	if _, err := a.rewrites.Replace(state, state.Revision); err != nil {
+		t.Fatal(err)
+	}
+	rulesPath := filepath.Join(dir, "agent-rules.json")
+	rulesBefore, err := os.ReadFile(rulesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryCtx, cancelRecovery := context.WithCancel(context.Background())
+	defer cancelRecovery()
+	recoveryApp := New(Options{Dirs: appdir.Fixed(dir), Store: appconfig.NewMemory(dir), Proxy: sysproxy.NewMemory(), TUN: tun.NewMemory(), Core: core.New()})
+	readyStatus := make(chan core.Status, 1)
+	finished := make(chan error, 1)
+	go func() {
+		finished <- recoveryApp.RunHeadless(recoveryCtx, HeadlessOptions{AllowStopped: true, ReadyStatus: func(status core.Status) { readyStatus <- status }})
+	}()
+	select {
+	case status := <-readyStatus:
+		if status.Running || status.TUN {
+			t.Fatal("recovery started a core or TUN")
+		}
+	case err := <-finished:
+		t.Fatal("recovery service exited", err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("recovery service did not start")
+	}
+	time.Sleep(1200 * time.Millisecond)
+	rulesDuring, err := os.ReadFile(rulesPath)
+	if err != nil || !bytes.Equal(rulesBefore, rulesDuring) {
+		t.Fatal("recovery mode changed Agent rule state", err)
+	}
+	var recovery agent.VergeScriptPreview
+	err = client.Call(context.Background(), "verge-script-preview", agent.VergeScriptPreviewArgs{ProfileID: draft.target}, &recovery)
+	if err != nil {
+		t.Fatal("missing archive recovery preview failed", err)
+	}
+	if recovery.Operation != "recover-disable" {
+		t.Fatal("recovery scope not reported")
+	}
+	var applied agent.VergeScriptApplyResult
+	err = client.Call(context.Background(), "verge-script-apply", agent.ApplyArgs{ProposalID: recovery.PreviewID}, &applied)
+	if err != nil || !applied.Applied || applied.CoreRunning {
+		t.Fatal("missing archive recovery failed", err)
+	}
+	cancelRecovery()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal("recovery service shutdown failed", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("recovery service did not shut down")
+	}
+	if err := a.core.Start(dir); err != nil {
+		t.Fatal("core could not start after offline recovery", err)
+	}
+	recovered, err := a.core.EffectiveConfig()
+	if err != nil || bytes.Contains(recovered, []byte("DOMAIN,profile.test,DIRECT")) || a.core.Status().TUN {
+		t.Fatal("recovery did not restore raw subscription safely", err)
 	}
 	a.tunBusy = true
 	if err := a.checkVergeScriptDraft(draft); err != scriptpreview.ErrSourcesChanged {

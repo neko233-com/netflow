@@ -163,7 +163,7 @@ func validProviderCachePath(path string) bool {
 	}
 	parts := strings.Split(filepath.ToSlash(filepath.Clean(path)), "/")
 	first := strings.ToLower(parts[0])
-	if strings.HasPrefix(first, ".") || first == "agent" || first == "profiles" || first == "verge-imports" {
+	if strings.HasPrefix(first, ".") || first == "agent" || first == "profiles" || first == "verge-imports" || first == "verge-script-outputs" {
 		return false
 	}
 	if len(parts) == 1 {

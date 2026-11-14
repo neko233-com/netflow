@@ -9,9 +9,13 @@ import (
 )
 
 type Profile struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Active bool   `json:"active"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	Active              bool   `json:"active"`
+	VergeArchive        bool   `json:"verge_archive_linked,omitempty"`
+	VergeGlobalScript   bool   `json:"verge_global_script_enabled,omitempty"`
+	VergeProfileScript  bool   `json:"verge_profile_script_enabled,omitempty"`
+	VergeScriptRollback bool   `json:"verge_script_rollback_available,omitempty"`
 }
 
 // KernelOptionsResult contains explicit overrides; omitted fields inherit the
@@ -328,6 +332,7 @@ type VergeScriptPreviewArgs struct {
 }
 type VergeScriptPreview struct {
 	PreviewID          string             `json:"preview_id"`
+	Operation          string             `json:"operation"`
 	TargetProfile      string             `json:"target_profile"`
 	ChangedFields      []string           `json:"changed_fields"`
 	OtherChangedFields int                `json:"other_changed_fields"`
@@ -349,6 +354,18 @@ type VergeScriptConfigPage struct {
 	NextOffset int    `json:"next_offset"`
 	Total      int    `json:"total"`
 	Text       string `json:"text"`
+}
+
+type VergeScriptApplyResult struct {
+	Applied     bool     `json:"applied"`
+	Active      bool     `json:"active"`
+	CoreRunning bool     `json:"core_running"`
+	Warnings    []string `json:"warnings,omitempty"`
+}
+
+type VergeScriptCachePruneResult struct {
+	Removed int   `json:"removed"`
+	Bytes   int64 `json:"bytes"`
 }
 
 type ApplyArgs struct {

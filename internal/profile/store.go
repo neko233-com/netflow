@@ -62,6 +62,7 @@ type CatalogOption struct {
 	VergeUID            string               `json:"verge_uid,omitempty"`
 	VergeExtensions     bool                 `json:"verge_extensions,omitempty"`
 	VergeScriptApproval *scriptmeta.Approval `json:"verge_script_approval,omitempty"`
+	VergeScriptPrevious *scriptmeta.Previous `json:"verge_script_previous,omitempty"`
 	VergeProviderPaths  map[string]string    `json:"verge_provider_paths,omitempty"`
 }
 

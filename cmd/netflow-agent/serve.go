@@ -20,11 +20,26 @@ func runServe(dir string, args []string, output io.Writer) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(output)
 	tun := flags.Bool("tun", true, "enable TUN at startup")
+	recovery := flags.Bool("recovery", false, "allow a stopped core for recovery")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("serve accepts only --tun=true or --tun=false")
+		return errors.New("serve accepts --tun=true|false and --recovery")
+	}
+	if *recovery {
+		if explicitlySet := func() bool {
+			found := false
+			flags.Visit(func(f *flag.Flag) {
+				if f.Name == "tun" {
+					found = true
+				}
+			})
+			return found
+		}(); explicitlySet && *tun {
+			return errors.New("recovery cannot enable TUN")
+		}
+		*tun = false
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -44,7 +59,11 @@ func runServe(dir string, args []string, output io.Writer) error {
 		return err
 	}
 	defer writePipe.Close()
-	cmd := exec.Command(appExe, "--headless", "--tun="+strconv.FormatBool(*tun), "--parent-stdin")
+	appArgs := []string{"--headless", "--tun=" + strconv.FormatBool(*tun), "--parent-stdin"}
+	if *recovery {
+		appArgs = append(appArgs, "--recovery")
+	}
+	cmd := exec.Command(appExe, appArgs...)
 	cmd.Env = append(os.Environ(), "NETFLOW_CONFIG_DIR="+dir)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = readPipe, output, os.Stderr
 	configureHeadlessProcess(cmd)

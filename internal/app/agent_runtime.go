@@ -13,6 +13,9 @@ import (
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/migration"
 	"github.com/neko233-com/netflow/internal/profile"
+	"github.com/neko233-com/netflow/internal/scriptapproval"
+	"github.com/neko233-com/netflow/internal/scriptmeta"
+	"github.com/neko233-com/netflow/internal/scriptpreview"
 	"github.com/neko233-com/netflow/internal/ui"
 	"github.com/neko233-com/netflow/internal/validation"
 )
@@ -42,13 +45,95 @@ func (a *App) stopAgent() {
 }
 
 func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMessage) (any, error) {
-	if method == "verge-script-preview" {
-		var in agent.VergeScriptPreviewArgs
+	if method == "verge-script-cache-prune" {
+		var in agent.Empty
 		if err := decodeStrict(args, &in); err != nil {
 			return nil, err
 		}
-		if !in.Global && !in.Profile {
-			return nil, errors.New("select at least one archived script")
+		select {
+		case vergeScriptPreviewSlots <- struct{}{}:
+			defer func() { <-vergeScriptPreviewSlots }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		var refs []scriptmeta.Approval
+		var hash [32]byte
+		var captureErr error
+		executed := false
+		a.runOnMain(func() {
+			executed = true
+			if captureErr = ctx.Err(); captureErr != nil {
+				return
+			}
+			if a.profiles == nil {
+				captureErr = errors.New("profile store is unavailable")
+				return
+			}
+			var catalog profile.File
+			catalog, hash, captureErr = a.profiles.LoadSnapshot()
+			if captureErr != nil {
+				return
+			}
+			if hash == ([32]byte{}) {
+				captureErr = errors.New("profile catalog is missing")
+				return
+			}
+			for _, item := range catalog.Items {
+				if item.Option.VergeScriptApproval != nil {
+					refs = append(refs, *item.Option.VergeScriptApproval)
+				}
+				if item.Option.VergeScriptPrevious != nil && item.Option.VergeScriptPrevious.Approval != nil {
+					refs = append(refs, *item.Option.VergeScriptPrevious.Approval)
+				}
+			}
+		})
+		if !executed {
+			return nil, errors.New("application is shutting down")
+		}
+		if captureErr != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, errors.New("profile catalog is unavailable")
+		}
+		result, err := scriptapproval.Prune(ctx, a.dir, refs, func() error {
+			var guardErr error
+			ran := false
+			a.runOnMain(func() {
+				ran = true
+				if guardErr = ctx.Err(); guardErr != nil {
+					return
+				}
+				if a.profiles == nil {
+					guardErr = errors.New("profile store is unavailable")
+					return
+				}
+				_, current, e := a.profiles.LoadSnapshot()
+				if e != nil || current != hash {
+					guardErr = errors.New("profile catalog changed")
+				}
+			})
+			if !ran {
+				return errors.New("application is shutting down")
+			}
+			return guardErr
+		})
+		if err != nil {
+			return nil, err
+		}
+		return agent.VergeScriptCachePruneResult{Removed: result.Removed, Bytes: result.Bytes}, nil
+	}
+	if method == "verge-script-preview" || method == "verge-script-rollback-preview" {
+		var in agent.VergeScriptPreviewArgs
+		rollback := method == "verge-script-rollback-preview"
+		if rollback {
+			var request agent.ProfileArgs
+			if err := decodeStrict(args, &request); err != nil {
+				return nil, err
+			}
+			in.ProfileID = request.ProfileID
+		} else if err := decodeStrict(args, &in); err != nil {
+			return nil, err
 		}
 		select {
 		case vergeScriptPreviewSlots <- struct{}{}:
@@ -74,7 +159,15 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			}
 			return nil, errors.New("script preview configuration is unavailable or has changed")
 		}
-		prepared, err := a.prepareVergeScript(ctx, draft, migration.ScriptSelection{Global: in.Global, Profile: in.Profile})
+		var prepared scriptpreview.Prepared
+		var err error
+		if rollback {
+			prepared, err = a.prepareVergeScriptRollback(ctx, draft)
+		} else if !in.Global && !in.Profile {
+			prepared, err = a.prepareVergeScriptDisable(ctx, draft)
+		} else {
+			prepared, err = a.prepareVergeScript(ctx, draft, migration.ScriptSelection{Global: in.Global, Profile: in.Profile})
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -87,13 +180,83 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		a.runOnMain(func() {
 			executed = true
 			if finishErr = ctx.Err(); finishErr == nil {
-				result, finishErr = a.finishVergeScriptPreview(draft, prepared)
+				result, finishErr = a.finishVergeScriptPreview(draft, prepared, rollback)
 			}
 		})
 		if !executed {
 			return nil, errors.New("application is shutting down")
 		}
 		return result, finishErr
+	}
+	if method == "verge-script-apply" {
+		var in agent.ApplyArgs
+		if err := decodeStrict(args, &in); err != nil {
+			return nil, err
+		}
+		select {
+		case vergeScriptPreviewSlots <- struct{}{}:
+			defer func() { <-vergeScriptPreviewSlots }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		var proposal vergeScriptPreviewPages
+		var takeErr error
+		executed := false
+		a.runOnMain(func() {
+			executed = true
+			if takeErr = ctx.Err(); takeErr != nil {
+				return
+			}
+			var ok bool
+			proposal, ok = a.agentScriptPreviews[in.ProposalID]
+			delete(a.agentScriptPreviews, in.ProposalID)
+			if !ok || !proposal.expires.After(time.Now()) {
+				takeErr = errors.New("script preview missing or expired")
+				return
+			}
+			takeErr = a.checkVergeScriptDraft(proposal.draft)
+		})
+		if !executed {
+			return nil, errors.New("application is shutting down")
+		}
+		if takeErr != nil {
+			return nil, takeErr
+		}
+		ready, err := a.prepareVergeScriptCommit(ctx, proposal)
+		if err != nil {
+			return nil, err
+		}
+		var active bool
+		var finishErr error
+		executed = false
+		a.runOnMain(func() {
+			executed = true
+			active, finishErr = a.finishVergeScriptCommit(ctx, ready)
+			if finishErr == nil && a.model != nil {
+				a.loadProfiles()
+				a.refreshHome()
+				a.model.Notice = "Verge 脚本设置已应用"
+				if a.win != nil {
+					a.win.Invalidate()
+				}
+			}
+		})
+		if !executed {
+			return nil, errors.New("application is shutting down")
+		}
+		if finishErr != nil {
+			return nil, finishErr
+		}
+		var warnings []string
+		if ready.approval != nil {
+			warnings = append(warnings, "Script output is pinned to this subscription and archive; changes require a new preview.")
+		}
+		if !proposal.draft.status.Running {
+			warnings = append(warnings, "The core is stopped; start it to use the saved setting.")
+		} else if !active {
+			warnings = append(warnings, "The profile is inactive; changes take effect when it is activated.")
+		}
+		return agent.VergeScriptApplyResult{Applied: true, Active: active, CoreRunning: proposal.draft.status.Running, Warnings: warnings}, nil
 	}
 	if method == "chain-preview" {
 		var in agent.ChainPreviewArgs
@@ -663,12 +826,14 @@ func (a *App) expiryLoop(stop <-chan struct{}) {
 		case <-stop:
 			return
 		case now := <-ticker.C:
-			state := a.rewrites.Snapshot()
 			expired := false
-			for _, c := range state.Connections {
-				if !c.ExpiresAt.After(now) {
-					expired = true
-					break
+			if !a.headlessRecovery {
+				state := a.rewrites.Snapshot()
+				for _, c := range state.Connections {
+					if !c.ExpiresAt.After(now) {
+						expired = true
+						break
+					}
 				}
 			}
 			cleanupProposals := !now.Before(nextProposalCleanup)

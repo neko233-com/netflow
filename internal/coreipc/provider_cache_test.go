@@ -70,7 +70,7 @@ func TestProviderCacheRejectsUserChangesAndLinks(t *testing.T) {
 	if err := persistProviderCache(root, ProviderCache{Path: name, Data: []byte("downloaded")}, [32]byte{}, false); err == nil {
 		t.Fatal("new user file was overwritten")
 	}
-	if validProviderCachePath("config.yaml") || validProviderCachePath(filepath.Join("profiles", "p.yaml")) || validProviderCachePath("../outside") {
+	if validProviderCachePath("config.yaml") || validProviderCachePath(filepath.Join("profiles", "p.yaml")) || validProviderCachePath(filepath.Join("verge-script-outputs", "private.json")) || validProviderCachePath("../outside") {
 		t.Fatal("protected path was accepted")
 	}
 }

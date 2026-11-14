@@ -70,6 +70,20 @@ func TestOfflineCheckDoesNotDownloadMissingGeoData(t *testing.T) {
 	}
 }
 
+func TestOfflineCheckRejectsPrivateScriptOutputAsProvider(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "verge-script-outputs"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "verge-script-outputs", "private.yaml"), []byte("proxies: [{name: good, type: direct}]\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("mixed-port: 0\nproxy-providers:\n  nodes: {type: file, path: verge-script-outputs/private.yaml, health-check: {enable: false}}\nproxy-groups: [{name: Select, type: select, use: [nodes]}]\nrules: ['MATCH,DIRECT']\n")
+	if _, err := Check(Request{Directory: dir, Configs: []Config{{ID: "one", Body: body}}}); err == nil {
+		t.Fatal("private script output was accepted as a provider")
+	}
+}
+
 func TestOfflineCheckAcceptsExistingGeoData(t *testing.T) {
 	dir := t.TempDir()
 	fixture, err := os.ReadFile(filepath.Join("..", "app", "testdata", "GeoIP2-Country-Test.mmdb"))

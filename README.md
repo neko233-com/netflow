@@ -19,6 +19,8 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 
 Windows 开启 TUN 可能请求管理员授权；服务就绪后会输出包含 `ready`、`headless` 和 `tun` 的 JSON。在另一个终端可运行 `& $agent status`、`& $agent shutdown` 及下面的 Agent 命令；`shutdown` 确认收到关闭请求后返回，GUI 实例会拒绝此命令。等待 `serve` 进程退出，确认内核已停止并恢复路由。前台终端按 Ctrl+C 也会请求干净退出；若启动器意外退出，子进程会检测控制管道关闭并退出。测试和诊断时可以使用 `serve --tun=false` 启动内核而不启用 TUN，再用 `tun on` 显式开启；不会修改系统代理设置。
 
+如果已批准脚本的存档或输出丢失而导致内核无法启动，可使用 `& $agent serve --recovery` 启动不启用 TUN 的恢复服务，再预览并应用关闭脚本的提案。恢复服务就绪 JSON 的 `core_running` 可能为 `false`；应用恢复设置后关闭该服务，再正常启动。不可在恢复模式中同时请求 `--tun=true`。
+
 设置文件在运行中被外部修改或无法读取时，`status` 会显示 `settings_warning`，开启 TUN 前会拒绝已知的设置冲突。关闭 TUN 时即使设置保存失败，也会保持 TUN 关闭并报告错误；外部文件不会被覆盖，请检查文件后重启。最终写入与外部修改之间仍存在短暂竞争窗口。
 
 GUI 和无界面模式启动时都会先清除上次运行遗留的 TUN 状态；GUI 仅在明确启用“启动时请求虚拟网卡”后重新请求开启，headless 则按 `serve` 参数决定。清除状态失败时启动会报错，不会据此直接启动 TUN。
@@ -201,7 +203,9 @@ $source = "$env:APPDATA\io.github.clash-verge-rev.clash-verge-rev"
 
 新迁入的 Verge DNS 设置按字段覆盖订阅中的 DNS，保留未设置的原字段，并应用非空 hosts；编辑 DNS 内容后，该订阅改用 NetFlow 的整段 DNS 覆写，已迁入的 hosts 仍保留。旧版本已经迁入的订阅不会自动改变 DNS 行为，可在新的配置目录重新迁入以使用新的合并方式。
 
-在订阅卡片右键选择“预览 Verge 脚本”，或在运行中的 GUI、Headless 实例中通过 Agent 显式执行迁入脚本的**只读预览**。例如将 `{"profile_id":"订阅ID","global":true,"profile":true}` 传给 `netflow-agent verge-script-preview`；返回的 `preview_id` 可用于 `verge-script-preview-rules ID before|after [OFFSET [LIMIT]]` 分页，或用 `verge-script-preview-cancel ID` 提前清除。完整配置可通过界面按钮或 `verge-script-preview-config ID before|after [OFFSET [LIMIT]]` 显式分页查看；配置可能包含订阅凭据，请注意保护。对应 MCP 工具为 `netflow_preview_verge_script`、`netflow_verge_script_preview_rules`、`netflow_verge_script_preview_config` 和 `netflow_cancel_verge_script_preview`。预览执行真实的离线内核配置校验，不会启用脚本或改变内核；启用和回滚仍未实现。脚本使用固定预览时间与确定性随机源，可能与 Verge 不同。更多限制见 [脚本扩展状态](docs/verge-script-status.md)。
+在订阅卡片右键选择“预览 Verge 脚本”，可选择脚本、审查规则与完整配置，再单独应用或预览回滚。Agent 可将 `{"profile_id":"订阅ID","global":true,"profile":true}` 传给 `netflow-agent verge-script-preview`，用返回的 `preview_id` 执行 `verge-script-apply ID`；全不选可预览关闭脚本，`verge-script-rollback-preview PROFILE` 可预览上一份设置。使用 `verge-script-preview-rules ID before|after [OFFSET [LIMIT]]` 查看规则，或用 `verge-script-preview-config ID before|after [OFFSET [LIMIT]]` 显式查看完整配置；后者可能包含订阅凭据。对应 MCP 工具包括 `netflow_preview_verge_script`、`netflow_apply_verge_script` 和 `netflow_preview_verge_script_rollback`。预览不改变配置；应用会重载活动内核并可能中断连接。全局脚本按所选订阅单独批准；脚本使用固定预览时间与确定性随机源，可能与 Verge 不同。已批准结果绑定订阅、名称和存档；订阅变化时请先关闭脚本、更新，再重新预览启用。更多限制见 [脚本扩展状态](docs/verge-script-status.md)。
+
+`profiles` 和 MCP `netflow_profiles` 会标出已关联 Verge 存档、已启用的全局或订阅脚本以及是否有上一份设置；存档关联标志不代表文件当前可读。脚本缓存达到上限时，可在预览对话框清理未引用缓存，或运行 `verge-script-cache-prune`；当前和上一份设置使用的缓存会保留。
 
 新迁入订阅中的文件型规则和代理集合（包括数据合并扩展中的引用）会从所选目录或备份复制到独立的 `verge-providers` 目录；HTTP 集合缓存可用时一并复制，不存在时重新下载。源文件不在所选目录或备份中、无法安全读取或缺失时会显示提示，缺失的文件型集合必须补齐后才能正常使用。为避免误读其他配置，这些路径也会被重定向到独立目录。后续订阅更新沿用原始路径的映射；更新若引入了新的本地文件路径，需要手动提供该文件。单个集合文件最多 8 MiB，迁移读取总量最多 64 MiB。已由旧版迁入的订阅需要重新迁入才能获得这些映射。
 

@@ -1661,7 +1661,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(verge, "profiles.yaml"), []byte("current: p1\nitems:\n  - {uid: p1, type: remote, name: Test, url: 'https://example.test/sub', file: p1.yaml, option: {proxies: p2, groups: g1, merge: m1}}\n  - {uid: p2, type: proxies, file: p2.yaml}\n  - {uid: g1, type: groups, file: g1.yaml}\n  - {uid: m1, type: merge, file: m1.yaml}\n  - {uid: Merge, type: merge, file: Merge.yaml}\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(verge, "profiles.yaml"), []byte("current: p1\nitems:\n  - {uid: p1, type: remote, name: Test, url: 'https://example.test/sub', file: p1.yaml, option: {proxies: p2, groups: g1, merge: m1, script: s1}}\n  - {uid: p2, type: proxies, file: p2.yaml}\n  - {uid: g1, type: groups, file: g1.yaml}\n  - {uid: m1, type: merge, file: m1.yaml}\n  - {uid: Merge, type: merge, file: Merge.yaml}\n  - {uid: Script, type: script, file: global.js}\n  - {uid: s1, type: script, file: local.js}\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	reservation, err := net.ListenPacket("udp4", "127.0.0.1:0")
@@ -1679,6 +1679,8 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		"g1.yaml":    "append: [{name: Extra, type: select, proxies: [DIRECT]}, {name: FromSet, type: select, use: [imported, remote, bad]}]\n",
 		"m1.yaml":    "profile: {store-selected: true}\nproxy-providers:\n  imported: {type: file, path: ./sets/nodes.yaml, health-check: {enable: false}}\n  remote: {type: http, url: 'http://10.233.42.1:18765/v1/provider.yaml', path: ./sets/remote.yaml, interval: 3600, health-check: {enable: false}}\n  bad: {type: http, url: 'http://10.233.42.1:18765/v1/missing?token=synthetic-secret', path: ./sets/bad.yaml, interval: 3600, health-check: {enable: false}}\nrule-providers:\n  blocked: {type: file, behavior: domain, format: yaml, path: ./sets/rules.yaml}\n",
 		"Merge.yaml": "profile: {store-fake-ip: false}\n",
+		"global.js":  `function main(c){c.rules.unshift("DOMAIN,global-script.netflow-test.example,DIRECT");return c}`,
+		"local.js":   `function main(c){c.rules.unshift("DOMAIN,local-script.netflow-test.example,DIRECT");c.tun={enable:false};c["external-controller"]="0.0.0.0:9090";return c}`,
 	} {
 		if err := os.WriteFile(filepath.Join(verge, "profiles", name), []byte(contents), 0600); err != nil {
 			t.Fatal(err)
@@ -1859,6 +1861,54 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if err != nil || !status.TUN {
 			t.Fatalf("migrated TUN failed: %+v %v", status, err)
 		}
+		// Exercise the installed CLI against the real privileged TUN worker.
+		// The scripts attempt to turn TUN off and expose a controller; managed
+		// fields must remain protected throughout preview, apply and rollback.
+		scriptPreview := func() ([]byte, error) {
+			c, done := context.WithTimeout(context.Background(), 90*time.Second)
+			defer done()
+			cmd := vmCommand(c, agentExe, "--config-dir", migrationTarget, "verge-script-preview")
+			cmd.Stdin = strings.NewReader(`{"global":true,"profile":true}`)
+			return cmd.CombinedOutput()
+		}
+		out, err = scriptPreview()
+		var script agent.VergeScriptPreview
+		if err != nil || json.Unmarshal(out, &script) != nil || script.PreviewID == "" || script.Operation != "enable" {
+			t.Fatalf("TUN script preview failed: %s %v", out, err)
+		}
+		if len(script.RulesAfter.Rules) < 2 || !strings.Contains(strings.Join(script.RulesAfter.Rules, "\n"), "local-script.netflow-test.example") {
+			t.Fatal("script rule missing from preview")
+		}
+		out, err = callMigration("verge-script-apply", script.PreviewID)
+		var applied agent.VergeScriptApplyResult
+		if err != nil || json.Unmarshal(out, &applied) != nil || !applied.Applied || !applied.Active {
+			t.Fatalf("TUN script apply failed: %s %v", out, err)
+		}
+		out, err = callMigration("status")
+		if err != nil || json.Unmarshal(out, &status) != nil || !status.TUN {
+			t.Fatalf("script apply changed TUN status: %s %v", out, err)
+		}
+		out, err = callMigration("rules")
+		if err != nil || !strings.Contains(string(out), "local-script.netflow-test.example") {
+			t.Fatalf("script rules not active: %s %v", out, err)
+		}
+		out, err = callMigration("verge-script-rollback-preview", status.ActiveProfile)
+		if err != nil || json.Unmarshal(out, &script) != nil || script.PreviewID == "" || script.Operation != "rollback" {
+			t.Fatalf("TUN script rollback preview failed: %s %v", out, err)
+		}
+		out, err = callMigration("verge-script-apply", script.PreviewID)
+		if err != nil || json.Unmarshal(out, &applied) != nil || !applied.Applied {
+			t.Fatalf("TUN script rollback failed: %s %v", out, err)
+		}
+		out, err = callMigration("status")
+		if err != nil || json.Unmarshal(out, &status) != nil || !status.TUN {
+			t.Fatalf("script rollback changed TUN status: %s %v", out, err)
+		}
+		out, err = callMigration("rules")
+		if err != nil || strings.Contains(string(out), "local-script.netflow-test.example") {
+			t.Fatalf("script rollback left rules active: %s %v", out, err)
+		}
+		t.Log("installed Agent previewed, applied and rolled back migrated scripts with TUN active")
 		out, err = callMigration("providers")
 		var providers agent.ProviderList
 		if err != nil || json.Unmarshal(out, &providers) != nil {

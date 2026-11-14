@@ -60,6 +60,29 @@ func Prepare(ctx context.Context, in PrepareInput) (Prepared, error) {
 	if err != nil {
 		return empty, cleanError(ctx, ErrCandidate)
 	}
+	return prepareCandidate(ctx, in, candidate, false)
+}
+
+// PrepareCandidate validates a trusted previously reviewed candidate, for
+// example a rollback target restored from an immutable approval. The caller
+// must establish that candidate.Body corresponds to the intended history.
+func PrepareCandidate(ctx context.Context, in PrepareInput, candidate Candidate) (Prepared, error) {
+	return prepareCandidate(ctx, in, candidate, true)
+}
+
+func prepareCandidate(ctx context.Context, in PrepareInput, candidate Candidate, checkInitial bool) (Prepared, error) {
+	var empty Prepared
+	if ctx == nil || in.Finalize == nil || in.Validate == nil || in.Check == nil {
+		return empty, errors.New("incomplete script preview")
+	}
+	if candidate.ArchiveRelative != in.Archive || candidate.VergeUID != in.UID || len(candidate.Body) == 0 || len(candidate.Body) > vergescript.MaxJSONBytes {
+		return empty, cleanError(ctx, ErrCandidate)
+	}
+	if checkInitial {
+		if err := candidate.CheckCurrent(ctx, in.Root, in.Base, in.ProfileName, in.Selection, in.Clock); err != nil {
+			return empty, cleanError(ctx, ErrSourcesChanged)
+		}
+	}
 	effective, err := in.Finalize(ctx, append([]byte(nil), candidate.Body...))
 	if err != nil || len(effective) == 0 || len(effective) > vergescript.MaxJSONBytes {
 		return empty, cleanError(ctx, ErrFinalize)

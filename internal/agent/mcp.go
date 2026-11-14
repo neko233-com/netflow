@@ -18,13 +18,40 @@ type Empty struct{}
 // local bridge. No subscription URLs, core secrets, or token are returned.
 func NewMCP(client Client) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "netflow", Version: netflow.Version()}, nil)
-	mcp.AddTool(s, &mcp.Tool{Name: "netflow_preview_verge_script", Description: "Run explicitly selected archived Clash Verge scripts in a bounded guest for a read-only preview, with offline core validation. Does not enable or apply scripts. Inspect all rule pages and warnings.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in VergeScriptPreviewArgs) (*mcp.CallToolResult, VergeScriptPreview, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_preview_verge_script", Description: "Run selected archived Clash Verge scripts in a bounded guest and validate the configuration offline. Select neither script to preview disabling them. Preview does not apply; inspect all rule pages, full config and warnings.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in VergeScriptPreviewArgs) (*mcp.CallToolResult, VergeScriptPreview, error) {
 		var out VergeScriptPreview
 		c := client
 		if c.Timeout <= 0 {
 			c.Timeout = 60 * time.Second
 		}
 		err := c.Call(ctx, "verge-script-preview", in, &out)
+		return nil, out, err
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_preview_verge_script_rollback", Description: "Preview and validate the previous approved script setting, without rerunning JavaScript or changing routing.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in ProfileArgs) (*mcp.CallToolResult, VergeScriptPreview, error) {
+		var out VergeScriptPreview
+		c := client
+		if c.Timeout <= 0 {
+			c.Timeout = 60 * time.Second
+		}
+		err := c.Call(ctx, "verge-script-rollback-preview", in, &out)
+		return nil, out, err
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_apply_verge_script", Description: "Apply an unexpired, validated script preview. This can reload the kernel and change routing; the previous setting can be previewed for rollback."}, func(ctx context.Context, _ *mcp.CallToolRequest, in ApplyArgs) (*mcp.CallToolResult, VergeScriptApplyResult, error) {
+		var out VergeScriptApplyResult
+		c := client
+		if c.Timeout <= 0 {
+			c.Timeout = 60 * time.Second
+		}
+		err := c.Call(ctx, "verge-script-apply", in, &out)
+		return nil, out, err
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_prune_verge_script_cache", Description: "Delete unreferenced NetFlow-managed script output cache files; current and previous settings are retained."}, func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, VergeScriptCachePruneResult, error) {
+		var out VergeScriptCachePruneResult
+		c := client
+		if c.Timeout <= 0 {
+			c.Timeout = 90 * time.Second
+		}
+		err := c.Call(ctx, "verge-script-cache-prune", Empty{}, &out)
 		return nil, out, err
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_verge_script_preview_rules", Description: "Page through before or after rules of a read-only Verge script preview. Pass the preview_id as proposal_id.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in PreviewRulesArgs) (*mcp.CallToolResult, PreviewRulesResult, error) {

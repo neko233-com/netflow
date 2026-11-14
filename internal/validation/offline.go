@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 
 	"github.com/metacubex/mihomo/component/geodata"
 	C "github.com/metacubex/mihomo/constant"
@@ -176,6 +177,14 @@ func Check(req Request) (Result, error) {
 			} // Inline and compatible providers were parsed with the config.
 			vehicle := v.Vehicle()
 			path := filepath.Clean(vehicle.Path())
+			rel, relErr := relativeSource(req.Directory, path)
+			if relErr != nil {
+				return errors.New("provider path is outside the configuration directory")
+			}
+			first := strings.Split(filepath.ToSlash(rel), "/")[0]
+			if strings.EqualFold(first, "verge-script-outputs") {
+				return errors.New("provider path uses private script output storage")
+			}
 			data, sum, err := read(path)
 			if errors.Is(err, os.ErrNotExist) && vehicle.Type() == P.HTTP {
 				result.Sources[path] = [32]byte{}

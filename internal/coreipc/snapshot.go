@@ -56,7 +56,7 @@ func snapshotDirectory(root string) ([]StageFile, error) {
 			return nil
 		}
 		if entry.IsDir() {
-			if !strings.ContainsAny(rel, `/\`) && strings.EqualFold(rel, "agent") {
+			if !strings.ContainsAny(rel, `/\`) && (strings.EqualFold(rel, "agent") || strings.EqualFold(rel, "verge-script-outputs")) {
 				return filepath.SkipDir
 			}
 			return nil

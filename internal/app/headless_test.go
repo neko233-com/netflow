@@ -43,6 +43,13 @@ func TestHeadlessDispatcherSerializesAndStops(t *testing.T) {
 	}
 }
 
+func TestHeadlessRecoveryRejectsTUN(t *testing.T) {
+	a := New(Options{})
+	if err := a.RunHeadless(context.Background(), HeadlessOptions{AllowStopped: true, EnableTUN: true}); err == nil {
+		t.Fatal("recovery mode accepted TUN")
+	}
+}
+
 func TestHeadlessAgentCreatesRunningBackup(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "config")

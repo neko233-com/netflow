@@ -557,6 +557,20 @@ func TestVergeScriptCLIPreviewAndPaging(t *testing.T) {
 				return nil, errors.New("bad config page")
 			}
 			return agent.VergeScriptConfigPage{Text: "private fixture"}, nil
+		case "verge-script-rollback-preview":
+			var in agent.ProfileArgs
+			if json.Unmarshal(raw, &in) != nil || in.ProfileID != "sub" {
+				return nil, errors.New("bad rollback preview")
+			}
+			return agent.VergeScriptPreview{PreviewID: "p", Operation: "rollback"}, nil
+		case "verge-script-apply":
+			var in agent.ApplyArgs
+			if json.Unmarshal(raw, &in) != nil || in.ProposalID != "p" {
+				return nil, errors.New("bad apply")
+			}
+			return agent.VergeScriptApplyResult{Applied: true}, nil
+		case "verge-script-cache-prune":
+			return agent.VergeScriptCachePruneResult{Removed: 1, Bytes: 12}, nil
 		case "verge-script-preview-cancel":
 			return agent.ActionResult{OK: true}, nil
 		default:
@@ -574,6 +588,9 @@ func TestVergeScriptCLIPreviewAndPaging(t *testing.T) {
 		{[]string{"verge-script-preview"}, `{"profile_id":"sub","global":true,"profile":true}`},
 		{[]string{"verge-script-preview-rules", "p", "after", "2", "1"}, ""},
 		{[]string{"verge-script-preview-config", "p", "after", "4", "8"}, ""},
+		{[]string{"verge-script-rollback-preview", "sub"}, ""},
+		{[]string{"verge-script-apply", "p"}, ""},
+		{[]string{"verge-script-cache-prune"}, ""},
 		{[]string{"verge-script-preview-cancel", "p"}, ""},
 	} {
 		var out bytes.Buffer
@@ -584,5 +601,12 @@ func TestVergeScriptCLIPreviewAndPaging(t *testing.T) {
 	var out bytes.Buffer
 	if err := run([]string{"--config-dir", dir, "verge-script-preview"}, strings.NewReader(`{"unknown":1}`), &out); err == nil {
 		t.Fatal("unknown input accepted")
+	}
+}
+
+func TestRecoveryServeRejectsTUNActivation(t *testing.T) {
+	var out bytes.Buffer
+	if err := runServe(t.TempDir(), []string{"--recovery", "--tun=true"}, &out); err == nil {
+		t.Fatal("recovery mode accepted TUN")
 	}
 }

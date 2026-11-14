@@ -38,6 +38,9 @@ func (a *App) composeVergeExtensionsFromCatalog(body []byte, id string, catalog 
 		if item.Option.VergeScriptApproval != nil {
 			resolved, err := scriptapproval.ResolveSnapshot(context.Background(), a.dir, *item.Option.VergeScriptApproval, body, item.Name, item.Option.VergeArchive, item.Option.VergeUID)
 			if err != nil {
+				if errors.Is(err, scriptapproval.ErrChanged) {
+					return nil, nil, errors.New("已批准的脚本输入或结果已变化；请预览并关闭脚本，更新订阅后重新预览启用")
+				}
 				return nil, nil, err
 			}
 			sources = resolved.Sources

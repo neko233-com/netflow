@@ -8,6 +8,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/neko233-com/netflow/internal/appdir"
+	"github.com/neko233-com/netflow/internal/core"
 )
 
 // runOnMain serializes mutations on the UI event loop in desktop mode and on
@@ -69,8 +70,10 @@ func (d *serialDispatcher) close() {
 // HeadlessOptions controls the foreground service. Ready runs only once the
 // bridge is available and any explicitly requested TUN activation succeeded.
 type HeadlessOptions struct {
-	EnableTUN bool
-	Ready     func(tun bool)
+	EnableTUN    bool
+	Ready        func(tun bool)
+	AllowStopped bool
+	ReadyStatus  func(core.Status)
 }
 
 // RunHeadless uses the same configuration, kernel and Agent API as the GUI,
@@ -78,6 +81,9 @@ type HeadlessOptions struct {
 func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr error) {
 	if ctx == nil {
 		return errors.New("headless context is required")
+	}
+	if opt.AllowStopped && opt.EnableTUN {
+		return errors.New("recovery mode cannot enable TUN")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -95,11 +101,12 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 	}
 	defer lock.Close()
 	a.headless = true
+	a.headlessRecovery = opt.AllowStopped
 	if err := a.Prepare(); err != nil {
 		_ = a.core.Stop()
 		return err
 	}
-	if a.core == nil || !a.core.Status().Running {
+	if a.core == nil || (!a.core.Status().Running && !opt.AllowStopped) {
 		if a.core != nil {
 			_ = a.core.Stop()
 		}
@@ -112,7 +119,9 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 	a.dispatch = dispatcher.call
 	a.probeSlots = make(chan struct{}, 4)
 	a.probeStop = make(chan struct{})
-	a.startProfileAuto()
+	if !opt.AllowStopped {
+		a.startProfileAuto()
+	}
 	defer func() {
 		// Prevent new callbacks, then wait for an active mutation to finish
 		// before closing services and the kernel that owns TUN and routes.
@@ -133,6 +142,9 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 		return fmt.Errorf("start Agent bridge: %w", err)
 	}
 	if opt.EnableTUN {
+		if !a.core.Status().Running {
+			return errors.New("cannot enable TUN while the core is stopped")
+		}
 		finished := make(chan error, 1)
 		a.runOnMain(func() { a.requestTUN(true, func(err error) { finished <- err }) })
 		select {
@@ -146,6 +158,9 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 	}
 	if opt.Ready != nil {
 		opt.Ready(a.core.Status().TUN)
+	}
+	if opt.ReadyStatus != nil {
+		opt.ReadyStatus(a.core.Status())
 	}
 	<-ctx.Done()
 	return nil

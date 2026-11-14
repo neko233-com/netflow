@@ -17,93 +17,96 @@ import (
 // Hooks are the app services a page calls. Nil hooks update the model only,
 // which is what the headless tests do.
 type Hooks struct {
-	SetSystemProxy             func(on bool) error
-	SetAutoLaunch              func(on bool) error
-	SetLightweight             func(on bool) error
-	ChainAvailable             func() bool
-	ConnectChainAsync          func(string, []ProxyNode, func(error))
-	DisconnectChain            func() error
-	SystemDark                 func() bool
-	ApplyHotkeys               func(Prefs) error
-	SetTUN                     func(on bool) error
-	SetTUNAsync                func(on bool, done func(error))
-	SetTUNAutoStart            func(on bool) error
-	SetMode                    func(mode string) error
-	SelectProxy                func(group, node string) error
-	UseProfile                 func(uid string) error
-	CloseConnection            func(id string) error
-	CloseAllConnections        func() error
-	ClearClosed                func()
-	RefreshRules               func() ([]rules.Item, []rules.Provider)
-	UpdateRuleProvider         func(name string) error
-	UpdateRuleProviderAsync    func(name string, done func(error))
-	UpdateProxyProviderAsync   func(name string, done func(error))
-	UpdateGeoAsync             func(done func(int, error))
-	SetLogPaused               func(paused bool)
-	ClearLogs                  func()
-	ImportURL                  func(url string) error
-	ImportURLAsync             func(url string, done func(error))
-	ImportLocal                func(path string) error
-	DeleteProfile              func(uid string) error
-	UpdateProfile              func(uid string) error
-	UpdateProfileAsync         func(uid string, done func(error))
-	ChangeProfileURLAsync      func(uid, url string, done func(error))
-	UpdateProfileViaProxyAsync func(uid string, done func(error))
-	BrowseProfiles             func() ([]string, error)
-	BrowseBackup               func() (string, error)
-	BrowseBackupDirectory      func() (string, error)
-	SetBackupSchedule          func(bool, string, int) (agent.BackupSchedule, error)
-	SetBackupOnChange          func(bool) (agent.BackupSchedule, error)
-	SetBackupWebDAV            func(bool) (agent.BackupSchedule, error)
-	CreateBackupAsync          func(string, func(error)) error
-	BrowseRestore              func() (string, string, error)
-	RestoreBackupAsync         func(string, string, func(error)) error
-	BrowseWebDAVArchive        func() (string, error)
-	UploadWebDAVAsync          func(agent.WebDAVUploadArgs, func(string, error)) error
-	ListWebDAVAsync            func(agent.WebDAVListArgs, func([]string, error)) error
-	BrowseRestoreDestination   func() (string, error)
-	RestoreWebDAVAsync         func(agent.WebDAVRestoreArgs, func(error)) error
-	SaveProfileMetadata        func(form ProfileForm) error
-	SetProfileDNS              func(id string, enabled bool, text string) error
-	LoadEffectiveConfig        func() (string, error)
-	Diagnostics                func() (string, error)
-	OpenProfileFile            func(id string) error
-	CreateProfileAsync         func(form ProfileForm, done func(error))
-	LoadRewrite                func(scope, profileID string) (rewrite.Layer, error)
-	PreviewRewrite             func(change agent.Change) (agent.Preview, error)
-	PreviewRewriteAsync        func(change agent.Change, done func(agent.Preview, error)) func()
-	RewriteHistory             func() (agent.RewriteHistory, error)
-	PreviewRollbackAsync       func(args agent.RollbackArgs, done func(agent.Preview, error)) func()
-	DiscardRewriteProposal     func(id string)
-	PreviewVergeScriptAsync    func(agent.VergeScriptPreviewArgs, func(agent.VergeScriptPreview, error)) func()
-	VergeScriptPreviewRules    func(agent.PreviewRulesArgs) (agent.PreviewRulesResult, error)
-	VergeScriptPreviewConfig   func(agent.VergeScriptConfigArgs) (agent.VergeScriptConfigPage, error)
-	DiscardVergeScriptPreview  func(string)
-	ApplyRewrite               func(id string) (agent.ApplyResult, error)
-	SetKernelOption            func(name string, value any) error
-	SetKernelPorts             func(PortSet) error
-	SavePrefs                  func(Prefs) error
-	ClearWebDAVSecret          func() error
-	SaveWebDAVConfig           func(agent.WebDAVConfigArgs) error
-	ClearWebDAVConfig          func() error
-	CopyWebDAVField            func(string) error
-	OpenDir                    func(kind string)
-	RestartCore                func() error
-	BrowseScript               func() (string, error)
-	Copy                       func(text string) error
-	Quit                       func()
-	TestSite                   func(url string) error
-	ProbeSite                  func(url string) (int, error)
-	ProbeSiteAsync             func(url string, done func(int, error))
-	SaveSites                  func([]SiteTest) error
-	InstallService             func() error
-	UninstallService           func() error
-	CheckUnlock                func(name string) (status, region string, ms int, err error)
-	CheckUnlockAsync           func(name string, done func(string, string, int, error))
-	TestProxyAsync             func(group, name, url string, done func(int, error))
-	CheckUpdateAsync           func(done func(update.Result, error))
-	QueryIPAsync               func(done func(ipinfo.Result, error))
-	LoadGroupIcon              func(context.Context, string) ([]byte, error)
+	SetSystemProxy                  func(on bool) error
+	SetAutoLaunch                   func(on bool) error
+	SetLightweight                  func(on bool) error
+	ChainAvailable                  func() bool
+	ConnectChainAsync               func(string, []ProxyNode, func(error))
+	DisconnectChain                 func() error
+	SystemDark                      func() bool
+	ApplyHotkeys                    func(Prefs) error
+	SetTUN                          func(on bool) error
+	SetTUNAsync                     func(on bool, done func(error))
+	SetTUNAutoStart                 func(on bool) error
+	SetMode                         func(mode string) error
+	SelectProxy                     func(group, node string) error
+	UseProfile                      func(uid string) error
+	CloseConnection                 func(id string) error
+	CloseAllConnections             func() error
+	ClearClosed                     func()
+	RefreshRules                    func() ([]rules.Item, []rules.Provider)
+	UpdateRuleProvider              func(name string) error
+	UpdateRuleProviderAsync         func(name string, done func(error))
+	UpdateProxyProviderAsync        func(name string, done func(error))
+	UpdateGeoAsync                  func(done func(int, error))
+	SetLogPaused                    func(paused bool)
+	ClearLogs                       func()
+	ImportURL                       func(url string) error
+	ImportURLAsync                  func(url string, done func(error))
+	ImportLocal                     func(path string) error
+	DeleteProfile                   func(uid string) error
+	UpdateProfile                   func(uid string) error
+	UpdateProfileAsync              func(uid string, done func(error))
+	ChangeProfileURLAsync           func(uid, url string, done func(error))
+	UpdateProfileViaProxyAsync      func(uid string, done func(error))
+	BrowseProfiles                  func() ([]string, error)
+	BrowseBackup                    func() (string, error)
+	BrowseBackupDirectory           func() (string, error)
+	SetBackupSchedule               func(bool, string, int) (agent.BackupSchedule, error)
+	SetBackupOnChange               func(bool) (agent.BackupSchedule, error)
+	SetBackupWebDAV                 func(bool) (agent.BackupSchedule, error)
+	CreateBackupAsync               func(string, func(error)) error
+	BrowseRestore                   func() (string, string, error)
+	RestoreBackupAsync              func(string, string, func(error)) error
+	BrowseWebDAVArchive             func() (string, error)
+	UploadWebDAVAsync               func(agent.WebDAVUploadArgs, func(string, error)) error
+	ListWebDAVAsync                 func(agent.WebDAVListArgs, func([]string, error)) error
+	BrowseRestoreDestination        func() (string, error)
+	RestoreWebDAVAsync              func(agent.WebDAVRestoreArgs, func(error)) error
+	SaveProfileMetadata             func(form ProfileForm) error
+	SetProfileDNS                   func(id string, enabled bool, text string) error
+	LoadEffectiveConfig             func() (string, error)
+	Diagnostics                     func() (string, error)
+	OpenProfileFile                 func(id string) error
+	CreateProfileAsync              func(form ProfileForm, done func(error))
+	LoadRewrite                     func(scope, profileID string) (rewrite.Layer, error)
+	PreviewRewrite                  func(change agent.Change) (agent.Preview, error)
+	PreviewRewriteAsync             func(change agent.Change, done func(agent.Preview, error)) func()
+	RewriteHistory                  func() (agent.RewriteHistory, error)
+	PreviewRollbackAsync            func(args agent.RollbackArgs, done func(agent.Preview, error)) func()
+	DiscardRewriteProposal          func(id string)
+	PreviewVergeScriptAsync         func(agent.VergeScriptPreviewArgs, func(agent.VergeScriptPreview, error)) func()
+	PreviewVergeScriptRollbackAsync func(string, func(agent.VergeScriptPreview, error)) func()
+	ApplyVergeScriptAsync           func(string, func(agent.VergeScriptApplyResult, error)) func()
+	PruneVergeScriptCacheAsync      func(func(agent.VergeScriptCachePruneResult, error)) func()
+	VergeScriptPreviewRules         func(agent.PreviewRulesArgs) (agent.PreviewRulesResult, error)
+	VergeScriptPreviewConfig        func(agent.VergeScriptConfigArgs) (agent.VergeScriptConfigPage, error)
+	DiscardVergeScriptPreview       func(string)
+	ApplyRewrite                    func(id string) (agent.ApplyResult, error)
+	SetKernelOption                 func(name string, value any) error
+	SetKernelPorts                  func(PortSet) error
+	SavePrefs                       func(Prefs) error
+	ClearWebDAVSecret               func() error
+	SaveWebDAVConfig                func(agent.WebDAVConfigArgs) error
+	ClearWebDAVConfig               func() error
+	CopyWebDAVField                 func(string) error
+	OpenDir                         func(kind string)
+	RestartCore                     func() error
+	BrowseScript                    func() (string, error)
+	Copy                            func(text string) error
+	Quit                            func()
+	TestSite                        func(url string) error
+	ProbeSite                       func(url string) (int, error)
+	ProbeSiteAsync                  func(url string, done func(int, error))
+	SaveSites                       func([]SiteTest) error
+	InstallService                  func() error
+	UninstallService                func() error
+	CheckUnlock                     func(name string) (status, region string, ms int, err error)
+	CheckUnlockAsync                func(name string, done func(string, string, int, error))
+	TestProxyAsync                  func(group, name, url string, done func(int, error))
+	CheckUpdateAsync                func(done func(update.Result, error))
+	QueryIPAsync                    func(done func(ipinfo.Result, error))
+	LoadGroupIcon                   func(context.Context, string) ([]byte, error)
 }
 
 // Model is the main window: a sidebar and the page it shows.
