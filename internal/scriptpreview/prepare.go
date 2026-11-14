@@ -37,6 +37,7 @@ type PrepareInput struct {
 	Root, Archive, UID, ProfileName string
 	Base, Baseline                  []byte
 	Selection                       migration.ScriptSelection
+	RulesBeforeScripts              bool
 	Clock                           time.Time
 	// Finalize must apply all NetFlow-owned layers to the script output.
 	Finalize func(context.Context, []byte) ([]byte, error)
@@ -56,7 +57,7 @@ func Prepare(ctx context.Context, in PrepareInput) (Prepared, error) {
 	if err := ctx.Err(); err != nil {
 		return empty, err
 	}
-	candidate, err := Build(ctx, in.Root, in.Archive, in.UID, in.Base, in.ProfileName, in.Selection, in.Clock)
+	candidate, err := BuildWithRules(ctx, in.Root, in.Archive, in.UID, in.Base, in.ProfileName, in.Selection, in.Clock, in.RulesBeforeScripts)
 	if err != nil {
 		return empty, cleanError(ctx, ErrCandidate)
 	}
@@ -75,7 +76,7 @@ func prepareCandidate(ctx context.Context, in PrepareInput, candidate Candidate,
 	if ctx == nil || in.Finalize == nil || in.Validate == nil || in.Check == nil {
 		return empty, errors.New("incomplete script preview")
 	}
-	if candidate.ArchiveRelative != in.Archive || candidate.VergeUID != in.UID || len(candidate.Body) == 0 || len(candidate.Body) > vergescript.MaxJSONBytes {
+	if candidate.ArchiveRelative != in.Archive || candidate.VergeUID != in.UID || candidate.RulesBeforeScripts != in.RulesBeforeScripts || len(candidate.Body) == 0 || len(candidate.Body) > vergescript.MaxJSONBytes {
 		return empty, cleanError(ctx, ErrCandidate)
 	}
 	if checkInitial {

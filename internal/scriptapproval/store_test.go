@@ -100,6 +100,37 @@ func TestStoreAndResolveRejectStaleOrTamperedInputs(t *testing.T) {
 	}
 }
 
+func TestApprovalBindsVergeRuleOrdering(t *testing.T) {
+	root, item, base, legacy := candidateFixture(t)
+	ctx := context.Background()
+	modern, err := scriptpreview.BuildWithRules(ctx, root, item.Option.VergeArchive, item.Option.VergeUID, base, item.Name, legacy.Selection, legacy.Clock, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldApproval, err := Store(ctx, root, legacy, base, item.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newApproval, err := Store(ctx, root, modern, base, item.Name)
+	if err != nil || !newApproval.RulesBeforeScripts {
+		t.Fatal("modern approval missing ordering", err)
+	}
+	oldPath, _ := cachePath(oldApproval)
+	newPath, _ := cachePath(newApproval)
+	if oldPath == newPath {
+		t.Fatal("different ordering shared an approval cache key")
+	}
+	if _, err := ResolveSnapshot(ctx, root, newApproval, base, item.Name, item.Option.VergeArchive, item.Option.VergeUID); !errors.Is(err, ErrChanged) {
+		t.Fatal("new approval accepted as legacy", err)
+	}
+	if _, err := ResolveSnapshotWithRules(ctx, root, oldApproval, base, item.Name, item.Option.VergeArchive, item.Option.VergeUID, true); !errors.Is(err, ErrChanged) {
+		t.Fatal("legacy approval accepted as new ordering", err)
+	}
+	if _, err := ResolveSnapshotWithRules(ctx, root, newApproval, base, item.Name, item.Option.VergeArchive, item.Option.VergeUID, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestResolveRejectsArchiveChangesAndInvalidMetadata(t *testing.T) {
 	root, item, base, c := candidateFixture(t)
 	ctx := context.Background()

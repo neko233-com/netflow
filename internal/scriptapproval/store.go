@@ -95,7 +95,7 @@ func Store(ctx context.Context, root string, candidate scriptpreview.Candidate, 
 	if err := candidate.CheckCurrent(ctx, root, base, name, candidate.Selection, candidate.Clock); err != nil {
 		return empty, cleanError(ctx)
 	}
-	approval := Approval{Version: 1, Archive: candidate.ArchiveRelative, VergeUID: candidate.VergeUID, Global: candidate.Selection.Global, Profile: candidate.Selection.Profile, Clock: candidate.Clock.UTC(), BaseSHA256: digest(candidate.BaseSHA256), NameSHA256: digest(candidate.ProfileNameSHA256), ArchiveSHA256: digest(candidate.ArchiveSHA256), OutputSHA256: digest(candidate.OutputSHA256)}
+	approval := Approval{Version: 1, Archive: candidate.ArchiveRelative, VergeUID: candidate.VergeUID, Global: candidate.Selection.Global, Profile: candidate.Selection.Profile, RulesBeforeScripts: candidate.RulesBeforeScripts, Clock: candidate.Clock.UTC(), BaseSHA256: digest(candidate.BaseSHA256), NameSHA256: digest(candidate.ProfileNameSHA256), ArchiveSHA256: digest(candidate.ArchiveSHA256), OutputSHA256: digest(candidate.OutputSHA256)}
 	path, err := cachePath(approval)
 	if err != nil {
 		return empty, err
@@ -161,6 +161,10 @@ type Resolved struct {
 // ResolveSnapshot returns the data-only composition and exact archive/cache
 // hashes from the same archive read, for runtime controls and source checks.
 func ResolveSnapshot(ctx context.Context, root string, approval Approval, base []byte, name, archive, uid string) (Resolved, error) {
+	return ResolveSnapshotWithRules(ctx, root, approval, base, name, archive, uid, false)
+}
+
+func ResolveSnapshotWithRules(ctx context.Context, root string, approval Approval, base []byte, name, archive, uid string, includeRules bool) (Resolved, error) {
 	var empty Resolved
 	if ctx == nil {
 		return empty, ErrChanged
@@ -168,10 +172,10 @@ func ResolveSnapshot(ctx context.Context, root string, approval Approval, base [
 	if err := ctx.Err(); err != nil {
 		return empty, err
 	}
-	if approval.Version != 1 || (!approval.Global && !approval.Profile) || approval.Clock.IsZero() || approval.Archive != archive || approval.VergeUID != uid || len(base) == 0 || len(base) > vergescript.MaxJSONBytes || !validDigest(approval.BaseSHA256) || !validDigest(approval.NameSHA256) || !validDigest(approval.ArchiveSHA256) || !validDigest(approval.OutputSHA256) || approval.BaseSHA256 != digest(sha256.Sum256(base)) || approval.NameSHA256 != digest(sha256.Sum256([]byte(name))) {
+	if approval.Version != 1 || approval.RulesBeforeScripts != includeRules || (!approval.Global && !approval.Profile) || approval.Clock.IsZero() || approval.Archive != archive || approval.VergeUID != uid || len(base) == 0 || len(base) > vergescript.MaxJSONBytes || !validDigest(approval.BaseSHA256) || !validDigest(approval.NameSHA256) || !validDigest(approval.ArchiveSHA256) || !validDigest(approval.OutputSHA256) || approval.BaseSHA256 != digest(sha256.Sum256(base)) || approval.NameSHA256 != digest(sha256.Sum256([]byte(name))) {
 		return empty, ErrChanged
 	}
-	snapshot, extensions, err := migration.ReadArchivedCompositionSelected(root, archive, uid, migration.ScriptSelection{Global: approval.Global, Profile: approval.Profile})
+	snapshot, extensions, err := migration.ReadArchivedCompositionSelectedWithRules(root, archive, uid, migration.ScriptSelection{Global: approval.Global, Profile: approval.Profile}, includeRules)
 	if err != nil || digest(snapshot.ArchiveSHA256) != approval.ArchiveSHA256 || (approval.Global && snapshot.Global == nil) || (approval.Profile && snapshot.Profile == nil) {
 		return empty, cleanError(ctx)
 	}

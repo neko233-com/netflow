@@ -21,17 +21,18 @@ type Step struct {
 }
 type Candidate struct {
 	// Body can contain subscription credentials and must not be logged.
-	Body              []byte
-	BaseSHA256        [32]byte
-	ArchiveSHA256     [32]byte
-	ArchivePath       string
-	ArchiveRelative   string
-	VergeUID          string
-	ProfileNameSHA256 [32]byte
-	OutputSHA256      [32]byte
-	Clock             time.Time
-	Selection         migration.ScriptSelection
-	Steps             []Step
+	Body               []byte
+	BaseSHA256         [32]byte
+	ArchiveSHA256      [32]byte
+	ArchivePath        string
+	ArchiveRelative    string
+	VergeUID           string
+	ProfileNameSHA256  [32]byte
+	OutputSHA256       [32]byte
+	Clock              time.Time
+	Selection          migration.ScriptSelection
+	RulesBeforeScripts bool
+	Steps              []Step
 	// DataOnlyWithoutArchive is a recovery candidate whose body is exactly the
 	// raw base; it intentionally disables all archived extensions and scripts.
 	DataOnlyWithoutArchive bool
@@ -42,13 +43,19 @@ type Candidate struct {
 // not permission to apply and is not proof of core validation. Base must
 // already contain the rule layers that precede Verge scripts.
 func Build(ctx context.Context, root, relative, uid string, base []byte, profileName string, selection migration.ScriptSelection, clock time.Time) (Candidate, error) {
+	return BuildWithRules(ctx, root, relative, uid, base, profileName, selection, clock, false)
+}
+
+// BuildWithRules opts into composing archived Verge rule sequences before the
+// scripts. Legacy approvals keep the original ordering by passing false.
+func BuildWithRules(ctx context.Context, root, relative, uid string, base []byte, profileName string, selection migration.ScriptSelection, clock time.Time, includeRules bool) (Candidate, error) {
 	var empty Candidate
 	if ctx == nil || clock.IsZero() || len(base) == 0 || len(base) > vergescript.MaxJSONBytes {
 		return empty, errors.New("invalid script preview input")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	snapshot, extensions, err := migration.ReadArchivedCompositionSelected(root, relative, uid, selection)
+	snapshot, extensions, err := migration.ReadArchivedCompositionSelectedWithRules(root, relative, uid, selection, includeRules)
 	if err != nil {
 		return empty, err
 	}
@@ -95,7 +102,7 @@ func Build(ctx context.Context, root, relative, uid string, base []byte, profile
 	if len(output) > vergescript.MaxJSONBytes || len(steps) != len(want) {
 		return empty, errors.New("script preview output is too large or incomplete")
 	}
-	result := Candidate{Body: append([]byte(nil), output...), BaseSHA256: sha256.Sum256(base), ArchiveSHA256: snapshot.ArchiveSHA256, ArchivePath: snapshot.ArchivePath, ArchiveRelative: relative, VergeUID: uid, ProfileNameSHA256: sha256.Sum256([]byte(profileName)), OutputSHA256: sha256.Sum256(output), Clock: clock.UTC(), Selection: selection, Steps: steps}
+	result := Candidate{Body: append([]byte(nil), output...), BaseSHA256: sha256.Sum256(base), ArchiveSHA256: snapshot.ArchiveSHA256, ArchivePath: snapshot.ArchivePath, ArchiveRelative: relative, VergeUID: uid, ProfileNameSHA256: sha256.Sum256([]byte(profileName)), OutputSHA256: sha256.Sum256(output), Clock: clock.UTC(), Selection: selection, RulesBeforeScripts: includeRules, Steps: steps}
 	if err := result.CheckCurrent(ctx, root, base, profileName, selection, clock); err != nil {
 		return empty, err
 	}
@@ -121,7 +128,7 @@ func (c Candidate) CheckCurrent(ctx context.Context, root string, base []byte, p
 		}
 		return nil
 	}
-	snapshot, _, err := migration.ReadArchivedCompositionSelected(root, c.ArchiveRelative, c.VergeUID, selection)
+	snapshot, _, err := migration.ReadArchivedCompositionSelectedWithRules(root, c.ArchiveRelative, c.VergeUID, selection, c.RulesBeforeScripts)
 	if err := ctx.Err(); err != nil {
 		return err
 	}

@@ -82,6 +82,50 @@ func TestBuildBindsArchiveSourceAndBothScriptStages(t *testing.T) {
 		t.Fatal("preview changed the subscription", err)
 	}
 }
+
+func TestBuildWithRulesMakesVergeSequenceVisibleToScript(t *testing.T) {
+	source := t.TempDir()
+	if err := os.Mkdir(filepath.Join(source, "profiles"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"profiles.yaml":   "current: p\nitems:\n  - {uid: p, type: local, name: Test, file: p.yaml, option: {rules: r, script: s}}\n  - {uid: r, type: rules, file: r.yaml}\n  - {uid: s, type: script, file: s.js}\n",
+		"profiles/p.yaml": "rules: ['MATCH,DIRECT']\n",
+		"profiles/r.yaml": "prepend: ['DOMAIN,before.test,DIRECT']\n",
+		"profiles/s.js":   `function main(c){if(c.rules[0]!=="DOMAIN,before.test,DIRECT")throw Error();c.rules.unshift("DOMAIN,script.test,DIRECT");return c}`,
+	}
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(source, filepath.FromSlash(name)), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src, err := migration.ReadVerge(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if _, err := src.ImportVerge(root); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := profile.NewStore(root).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := catalog.Items[0]
+	base, err := os.ReadFile(filepath.Join(root, item.File))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now().UTC()
+	selection := migration.ScriptSelection{Profile: true}
+	if _, err := Build(context.Background(), root, item.Option.VergeArchive, item.Option.VergeUID, base, item.Name, selection, clock); err == nil {
+		t.Fatal("legacy ordering unexpectedly exposed rules")
+	}
+	candidate, err := BuildWithRules(context.Background(), root, item.Option.VergeArchive, item.Option.VergeUID, base, item.Name, selection, clock, true)
+	if err != nil || !candidate.RulesBeforeScripts || !bytes.Contains(candidate.Body, []byte("DOMAIN,script.test,DIRECT")) {
+		t.Fatal("script did not receive preceding Verge rules", err)
+	}
+}
 func TestBuildRejectsCancellationAndMissingApprovalClock(t *testing.T) {
 	root, item, base := fixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
