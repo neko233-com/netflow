@@ -379,6 +379,13 @@ func (m *Model) profileMenu(c *mygoui.Context, menu *mygoui.Menu, p *ProfileItem
 	if menu.Item("编辑规则覆写").Chosen() {
 		m.openRuleEditor("profile", p.UID)
 	}
+	preview := menu.Item("预览 Verge 脚本")
+	if !p.Option.HasVergeArchive {
+		preview.Disabled(true)
+	}
+	if preview.Chosen() {
+		m.openVergeScriptPreview(p.UID)
+	}
 	proxies := menu.Item("编辑节点")
 	if p.Option.Proxies == "" {
 		proxies.Disabled(true)

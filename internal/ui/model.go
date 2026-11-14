@@ -75,6 +75,9 @@ type Hooks struct {
 	RewriteHistory             func() (agent.RewriteHistory, error)
 	PreviewRollbackAsync       func(args agent.RollbackArgs, done func(agent.Preview, error)) func()
 	DiscardRewriteProposal     func(id string)
+	PreviewVergeScriptAsync    func(agent.VergeScriptPreviewArgs, func(agent.VergeScriptPreview, error)) func()
+	VergeScriptPreviewRules    func(agent.PreviewRulesArgs) (agent.PreviewRulesResult, error)
+	DiscardVergeScriptPreview  func(string)
 	ApplyRewrite               func(id string) (agent.ApplyResult, error)
 	SetKernelOption            func(name string, value any) error
 	SetKernelPorts             func(PortSet) error
@@ -139,6 +142,9 @@ type Model struct {
 	RuleEditor           RuleEditor
 	ruleEditorSeq        uint64
 	ruleEditorCancel     func()
+	VergeScriptPreview   VergeScriptDialog
+	vergeScriptSeq       uint64
+	vergeScriptCancel    func()
 	UpdateDialog         bool
 	UpdateResult         update.Result
 	portsDraft           Prefs

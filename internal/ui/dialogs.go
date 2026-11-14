@@ -23,6 +23,7 @@ func (m *Model) overlay(c *mygoui.Context, pal Palette) {
 	m.deleteDialog(c, pal)
 	m.batchDeleteDialog(c, pal)
 	m.ruleEditorDialog(c, pal)
+	m.vergeScriptDialog(c, pal)
 	m.updateDialog(c, pal)
 	m.profileQRDialog(c, pal)
 	m.profileForm(c, pal)

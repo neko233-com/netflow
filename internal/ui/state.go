@@ -184,6 +184,7 @@ type ProfileOption struct {
 	TimeoutSeconds  int
 	DNSEnabled      bool
 	DNSOverride     string
+	HasVergeArchive bool
 }
 
 // ProfileForm is the create/edit dialog draft.

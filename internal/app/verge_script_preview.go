@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -43,6 +44,33 @@ type vergeScriptPreviewPages struct {
 	before, after []string
 	bytes         int
 	expires       time.Time
+}
+
+func (a *App) previewVergeScriptAsync(in agent.VergeScriptPreviewArgs, done func(agent.VergeScriptPreview, error)) func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		defer cancel()
+		body, err := json.Marshal(in)
+		var value any
+		if err == nil {
+			value, err = a.dispatchAgent(ctx, "verge-script-preview", body)
+		}
+		var result agent.VergeScriptPreview
+		if err == nil {
+			var ok bool
+			result, ok = value.(agent.VergeScriptPreview)
+			if !ok {
+				err = errors.New("invalid script preview result")
+			}
+		}
+		a.runOnMain(func() {
+			done(result, err)
+			if a.win != nil {
+				a.win.Invalidate()
+			}
+		})
+	}()
+	return cancel
 }
 
 func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepared) (agent.VergeScriptPreview, error) {
