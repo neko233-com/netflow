@@ -9,6 +9,7 @@ import (
 	"net/rpc"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/component/profile/cachefile"
@@ -83,6 +84,7 @@ type Worker struct {
 	stageFactory    func() (fileStage, error)
 	stage           fileStage
 	cacheConfigured bool
+	finalCacheBusy  atomic.Bool
 }
 
 func NewWorker() *Worker {
@@ -259,11 +261,23 @@ func (w *Worker) Stop(in ProviderCacheQuery, out *ProviderCaches) error {
 	// The TUN and listeners are already stopped. A cache failure is a warning,
 	// since reporting Stop itself as failed would leave the desktop believing
 	// that a now-stopped worker is still serving traffic.
-	if err := w.collectProviderCaches(in, out); err != nil {
+	if err := w.collectProviderCachesBounded(in, out, 3*time.Second); err != nil {
 		out.Items = nil
 		out.Warning = err.Error()
 	}
 	return nil
+}
+
+// InterruptForStop releases TUN and cancels provider network operations
+// before the client waits for its local cache/update lock. The stage remains
+// available for the normal Stop call to capture completed provider caches.
+func (w *Worker) InterruptForStop(_ Empty, _ *Empty) error {
+	w.applyMu.Lock()
+	defer w.applyMu.Unlock()
+	if w.closed {
+		return errors.New("kernel transport closed")
+	}
+	return w.kernel.Stop()
 }
 func (w *Worker) Status(_ Empty, out *core.Status) error {
 	w.applyMu.Lock()

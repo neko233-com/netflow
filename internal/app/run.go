@@ -79,7 +79,9 @@ func (a *App) Run() error {
 		if a.tray != nil {
 			a.tray.Destroy()
 		}
-		_ = a.core.Stop()
+		if err := a.core.Stop(); err != nil {
+			log.Printf("stop kernel during shutdown: %v", err)
+		}
 	})
 	mygo.App.OnActivate(func(hasVisible bool) {
 		if !hasVisible {

@@ -122,6 +122,23 @@ type blockedProviderEngine struct {
 	release chan struct{}
 }
 
+type stoppedBeforeFinalizeEngine struct{ *switchTestEngine }
+
+func (e *stoppedBeforeFinalizeEngine) Stop() error {
+	e.running = false
+	return coreipc.ErrKernelStoppedBeforeFinalization
+}
+
+func TestHandoffRestartsOldKernelAfterInterruptedStopFinalizationFails(t *testing.T) {
+	old := &stoppedBeforeFinalizeEngine{&switchTestEngine{running: true, dir: "config", id: "profile"}}
+	next := &switchTestEngine{}
+	s := newSwitchableEngine(old)
+	err := s.replace(next, nil, nil, nil)
+	if !errors.Is(err, coreipc.ErrKernelStoppedBeforeFinalization) || !old.running || old.starts != 1 || !next.closed {
+		t.Fatalf("old kernel was not restarted after stop finalization failed: %v", err)
+	}
+}
+
 func (e *blockedProviderEngine) UpdateProxyProvider(string) error {
 	close(e.started)
 	<-e.release

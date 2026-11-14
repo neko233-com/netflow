@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/metacubex/mihomo/common/utils"
 	P "github.com/metacubex/mihomo/constant/provider"
@@ -45,12 +47,40 @@ func (w *Worker) ProviderCaches(in ProviderCacheQuery, out *ProviderCaches) erro
 	return collectProviderCaches(dir, providers, in, out)
 }
 
-func (w *Worker) collectProviderCaches(in ProviderCacheQuery, out *ProviderCaches) error {
+// The caller holds applyMu while provider references are captured. The actual
+// snapshot can outlive a timed-out stop, so it must not write to the RPC reply.
+func (w *Worker) collectProviderCachesBounded(in ProviderCacheQuery, out *ProviderCaches, timeout time.Duration) error {
 	dir, providers, err := w.providerCacheSources()
 	if err != nil {
 		return err
 	}
-	return collectProviderCaches(dir, providers, in, out)
+	return collectProviderCachesWithin(dir, providers, in, out, timeout, &w.finalCacheBusy)
+}
+
+func collectProviderCachesWithin(dir string, providers []providerSnapshot, in ProviderCacheQuery, out *ProviderCaches, timeout time.Duration, busy *atomic.Bool) error {
+	if !busy.CompareAndSwap(false, true) {
+		return errors.New("previous final provider cache snapshot is still running")
+	}
+	type snapshotResult struct {
+		caches ProviderCaches
+		err    error
+	}
+	result := make(chan snapshotResult, 1)
+	go func() {
+		var caches ProviderCaches
+		err := collectProviderCaches(dir, providers, in, &caches)
+		busy.Store(false)
+		result <- snapshotResult{caches: caches, err: err}
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case snapshot := <-result:
+		*out = snapshot.caches
+		return snapshot.err
+	case <-timer.C:
+		return errors.New("final provider cache snapshot timed out")
+	}
 }
 
 // The caller holds applyMu while capturing the current provider references.

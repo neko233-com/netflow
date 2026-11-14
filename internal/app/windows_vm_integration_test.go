@@ -1431,8 +1431,18 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	var slow atomic.Bool
 	var signaled atomic.Bool
+	var shutdownSlow, shutdownSignaled atomic.Bool
+	shutdownEntered, shutdownRelease, shutdownCanceled := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if slow.Load() && signaled.CompareAndSwap(false, true) {
+		if shutdownSlow.Load() && shutdownSignaled.CompareAndSwap(false, true) {
+			close(shutdownEntered)
+			select {
+			case <-shutdownRelease:
+			case <-r.Context().Done():
+				close(shutdownCanceled)
+				return
+			}
+		} else if slow.Load() && signaled.CompareAndSwap(false, true) {
 			close(entered)
 			select {
 			case <-release:
@@ -1444,6 +1454,7 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	}))
 	defer provider.Close()
 	defer unblock()
+	defer close(shutdownRelease)
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "providers"), 0700); err != nil {
 		t.Fatal(err)
@@ -1517,6 +1528,31 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &off}, &result); err != nil {
 		t.Fatalf("TUN retry failed: %v", err)
 	}
+	on := true
+	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &on}, &result); err != nil {
+		t.Fatalf("TUN restart failed: %v", err)
+	}
+	deadline = time.Now().Add(90 * time.Second)
+	status = agent.Status{}
+	for time.Now().Before(deadline) {
+		if err := client.Call(context.Background(), "status", nil, &status); err == nil && status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if !status.TUN {
+		t.Fatalf("TUN did not restart: %+v", status)
+	}
+	slow.Store(false)
+	shutdownSlow.Store(true)
+	if err := client.Call(context.Background(), "update-provider", agent.ProviderUpdateArgs{Kind: "proxy", Name: "slow"}, &job); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-shutdownEntered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("shutdown provider update did not start")
+	}
 	if err := client.Call(context.Background(), "shutdown", nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1526,14 +1562,22 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(45 * time.Second):
-		t.Fatal("headless shutdown timed out")
+	case <-time.After(20 * time.Second):
+		t.Fatal("headless shutdown waited for stalled provider")
+	}
+	select {
+	case <-shutdownCanceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not cancel provider request")
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "providers", "slow.yaml")); err != nil || !strings.Contains(string(data), "fresh") {
+		t.Fatal("shutdown lost previously completed provider cache")
 	}
 	deadline = time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		routes, dns, e := vmNetworkSnapshot()
 		if e == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
-			t.Log("busy provider returned promptly; retry stopped TUN and restored networking")
+			t.Log("busy provider returned promptly; retry stopped TUN; shutdown canceled stalled update and restored networking")
 			return
 		}
 		time.Sleep(time.Second)

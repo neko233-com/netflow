@@ -25,6 +25,9 @@ type Client struct {
 	rpc           *rpc.Client
 	mu            sync.Mutex
 	applyMu       sync.Mutex
+	stopMu        sync.Mutex
+	stopping      bool
+	stopSignal    chan struct{}
 	profileID     string
 	dir           string
 	transform     func([]byte, string) ([]byte, error)
@@ -46,11 +49,36 @@ type Client struct {
 // kernel operation is still using the private worker.
 var ErrKernelBusy = errors.New("内核正忙，请等待集合更新或缓存同步结束后重试")
 
+// ErrKernelStoppedBeforeFinalization means the worker confirmed that its
+// kernel stopped, but the subsequent final cache/stop exchange failed.
+var ErrKernelStoppedBeforeFinalization = errors.New("kernel stopped before final cache synchronization completed")
+
 func NewClient(c io.ReadWriteCloser) (*Client, error) {
 	if c == nil {
 		return nil, errors.New("nil kernel transport")
 	}
-	return &Client{rpc: rpc.NewClient(c), cacheStop: make(chan struct{}), cacheInterval: 30 * time.Second}, nil
+	return &Client{rpc: rpc.NewClient(c), cacheStop: make(chan struct{}), stopSignal: make(chan struct{}), cacheInterval: 30 * time.Second}, nil
+}
+
+func (c *Client) isStopping() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.stopping }
+
+func (c *Client) stopSignalSnapshot() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stopSignal
+}
+
+func (c *Client) signalStopping() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stopping = true
+	if c.stopSignal != nil {
+		select {
+		case <-c.stopSignal:
+		default:
+			close(c.stopSignal)
+		}
+	}
 }
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
@@ -142,6 +170,9 @@ func (c *Client) compose(dir string) ([]byte, error) {
 func (c *Client) Start(dir string) error {
 	c.applyMu.Lock()
 	defer c.applyMu.Unlock()
+	if c.isStopping() {
+		return errors.New("kernel is stopping")
+	}
 	data, err := c.compose(dir)
 	if err != nil {
 		return err
@@ -162,6 +193,9 @@ func (c *Client) Start(dir string) error {
 	}
 	c.mu.Lock()
 	c.dir = dir
+	if !c.stopping {
+		c.stopSignal = make(chan struct{})
+	}
 	c.mu.Unlock()
 	c.caches = newCacheState(files, capabilities.IsolatedFiles)
 	if capabilities.IsolatedFiles {
@@ -172,6 +206,9 @@ func (c *Client) Start(dir string) error {
 func (c *Client) Reload() error {
 	c.applyMu.Lock()
 	defer c.applyMu.Unlock()
+	if c.isStopping() {
+		return errors.New("kernel is stopping")
+	}
 	return c.reloadLocked()
 }
 
@@ -182,6 +219,9 @@ func (c *Client) TryReload() error {
 		return ErrKernelBusy
 	}
 	defer c.applyMu.Unlock()
+	if c.isStopping() {
+		return errors.New("kernel is stopping")
+	}
 	return c.reloadLocked()
 }
 
@@ -214,10 +254,36 @@ func (c *Client) reloadLocked() error {
 	return nil
 }
 func (c *Client) Stop() error {
-	c.applyMu.Lock()
+	c.stopMu.Lock()
+	defer c.stopMu.Unlock()
+	c.signalStopping()
+	defer func() { c.mu.Lock(); c.stopping = false; c.mu.Unlock() }()
+	interrupted := false
+	if !c.applyMu.TryLock() {
+		// The worker stops its kernel and cancels provider requests without
+		// waiting for this client's serialized update or snapshot operation.
+		if err := c.call("InterruptForStop", Empty{}, &Empty{}, 15*time.Second); err != nil {
+			return errors.Join(fmt.Errorf("interrupt kernel before stop: %w", err), c.Close())
+		}
+		interrupted = true
+		deadline := time.NewTimer(15 * time.Second)
+		defer deadline.Stop()
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for !c.applyMu.TryLock() {
+			select {
+			case <-ticker.C:
+			case <-deadline.C:
+				return errors.Join(ErrKernelStoppedBeforeFinalization, errors.New("kernel operation did not stop after interruption"), c.Close())
+			}
+		}
+	}
 	defer c.applyMu.Unlock()
 	var caches ProviderCaches
 	if err := c.call("Stop", c.cacheQuery(), &caches, 45*time.Second); err != nil {
+		if interrupted {
+			return errors.Join(ErrKernelStoppedBeforeFinalization, err)
+		}
 		return err
 	}
 	if c.caches.running && c.caches.isolated {
@@ -307,6 +373,9 @@ func (c *Client) UpdateRuleProviderForProfile(name, profileID string) error {
 func (c *Client) updateRuleProvider(name string, expected *string) error {
 	c.applyMu.Lock()
 	defer c.applyMu.Unlock()
+	if c.isStopping() {
+		return errors.New("kernel is stopping")
+	}
 	if expected != nil && c.ProfileID() != *expected {
 		return core.ErrProviderProfileChanged
 	}
@@ -358,6 +427,9 @@ func (c *Client) UpdateProxyProviderForProfile(name, profileID string) error {
 func (c *Client) updateProxyProvider(name string, expected *string) error {
 	c.applyMu.Lock()
 	defer c.applyMu.Unlock()
+	if c.isStopping() {
+		return errors.New("kernel is stopping")
+	}
 	if expected != nil && c.ProfileID() != *expected {
 		return core.ErrProviderProfileChanged
 	}

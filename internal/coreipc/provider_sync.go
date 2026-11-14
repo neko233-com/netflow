@@ -60,10 +60,16 @@ func (c *Client) syncProviderCaches() error {
 	if !c.caches.running || !c.caches.isolated {
 		return nil
 	}
-	result, err := c.readProviderCaches(c.cacheQuery(), 45*time.Second)
+	stop := c.stopSignalSnapshot()
+	result, err := c.readProviderCachesUntil(c.cacheQuery(), 45*time.Second, stop)
 	if err != nil {
 		c.setCacheWarning(err)
 		return err
+	}
+	select {
+	case <-stop:
+		return errors.New("provider cache snapshot interrupted by shutdown")
+	default:
 	}
 	return c.applyProviderCaches(result)
 }
@@ -71,6 +77,15 @@ func (c *Client) syncProviderCaches() error {
 // A slow read-only cache snapshot must not tear down a healthy TUN. Keep at
 // most one abandoned read in flight; its eventual result is discarded.
 func (c *Client) readProviderCaches(query ProviderCacheQuery, timeout time.Duration) (ProviderCaches, error) {
+	return c.readProviderCachesUntil(query, timeout, nil)
+}
+
+func (c *Client) readProviderCachesUntil(query ProviderCacheQuery, timeout time.Duration, stop <-chan struct{}) (ProviderCaches, error) {
+	select {
+	case <-stop:
+		return ProviderCaches{}, errors.New("provider cache snapshot interrupted by shutdown")
+	default:
+	}
 	c.mu.Lock()
 	if c.cachePending {
 		c.mu.Unlock()
@@ -90,6 +105,9 @@ func (c *Client) readProviderCaches(query ProviderCacheQuery, timeout time.Durat
 	case <-timer.C:
 		go func() { <-done; clear() }()
 		return ProviderCaches{}, errors.New("provider cache snapshot timed out")
+	case <-stop:
+		go func() { <-done; clear() }()
+		return ProviderCaches{}, errors.New("provider cache snapshot interrupted by shutdown")
 	}
 }
 

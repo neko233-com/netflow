@@ -11,6 +11,7 @@ import (
 	mihomodns "github.com/metacubex/mihomo/dns"
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
+	"github.com/neko233-com/netflow/internal/coreipc"
 	"github.com/neko233-com/netflow/internal/rules"
 )
 
@@ -266,6 +267,12 @@ func (s *switchableEngine) replace(next coreEngine, before func() error, commit 
 	id := old.ProfileID()
 	s.stopLogs()
 	if err := old.Stop(); err != nil {
+		if errors.Is(err, coreipc.ErrKernelStoppedBeforeFinalization) {
+			if restartErr := old.Start(status.ConfigDir); restartErr != nil {
+				s.startLogs()
+				return errors.Join(err, fmt.Errorf("恢复原内核失败: %w", restartErr))
+			}
+		}
 		s.startLogs()
 		return err
 	}
