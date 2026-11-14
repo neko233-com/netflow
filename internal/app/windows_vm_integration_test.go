@@ -1884,6 +1884,21 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if err != nil || json.Unmarshal(out, &applied) != nil || !applied.Applied || !applied.Active {
 			t.Fatalf("TUN script apply failed: %s %v", out, err)
 		}
+		// A script receives the profile name, so changing it must not silently
+		// invalidate the approved output while the real TUN worker is running.
+		settingsCtx, settingsCancel := context.WithTimeout(context.Background(), 40*time.Second)
+		settingsCommand := vmCommand(settingsCtx, agentExe, "--config-dir", migrationTarget, "profile-settings-set")
+		namePatch, marshalErr := json.Marshal(map[string]string{"profile_id": status.ActiveProfile, "name": "Changed script-bound name"})
+		if marshalErr != nil {
+			settingsCancel()
+			t.Fatal(marshalErr)
+		}
+		settingsCommand.Stdin = bytes.NewReader(namePatch)
+		settingsOutput, settingsErr := settingsCommand.CombinedOutput()
+		settingsCancel()
+		if settingsErr == nil {
+			t.Fatalf("script-bound profile rename was accepted: %s", settingsOutput)
+		}
 		out, err = callMigration("status")
 		if err != nil || json.Unmarshal(out, &status) != nil || !status.TUN {
 			t.Fatalf("script apply changed TUN status: %s %v", out, err)
