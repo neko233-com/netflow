@@ -24,7 +24,7 @@ func TestUnsupportedBackupDoesNotExposeSavedPassword(t *testing.T) {
 	m.Dialogs.Backup = false
 	m.Dialogs.WebDAV = true
 	tt = renderModel(m, WindowWidth, WindowHeight, false)
-	if !tt.HasText("WebDAV 备份尚未实现") || tt.HasText("synthetic-never-display") || tt.HasText("synthetic-url-secret") || tt.HasText("synthetic-hidden-user") {
+	if !tt.HasText("上传会发送所选未加密备份") || tt.HasText("synthetic-never-display") || tt.HasText("synthetic-url-secret") || tt.HasText("synthetic-hidden-user") {
 		t.Fatal("WebDAV status or password visibility is incorrect")
 	}
 }
@@ -52,6 +52,52 @@ func TestAutomaticBackupRequiresChoosingDirectory(t *testing.T) {
 	}
 	if !called || !m.BackupSchedule.Enabled || m.BackupSchedule.IntervalHours != 24 {
 		t.Fatal("explicit opt-in was not saved")
+	}
+}
+
+func TestWebDAVUploadNeedsExplicitSelectionAndDoesNotDisplayPassword(t *testing.T) {
+	m := DemoModel()
+	m.Dialogs.WebDAV = true
+	m.WebDAVURLDraft, m.WebDAVUserDraft, m.WebDAVPasswordDraft = "https://backup.invalid/dav", "user", "synthetic-password"
+	called := false
+	m.Hooks.BrowseWebDAVArchive = func() (string, error) { return "", nil }
+	m.Hooks.UploadWebDAVAsync = func(args agent.WebDAVUploadArgs, done func(string, error)) error {
+		called = true
+		if args.Archive == "" || args.Password != "synthetic-password" {
+			t.Error("upload arguments were lost")
+		}
+		done("netflow-test.zip", nil)
+		return nil
+	}
+	tt := renderModel(m, WindowWidth, WindowHeight, false)
+	if tt.HasText("synthetic-password") {
+		t.Fatal("password was visible")
+	}
+	if err := tt.Click("webdav-upload"); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("canceling selection started upload")
+	}
+	m.Hooks.BrowseWebDAVArchive = func() (string, error) { return `C:\Backups\test.zip`, nil }
+	tt = renderModel(m, WindowWidth, WindowHeight, false)
+	if err := tt.Click("webdav-upload"); err != nil {
+		t.Fatal(err)
+	}
+	if !called || m.WebDAVPasswordDraft != "" || m.Notice != "WebDAV 备份已上传: netflow-test.zip" {
+		t.Fatal("upload completion or password clearing failed")
+	}
+}
+
+func TestWebDAVActionsFitMinimumWindowHeight(t *testing.T) {
+	m := DemoModel()
+	m.Dialogs.WebDAV, m.WebDAVSecretStored = true, true
+	tt := renderModel(m, WindowWidth, WindowMinHeight, false)
+	for _, id := range []string{"webdav-upload", "webdav-upload-saved", "webdav-clear-secret", "close-WebDAV"} {
+		element, ok := tt.Find(id)
+		if !ok || element.Y < 0 || element.Y+element.H > WindowMinHeight {
+			t.Fatalf("WebDAV action %s is outside the minimum window: %+v", id, element)
+		}
 	}
 }
 

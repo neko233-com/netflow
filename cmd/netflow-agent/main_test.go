@@ -72,6 +72,31 @@ func TestImportProfileCLIReadsCredentialsFromStdin(t *testing.T) {
 	}
 }
 
+func TestWebDAVCLIReadsCredentialsFromStdinWithoutEcho(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		var input agent.WebDAVUploadArgs
+		if method != "webdav-upload" || json.Unmarshal(raw, &input) != nil || input.Password != "synthetic-secret" || input.URL != "https://example.invalid/?token=synthetic-token" {
+			return nil, errors.New("unexpected request")
+		}
+		return agent.BackupJob{JobID: "job", State: "pending"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	input, _ := json.Marshal(agent.WebDAVUploadArgs{Archive: filepath.Join(dir, "backup.zip"), URL: "https://example.invalid/?token=synthetic-token", Password: "synthetic-secret"})
+	var output bytes.Buffer
+	err = run([]string{"--config-dir", dir, "webdav-upload"}, bytes.NewReader(input), &output)
+	if err != nil || strings.Contains(output.String(), "synthetic-") || !strings.Contains(output.String(), `"job_id":"job"`) {
+		t.Fatalf("unexpected CLI result: %s %v", output.String(), err)
+	}
+	err = run([]string{"--config-dir", dir, "webdav-upload"}, strings.NewReader(`{"synthetic-secret":"x"}`), &output)
+	if err == nil || strings.Contains(err.Error(), "synthetic-secret") {
+		t.Fatal("malformed input was accepted or exposed")
+	}
+}
+
 func TestRealVergeImportThroughCLI(t *testing.T) {
 	source := os.Getenv("NETFLOW_TEST_VERGE_SOURCE")
 	if source == "" {

@@ -8,6 +8,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -192,9 +193,38 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatal(err)
 	}
 	defer logFile.Close()
+	webdavReceived := make(chan [32]byte, 1)
+	webdavServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, password, ok := r.BasicAuth()
+		if !ok || user != "vm-user" || password != "synthetic-webdav-secret" || r.URL.RawQuery != "token=synthetic-webdav-token" || r.Header.Get("If-None-Match") != "*" || r.Method != http.MethodPut {
+			http.Error(w, "invalid request", http.StatusForbidden)
+			return
+		}
+		h := sha256.New()
+		if _, err := io.Copy(h, io.LimitReader(r.Body, 544<<20)); err != nil {
+			http.Error(w, "read failed", http.StatusBadRequest)
+			return
+		}
+		var digest [32]byte
+		copy(digest[:], h.Sum(nil))
+		webdavReceived <- digest
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer webdavServer.Close()
+	certPath := filepath.Join(t.TempDir(), "webdav-test-ca.pem")
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: webdavServer.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	server := vmCommand(ctx, agentExe, "--config-dir", dir, "serve")
+	for _, entry := range os.Environ() {
+		upper := strings.ToUpper(entry)
+		if !strings.HasPrefix(upper, "SSL_CERT_FILE=") && !strings.HasPrefix(upper, "GODEBUG=") {
+			server.Env = append(server.Env, entry)
+		}
+	}
+	server.Env = append(server.Env, "SSL_CERT_FILE="+certPath, "GODEBUG="+os.Getenv("GODEBUG")+",x509sslcertoverrideplatform=1")
 	server.Stdout, server.Stderr = logFile, logFile
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
@@ -371,6 +401,39 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if backupJob.State != "succeeded" {
 		t.Fatalf("live backup did not complete: %+v", backupJob)
 	}
+	webdavArgs, _ := json.Marshal(agent.WebDAVUploadArgs{Archive: liveArchive, URL: webdavServer.URL + "/collection/?token=synthetic-webdav-token", User: "vm-user", Password: "synthetic-webdav-secret"})
+	requestCtx, requestDone := context.WithTimeout(context.Background(), 30*time.Second)
+	request := vmCommand(requestCtx, agentExe, "--config-dir", dir, "webdav-upload")
+	request.Stdin = strings.NewReader(string(webdavArgs))
+	payload, err = request.CombinedOutput()
+	requestDone()
+	var uploadJob agent.BackupJob
+	if err != nil || json.Unmarshal(payload, &uploadJob) != nil || strings.Contains(string(payload), "synthetic-webdav") {
+		t.Fatalf("WebDAV request rejected or leaked credentials: %v", err)
+	}
+	until = time.Now().Add(45 * time.Second)
+	for uploadJob.State == "pending" && time.Now().Before(until) {
+		payload, err = call("backup-job-status", uploadJob.JobID)
+		if err != nil || json.Unmarshal(payload, &uploadJob) != nil || strings.Contains(string(payload), "synthetic-webdav") {
+			t.Fatalf("WebDAV status failed or leaked credentials: %v", err)
+		}
+		if uploadJob.State == "pending" {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	if uploadJob.State != "succeeded" || uploadJob.RemoteName == "" {
+		t.Fatalf("WebDAV job failed: %+v", uploadJob)
+	}
+	select {
+	case got := <-webdavReceived:
+		want, err := vmHash(liveArchive)
+		if err != nil || hex.EncodeToString(got[:]) != want {
+			t.Fatal("WebDAV upload content mismatch")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("WebDAV server did not receive backup")
+	}
+	t.Log("installed headless Agent uploaded a validated backup to a local TLS WebDAV server without leaking credentials")
 	restored := filepath.Join(backupRoot, "restored")
 	payload, err = call("restore-create", liveArchive, restored)
 	var restoreJob agent.BackupJob

@@ -36,6 +36,14 @@ func (a *App) browseBackupDirectory() (string, error) {
 	return paths[0], nil
 }
 
+func (a *App) browseWebDAVArchive() (string, error) {
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "选择要上传的备份", Filters: []mygo.FileFilter{{Name: "NetFlow 备份", Extensions: []string{"zip"}}}})
+	if err != nil || len(paths) == 0 {
+		return "", err
+	}
+	return paths[0], nil
+}
+
 func (a *App) browseRestore() (string, string, error) {
 	archives, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "选择 NetFlow 备份", Filters: []mygo.FileFilter{{Name: "NetFlow 备份", Extensions: []string{"zip"}}}})
 	if err != nil || len(archives) == 0 {
@@ -167,6 +175,8 @@ func (a *App) beginArchiveJob(operation string, now time.Time, done func(error),
 				} else {
 					record.job.State = "failed"
 					switch {
+					case operation == "webdav-upload":
+						record.job.Error = "upload failed; the remote file may be incomplete"
 					case errors.Is(err, context.Canceled):
 						record.job.Error = "operation canceled; a new restore directory may be partial"
 					case errors.Is(err, os.ErrExist):

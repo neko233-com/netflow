@@ -34,6 +34,7 @@ import (
 	"github.com/neko233-com/netflow/internal/tun"
 	"github.com/neko233-com/netflow/internal/ui"
 	"github.com/neko233-com/netflow/internal/unlock"
+	"github.com/neko233-com/netflow/internal/webdav"
 
 	"github.com/egoist/mygo"
 )
@@ -105,6 +106,7 @@ type App struct {
 	backupScheduleError string
 	webDAVProtected     string
 	webDAVProtectionErr error
+	webDAVClient        *webdav.Client
 	localCoreFactory    func() coreEngine
 	dispatch            func(func())
 	headless            bool

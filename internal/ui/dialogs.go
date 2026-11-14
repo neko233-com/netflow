@@ -6,6 +6,7 @@ import (
 
 	mygoui "github.com/egoist/mygo/ui"
 	"github.com/metacubex/mihomo/constant/features"
+	"github.com/neko233-com/netflow/internal/agent"
 )
 
 func (m *Model) overlay(c *mygoui.Context, pal Palette) {
@@ -45,6 +46,9 @@ func (m *Model) overlay(c *mygoui.Context, pal Palette) {
 	m.simpleDialog(c, pal, &m.Dialogs.Runtime, "当前配置", m.runtimeBody)
 	m.simpleDialog(c, pal, &m.Dialogs.Lite, "轻量模式设置", m.liteBody)
 	m.simpleDialog(c, pal, &m.Dialogs.WebDAV, "WebDAV", m.webdavBody)
+	if !m.Dialogs.WebDAV {
+		m.WebDAVURLDraft, m.WebDAVUserDraft, m.WebDAVPasswordDraft = "", "", ""
+	}
 	m.dnsConfirm(c, pal)
 	m.connColumnDialog(c, pal)
 	m.ruleProviderDialog(c, pal)
@@ -675,40 +679,94 @@ func (m *Model) backupBody(c *mygoui.Context, pal Palette) {
 	if m.RestorePath != "" && filledButton(c, pal, "复制恢复目录", "backup-copy-restore", false) {
 		m.copy(m.RestorePath)
 	}
-	if filledButton(c, pal, "WebDAV 状态", "webdav-open", false) {
+	if filledButton(c, pal, "WebDAV 上传", "webdav-open", false) {
 		m.Dialogs.WebDAV = true
 	}
 }
 
 func (m *Model) webdavBody(c *mygoui.Context, pal Palette) {
-	mygoui.Text(c, "WebDAV 备份尚未实现，不会连接服务器或发送数据。").FontSize(13).TextColor(pal.Warning)
+	mygoui.Text(c, "上传会发送所选未加密备份，可能包含订阅凭据；仅支持 HTTPS。失败时远端可能留下不完整文件。").FontSize(12).TextColor(pal.Warning)
+	mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
+		mygoui.Text(c, "地址").FontSize(13)
+		mygoui.TextInput(c, &m.WebDAVURLDraft).Grow(1).Label("webdav-url")
+	})
+	mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
+		mygoui.Text(c, "用户").FontSize(13)
+		mygoui.TextInput(c, &m.WebDAVUserDraft).Width(120).Label("webdav-user")
+		mygoui.Text(c, "密码").FontSize(13)
+		mygoui.TextInput(c, &m.WebDAVPasswordDraft).Password().Grow(1).Label("webdav-password")
+	})
+	mygoui.Text(c, "新输入的凭据只用于本次上传，不保存。").FontSize(12).TextColor(pal.TextMuted)
+	mygoui.Row(c).Gap(6).Children(func() {
+		if backupButton(c, pal, "选择备份并上传", "webdav-upload", m.BackupBusy) {
+			m.webdavUpload(false)
+		}
+		if m.WebDAVSecretStored && backupButton(c, pal, "使用已保存配置上传", "webdav-upload-saved", m.BackupBusy) {
+			m.webdavUpload(true)
+		}
+	})
 	if m.WebDAVSecretStored {
 		mygoui.Text(c, "检测到旧版 WebDAV 配置。Windows 会尝试使用当前账户保护；其他平台可能仍以明文保存。复制会写入剪贴板。").FontSize(12).TextColor(pal.TextMuted)
-		for _, field := range []struct{ label, key string }{{"地址", "url"}, {"用户名", "user"}, {"密码", "password"}} {
-			if filledButton(c, pal, "复制"+field.label, "webdav-copy-"+field.key, false) {
-				if m.Hooks.CopyWebDAVField == nil {
-					m.Notice = "无法读取已保存配置"
+		mygoui.Row(c).Gap(4).Children(func() {
+			for _, field := range []struct{ label, key string }{{"地址", "url"}, {"用户名", "user"}, {"密码", "password"}} {
+				if filledButton(c, pal, "复制"+field.label, "webdav-copy-"+field.key, false) {
+					if m.Hooks.CopyWebDAVField == nil {
+						m.Notice = "无法读取已保存配置"
+						return
+					}
+					if err := m.Hooks.CopyWebDAVField(field.key); err != nil {
+						m.Notice = "复制失败: " + err.Error()
+						return
+					}
+					m.Notice = "已复制" + field.label + "到剪贴板"
+				}
+			}
+			if filledButton(c, pal, "清除密码", "webdav-clear-secret", false) {
+				if m.Hooks.ClearWebDAVSecret == nil {
+					m.Notice = "无法清除已保存密码"
 					return
 				}
-				if err := m.Hooks.CopyWebDAVField(field.key); err != nil {
-					m.Notice = "复制失败: " + err.Error()
+				if err := m.Hooks.ClearWebDAVSecret(); err != nil {
+					m.Notice = "清除密码失败: " + err.Error()
 					return
 				}
-				m.Notice = "已复制" + field.label + "到剪贴板"
+				m.Prefs.WebDAVPassword = ""
+				m.Notice = "已清除单独保存的密码；地址中的凭据不受影响"
 			}
+		})
+	}
+}
+
+func (m *Model) webdavUpload(useSaved bool) {
+	if m.Hooks.BrowseWebDAVArchive == nil || m.Hooks.UploadWebDAVAsync == nil {
+		m.Notice = "WebDAV 上传不可用"
+		return
+	}
+	path, err := m.Hooks.BrowseWebDAVArchive()
+	if err != nil {
+		m.Notice = "选择备份失败: " + err.Error()
+		return
+	}
+	if path == "" {
+		return
+	}
+	args := agent.WebDAVUploadArgs{Archive: path, UseSaved: useSaved}
+	if !useSaved {
+		args.URL, args.User, args.Password = m.WebDAVURLDraft, m.WebDAVUserDraft, m.WebDAVPasswordDraft
+	}
+	m.WebDAVPasswordDraft = ""
+	m.BackupBusy = true
+	m.Notice = "正在上传未加密备份…"
+	if err := m.Hooks.UploadWebDAVAsync(args, func(name string, err error) {
+		m.BackupBusy = false
+		if err != nil {
+			m.Notice = "上传失败；远端文件可能不完整: " + name
+		} else {
+			m.Notice = "WebDAV 备份已上传: " + name
 		}
-		if filledButton(c, pal, "清除已保存密码", "webdav-clear-secret", false) {
-			if m.Hooks.ClearWebDAVSecret == nil {
-				m.Notice = "无法清除已保存密码"
-				return
-			}
-			if err := m.Hooks.ClearWebDAVSecret(); err != nil {
-				m.Notice = "清除密码失败: " + err.Error()
-				return
-			}
-			m.Prefs.WebDAVPassword = ""
-			m.Notice = "已清除单独保存的密码；地址中的凭据不受影响"
-		}
+	}); err != nil {
+		m.BackupBusy = false
+		m.Notice = "无法开始上传: " + err.Error()
 	}
 }
 

@@ -434,7 +434,7 @@ func Restore(archive, destination string) (Manifest, error) {
 // RestoreContext validates the archive before creating the new destination;
 // cancellation during extraction may leave that newly created directory partial.
 func RestoreContext(ctx context.Context, archive, destination string) (Manifest, error) {
-	return restoreContext(ctx, archive, destination, "")
+	return restoreContext(ctx, archive, destination, "", nil, false)
 }
 
 // RestoreOutside additionally prevents creation inside a running config tree.
@@ -442,10 +442,19 @@ func RestoreOutside(ctx context.Context, archive, destination, forbiddenRoot str
 	if !filepath.IsAbs(forbiddenRoot) {
 		return Manifest{}, errors.New("active configuration path must be absolute")
 	}
-	return restoreContext(ctx, archive, destination, forbiddenRoot)
+	return restoreContext(ctx, archive, destination, forbiddenRoot, nil, false)
 }
 
-func restoreContext(ctx context.Context, archive, destination, forbiddenRoot string) (Manifest, error) {
+// InspectFile validates an already-open backup without extracting it. The
+// caller retains ownership of the file and must prevent concurrent mutation.
+func InspectFile(ctx context.Context, file *os.File) (Manifest, error) {
+	if file == nil {
+		return Manifest{}, errors.New("backup file is required")
+	}
+	return restoreContext(ctx, "", "", "", file, true)
+}
+
+func restoreContext(ctx context.Context, archive, destination, forbiddenRoot string, provided *os.File, inspectOnly bool) (Manifest, error) {
 	var result Manifest
 	if ctx == nil {
 		return result, errors.New("restore context is required")
@@ -453,14 +462,18 @@ func restoreContext(ctx context.Context, archive, destination, forbiddenRoot str
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if !filepath.IsAbs(archive) || !filepath.IsAbs(destination) {
+	if !inspectOnly && (!filepath.IsAbs(archive) || !filepath.IsAbs(destination)) {
 		return result, errors.New("backup paths must be absolute")
 	}
-	archiveFile, err := os.Open(archive)
-	if err != nil {
-		return result, err
+	archiveFile := provided
+	if archiveFile == nil {
+		var err error
+		archiveFile, err = os.Open(archive)
+		if err != nil {
+			return result, err
+		}
+		defer archiveFile.Close()
 	}
-	defer archiveFile.Close()
 	info, err := archiveFile.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		return result, errors.New("backup archive is not a regular file")
@@ -561,6 +574,9 @@ func restoreContext(ctx context.Context, archive, destination, forbiddenRoot str
 	}
 	if err := ctx.Err(); err != nil {
 		return Manifest{}, err
+	}
+	if inspectOnly {
+		return result, nil
 	}
 	parentPath, err := safepath.Canonical(filepath.Dir(destination))
 	if err != nil {
