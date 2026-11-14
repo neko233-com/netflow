@@ -180,6 +180,8 @@ func (a *App) beginArchiveJob(operation string, now time.Time, done func(error),
 				} else {
 					record.job.State = "failed"
 					switch {
+					case operation == "webdav-list":
+						record.job.Error = "WebDAV listing failed"
 					case operation == "webdav-upload":
 						record.job.Error = "upload failed; the remote file may be incomplete"
 					case errors.Is(err, context.Canceled):

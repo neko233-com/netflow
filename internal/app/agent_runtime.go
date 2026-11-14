@@ -171,6 +171,13 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		if callErr = decodeStrict(args, &input); callErr == nil {
 			value, callErr = a.getProfileJob(input.JobID, time.Now())
 		}
+	case "webdav-list":
+		var input agent.WebDAVListArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.beginWebDAVList(input, time.Now(), nil)
+		} else {
+			callErr = errors.New("invalid WebDAV listing input")
+		}
 	case "webdav-upload":
 		var input agent.WebDAVUploadArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {

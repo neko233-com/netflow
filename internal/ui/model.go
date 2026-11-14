@@ -53,6 +53,7 @@ type Hooks struct {
 	RestoreBackupAsync         func(string, string, func(error)) error
 	BrowseWebDAVArchive        func() (string, error)
 	UploadWebDAVAsync          func(agent.WebDAVUploadArgs, func(string, error)) error
+	ListWebDAVAsync            func(agent.WebDAVListArgs, func([]string, error)) error
 	BrowseRestoreDestination   func() (string, error)
 	RestoreWebDAVAsync         func(agent.WebDAVRestoreArgs, func(error)) error
 	SaveProfileMetadata        func(form ProfileForm) error
@@ -133,6 +134,7 @@ type Model struct {
 	WebDAVUserDraft     string
 	WebDAVPasswordDraft string
 	WebDAVRemoteDraft   string
+	WebDAVRemoteNames   []string
 	BackupBusy          bool
 	RestorePath         string
 	Notice              string

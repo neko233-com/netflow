@@ -93,11 +93,37 @@ func TestWebDAVActionsFitMinimumWindowHeight(t *testing.T) {
 	m := DemoModel()
 	m.Dialogs.WebDAV, m.WebDAVSecretStored = true, true
 	tt := renderModel(m, WindowWidth, WindowMinHeight, false)
-	for _, id := range []string{"webdav-upload", "webdav-upload-saved", "webdav-restore", "webdav-restore-saved", "webdav-clear-secret", "close-WebDAV"} {
+	for _, id := range []string{"webdav-upload", "webdav-upload-saved", "webdav-list", "webdav-list-saved", "webdav-restore", "webdav-restore-saved", "webdav-clear-secret", "close-WebDAV"} {
 		element, ok := tt.Find(id)
 		if !ok || element.Y < 0 || element.Y+element.H > WindowMinHeight {
 			t.Fatalf("WebDAV action %s is outside the minimum window: %+v", id, element)
 		}
+	}
+}
+
+func TestWebDAVListSelectsBackupWithoutPersistingCredentials(t *testing.T) {
+	m := DemoModel()
+	m.Dialogs.WebDAV = true
+	m.WebDAVURLDraft, m.WebDAVUserDraft, m.WebDAVPasswordDraft = "https://backup.invalid/dav", "user", "synthetic-password"
+	name := "netflow-20261114-120000-0123456789abcdef0123456789abcdef.zip"
+	m.Hooks.ListWebDAVAsync = func(args agent.WebDAVListArgs, done func([]string, error)) error {
+		if args.Password != "synthetic-password" || args.UseSaved {
+			t.Error("listing arguments lost")
+		}
+		done([]string{name}, nil)
+		return nil
+	}
+	tt := renderModel(m, WindowWidth, WindowHeight, false)
+	if err := tt.Click("webdav-list"); err != nil {
+		t.Fatal(err)
+	}
+	if m.WebDAVRemoteDraft != name || len(m.WebDAVRemoteNames) != 1 || m.BackupBusy {
+		t.Fatal("listing was not available for restore")
+	}
+	m.Dialogs.WebDAV = false
+	_ = renderModel(m, WindowWidth, WindowHeight, false)
+	if m.WebDAVPasswordDraft != "" || m.WebDAVURLDraft != "" {
+		t.Fatal("closing dialog retained credentials")
 	}
 }
 

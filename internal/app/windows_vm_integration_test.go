@@ -228,6 +228,16 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 				return
 			}
 			_, _ = w.Write(webdavBody)
+		case "PROPFIND":
+			if r.Header.Get("Depth") != "1" {
+				http.Error(w, "invalid depth", http.StatusBadRequest)
+				return
+			}
+			webdavMu.Lock()
+			defer webdavMu.Unlock()
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusMultiStatus)
+			_, _ = fmt.Fprintf(w, `<d:multistatus xmlns:d="DAV:"><d:response><d:href>/collection/%s</d:href><d:propstat><d:prop><d:resourcetype/></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>`, webdavName)
 		default:
 			http.Error(w, "invalid method", http.StatusMethodNotAllowed)
 		}
@@ -456,6 +466,30 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatal("WebDAV server did not receive backup")
 	}
 	t.Log("installed headless Agent uploaded a validated backup to a local TLS WebDAV server without leaking credentials")
+	listArgs, _ := json.Marshal(agent.WebDAVListArgs{URL: webdavServer.URL + "/collection/?token=synthetic-webdav-token", User: "vm-user", Password: "synthetic-webdav-secret"})
+	requestCtx, requestDone = context.WithTimeout(context.Background(), 30*time.Second)
+	request = vmCommand(requestCtx, agentExe, "--config-dir", dir, "webdav-list")
+	request.Stdin = strings.NewReader(string(listArgs))
+	payload, err = request.CombinedOutput()
+	requestDone()
+	var listJob agent.BackupJob
+	if err != nil || json.Unmarshal(payload, &listJob) != nil || strings.Contains(string(payload), "synthetic-webdav") {
+		t.Fatalf("WebDAV listing request failed or leaked credentials: %v", err)
+	}
+	until = time.Now().Add(45 * time.Second)
+	for listJob.State == "pending" && time.Now().Before(until) {
+		payload, err = call("backup-job-status", listJob.JobID)
+		if err != nil || json.Unmarshal(payload, &listJob) != nil || strings.Contains(string(payload), "synthetic-webdav") {
+			t.Fatalf("WebDAV listing status failed or leaked credentials: %v", err)
+		}
+		if listJob.State == "pending" {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	if listJob.State != "succeeded" || len(listJob.RemoteNames) != 1 || listJob.RemoteNames[0] != uploadJob.RemoteName {
+		t.Fatalf("WebDAV listing failed: %+v", listJob)
+	}
+	t.Log("installed headless Agent listed the uploaded backup without exposing credentials")
 	remoteParent := t.TempDir()
 	remoteDestination := filepath.Join(remoteParent, "restored")
 	remoteArgs, _ := json.Marshal(agent.WebDAVRestoreArgs{RemoteName: uploadJob.RemoteName, Destination: remoteDestination, URL: webdavServer.URL + "/collection/?token=synthetic-webdav-token", User: "vm-user", Password: "synthetic-webdav-secret"})

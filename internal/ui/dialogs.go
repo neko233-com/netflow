@@ -49,6 +49,7 @@ func (m *Model) overlay(c *mygoui.Context, pal Palette) {
 	if !m.Dialogs.WebDAV {
 		m.WebDAVURLDraft, m.WebDAVUserDraft, m.WebDAVPasswordDraft = "", "", ""
 		m.WebDAVRemoteDraft = ""
+		m.WebDAVRemoteNames = nil
 	}
 	m.dnsConfirm(c, pal)
 	m.connColumnDialog(c, pal)
@@ -698,7 +699,7 @@ func (m *Model) webdavBody(c *mygoui.Context, pal Palette) {
 		mygoui.Text(c, "密码").FontSize(13)
 		mygoui.TextInput(c, &m.WebDAVPasswordDraft).Password().Grow(1).Label("webdav-password")
 	})
-	mygoui.Text(c, "新输入的凭据只用于本次上传，不保存。").FontSize(12).TextColor(pal.TextMuted)
+	mygoui.Text(c, "新凭据仅在此对话框中使用，不保存；传输后清除密码。").FontSize(12).TextColor(pal.TextMuted)
 	mygoui.Row(c).Gap(6).Children(func() {
 		if backupButton(c, pal, "选择备份并上传", "webdav-upload", m.BackupBusy) {
 			m.webdavUpload(false)
@@ -709,12 +710,24 @@ func (m *Model) webdavBody(c *mygoui.Context, pal Palette) {
 	})
 	mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
 		mygoui.Text(c, "远端文件名").FontSize(13)
-		mygoui.TextInput(c, &m.WebDAVRemoteDraft).Grow(1).Label("webdav-remote-name")
+		if len(m.WebDAVRemoteNames) == 0 {
+			mygoui.TextInput(c, &m.WebDAVRemoteDraft).Grow(1).Label("webdav-remote-name")
+		} else {
+			mygoui.Select(c, &m.WebDAVRemoteDraft, m.WebDAVRemoteNames).Grow(1).Label("webdav-remote-select")
+		}
 		if backupButton(c, pal, "恢复", "webdav-restore", m.BackupBusy) {
 			m.webdavRestore(false)
 		}
 		if m.WebDAVSecretStored && backupButton(c, pal, "已存配置恢复", "webdav-restore-saved", m.BackupBusy) {
 			m.webdavRestore(true)
+		}
+	})
+	mygoui.Row(c).Gap(6).Children(func() {
+		if backupButton(c, pal, "读取备份列表", "webdav-list", m.BackupBusy) {
+			m.webdavList(false)
+		}
+		if m.WebDAVSecretStored && backupButton(c, pal, "用已存配置读取", "webdav-list-saved", m.BackupBusy) {
+			m.webdavList(true)
 		}
 	})
 	if m.RestorePath != "" && backupButton(c, pal, "复制恢复目录", "webdav-copy-restore", false) {
@@ -777,11 +790,43 @@ func (m *Model) webdavUpload(useSaved bool) {
 		if err != nil {
 			m.Notice = "上传失败；远端文件可能不完整: " + name
 		} else {
+			m.WebDAVRemoteDraft, m.WebDAVRemoteNames = name, nil
 			m.Notice = "WebDAV 备份已上传: " + name
 		}
 	}); err != nil {
 		m.BackupBusy = false
 		m.Notice = "无法开始上传: " + err.Error()
+	}
+}
+
+func (m *Model) webdavList(useSaved bool) {
+	if m.Hooks.ListWebDAVAsync == nil {
+		m.Notice = "WebDAV 列表不可用"
+		return
+	}
+	args := agent.WebDAVListArgs{UseSaved: useSaved}
+	if !useSaved {
+		args.URL, args.User, args.Password = m.WebDAVURLDraft, m.WebDAVUserDraft, m.WebDAVPasswordDraft
+	}
+	m.BackupBusy = true
+	m.Notice = "正在读取远端备份列表…"
+	if err := m.Hooks.ListWebDAVAsync(args, func(names []string, err error) {
+		m.BackupBusy = false
+		if err != nil {
+			m.Notice = "读取备份列表失败"
+			return
+		}
+		m.WebDAVRemoteNames = names
+		if len(names) == 0 {
+			m.WebDAVRemoteDraft = ""
+			m.Notice = "未找到 NetFlow 备份"
+		} else {
+			m.WebDAVRemoteDraft = names[0]
+			m.Notice = "已读取远端备份列表"
+		}
+	}); err != nil {
+		m.BackupBusy = false
+		m.Notice = "无法读取备份列表: " + err.Error()
 	}
 }
 

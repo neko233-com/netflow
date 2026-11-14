@@ -45,12 +45,13 @@ type BackupArgs struct {
 }
 
 type BackupJob struct {
-	JobID      string    `json:"job_id"`
-	Operation  string    `json:"operation"`
-	State      string    `json:"state"`
-	Error      string    `json:"error,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	RemoteName string    `json:"remote_name,omitempty"`
+	JobID       string    `json:"job_id"`
+	Operation   string    `json:"operation"`
+	State       string    `json:"state"`
+	Error       string    `json:"error,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	RemoteName  string    `json:"remote_name,omitempty"`
+	RemoteNames []string  `json:"remote_names,omitempty"`
 }
 
 type RestoreArgs struct {
@@ -92,6 +93,13 @@ type WebDAVRestoreArgs struct {
 	User        string `json:"user,omitempty" jsonschema:"optional WebDAV username"`
 	Password    string `json:"password,omitempty" jsonschema:"optional WebDAV password"`
 	UseSaved    bool   `json:"use_saved,omitempty" jsonschema:"use existing saved WebDAV credentials instead of supplying credentials"`
+}
+
+type WebDAVListArgs struct {
+	URL      string `json:"url,omitempty" jsonschema:"HTTPS WebDAV collection URL; may contain secrets"`
+	User     string `json:"user,omitempty" jsonschema:"optional WebDAV username"`
+	Password string `json:"password,omitempty" jsonschema:"optional WebDAV password"`
+	UseSaved bool   `json:"use_saved,omitempty" jsonschema:"use existing saved WebDAV credentials"`
 }
 type Status struct {
 	Running              bool          `json:"running"`

@@ -71,6 +71,12 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "profiles", nil, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_webdav_list", Description: "Read generated backup filenames from an HTTPS WebDAV collection; poll netflow_backup_job_status."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args WebDAVListArgs) (*mcp.CallToolResult, BackupJob, error) {
+			var out BackupJob
+			err := client.Call(ctx, "webdav-list", args, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_webdav_upload", Description: "Explicitly upload a chosen local backup ZIP to an HTTPS WebDAV collection. The backup is unencrypted and may contain credentials. A failed or interrupted upload may leave an incomplete remote file. Poll netflow_backup_job_status."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args WebDAVUploadArgs) (*mcp.CallToolResult, BackupJob, error) {
 			var out BackupJob

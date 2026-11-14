@@ -125,6 +125,10 @@ func (a *App) ready(quitting *bool) {
 	}
 	a.model.Hooks.BrowseRestore = a.browseRestore
 	a.model.Hooks.BrowseWebDAVArchive = a.browseWebDAVArchive
+	a.model.Hooks.ListWebDAVAsync = func(args agent.WebDAVListArgs, done func([]string, error)) error {
+		_, err := a.beginWebDAVList(args, time.Now(), done)
+		return err
+	}
 	a.model.Hooks.UploadWebDAVAsync = func(args agent.WebDAVUploadArgs, done func(string, error)) error {
 		_, err := a.beginWebDAVUpload(args, time.Now(), done)
 		return err
