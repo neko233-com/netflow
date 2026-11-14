@@ -1344,7 +1344,9 @@ func (a *App) SetMode(mode string) error {
 // ImportURL stores a remote subscription and, when it is the current one,
 // installs it as the kernel profile.
 func (a *App) ImportURL(raw string) error {
-	result, err := fetchProfileResponse(raw, &http.Client{Timeout: 20 * time.Second}, "")
+	client := newSubscriptionClient("", 20*time.Second, false)
+	defer client.CloseIdleConnections()
+	result, err := fetchProfileResponse(raw, client, "")
 	if err != nil {
 		return err
 	}
@@ -1568,7 +1570,20 @@ func fetchProfileResponse(raw string, client *http.Client, userAgent string) (su
 	if userAgent != "" {
 		req.Header.Set("User-Agent", userAgent)
 	}
-	resp, err := client.Do(req)
+	// A shallow copy keeps caller-supplied timeout, transport and redirect
+	// policy intact while applying the subscription security policy.
+	requestClient := *client
+	previousCheck := requestClient.CheckRedirect
+	requestClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := profile.CheckSubscriptionRedirect(req, via); err != nil {
+			return err
+		}
+		if previousCheck != nil {
+			return previousCheck(req, via)
+		}
+		return nil
+	}
+	resp, err := requestClient.Do(req)
 	if err != nil {
 		return subscriptionResponse{}, err
 	}
@@ -1576,11 +1591,11 @@ func fetchProfileResponse(raw string, client *http.Client, userAgent string) (su
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return subscriptionResponse{}, io.ErrUnexpectedEOF
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, profile.MaxSubscriptionBytes+1))
 	if err != nil {
 		return subscriptionResponse{}, err
 	}
-	if len(body) > 8<<20 {
+	if len(body) > profile.MaxSubscriptionBytes {
 		return subscriptionResponse{}, errors.New("订阅超过 8 MiB")
 	}
 	return subscriptionResponse{body: body, headers: resp.Header.Clone()}, nil

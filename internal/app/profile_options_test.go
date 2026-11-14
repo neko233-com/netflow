@@ -3,12 +3,54 @@ package app
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/neko233-com/netflow/internal/profile"
 )
+
+func TestSubscriptionDirectAndRedirectPolicy(t *testing.T) {
+	var plainHits atomic.Int32
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		plainHits.Add(1)
+		_, _ = w.Write([]byte("rules: ['MATCH,DIRECT']"))
+	}))
+	defer plain.Close()
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL, http.StatusFound)
+	}))
+	defer secure.Close()
+	client := newSubscriptionClient("", 3*time.Second, true)
+	defer client.CloseIdleConnections()
+	if transport, ok := client.Transport.(*http.Transport); !ok || transport.Proxy != nil {
+		t.Fatal("direct subscription inherited an environment proxy")
+	}
+	address, err := url.Parse(secure.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address.User = url.UserPassword("synthetic", "secret")
+	if _, err := fetchProfileResponse(address.String(), client, ""); err == nil {
+		t.Fatal("HTTPS to HTTP redirect was accepted")
+	}
+	if plainHits.Load() != 0 {
+		t.Fatal("downgraded request reached the HTTP server")
+	}
+	if _, err := fetchProfileResponse(plain.URL, client, ""); err != nil || plainHits.Load() != 1 {
+		t.Fatalf("explicit HTTP subscription failed: %v", err)
+	}
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL, http.StatusFound)
+	}))
+	defer redirect.Close()
+	called := false
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { called = true; return nil }
+	if _, err := fetchProfileResponse(redirect.URL, client, ""); err != nil || !called || plainHits.Load() != 2 {
+		t.Fatalf("safe redirect or caller policy failed: called=%v err=%v", called, err)
+	}
+}
 
 func TestSubscriptionClientHonorsTLSUserAgentTimeoutAndProxyPolicy(t *testing.T) {
 	var received atomic.Bool

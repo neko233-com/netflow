@@ -198,7 +198,13 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	var webdavMu sync.Mutex
 	var webdavBody []byte
 	var webdavName string
+	var redirectTarget atomic.Value
+	redirectTarget.Store("")
 	webdavServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/subscription-redirect" {
+			http.Redirect(w, r, redirectTarget.Load().(string), http.StatusFound)
+			return
+		}
 		user, password, ok := r.BasicAuth()
 		if !ok || user != "vm-user" || password != "synthetic-webdav-secret" || r.URL.RawQuery != "token=synthetic-webdav-token" {
 			http.Error(w, "invalid request", http.StatusForbidden)
@@ -329,6 +335,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		_, _ = io.WriteString(w, "mixed-port: 0\nport: 0\nsocks-port: 0\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n")
 	}))
 	defer subscription.Close()
+	redirectTarget.Store(subscription.URL + "/subscription")
 	waitJob := func(job agent.ProfileJob) agent.ProfileJob {
 		t.Helper()
 		until := time.Now().Add(30 * time.Second)
@@ -343,6 +350,21 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		}
 		return job
 	}
+	redirectArgs, _ := json.Marshal(agent.ProfileImportArgs{URL: webdavServer.URL + "/subscription-redirect?token=synthetic-secret", Name: "redirect-test"})
+	redirectCtx, redirectCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	redirectCommand := vmCommand(redirectCtx, agentExe, "--config-dir", dir, "import-profile")
+	redirectCommand.Stdin = strings.NewReader(string(redirectArgs))
+	redirectOutput, redirectErr := redirectCommand.CombinedOutput()
+	redirectCancel()
+	var redirectJob agent.ProfileJob
+	if redirectErr != nil || json.Unmarshal(redirectOutput, &redirectJob) != nil {
+		t.Fatalf("redirect import did not start: %v", redirectErr)
+	}
+	redirectJob = waitJob(redirectJob)
+	if redirectJob.State != "failed" || downloads.Load() != 0 {
+		t.Fatalf("HTTPS subscription redirect reached HTTP server: %+v", redirectJob)
+	}
+	t.Log("installed headless Agent refused an HTTPS subscription downgrade")
 	importProfile := func(path string) agent.ProfileJob {
 		t.Helper()
 		body, _ := json.Marshal(agent.ProfileImportArgs{URL: subscription.URL + path + "?token=synthetic-secret", Name: "headless-test"})

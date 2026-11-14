@@ -6,9 +6,41 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestImportHTTPBoundsBodyAndRejectsDowngrade(t *testing.T) {
+	var hits atomic.Int32
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(strings.Repeat("x", MaxSubscriptionBytes+1)))
+	}))
+	defer plain.Close()
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL, http.StatusFound)
+	}))
+	defer secure.Close()
+	if _, err := ImportHTTP(context.Background(), secure.URL, ImportOption{}, t.TempDir(), func(ProxyKind) (http.RoundTripper, error) { return secure.Client().Transport, nil }); err == nil {
+		t.Fatal("HTTPS to HTTP redirect was accepted")
+	}
+	if hits.Load() != 0 {
+		t.Fatal("downgraded request reached the HTTP server")
+	}
+	dir := t.TempDir()
+	if _, err := ImportHTTP(context.Background(), plain.URL, ImportOption{}, dir, nil); err == nil {
+		t.Fatal("oversized response was accepted")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("oversized response wrote files: %v %v", entries, err)
+	}
+	transport, err := transportFor(ProxyNone, nil)
+	if err != nil || transport.(*http.Transport).Proxy != nil {
+		t.Fatalf("direct transport inherited a proxy: %v", err)
+	}
+}
 
 func TestImportHTTPUserAgentAndMethod(t *testing.T) {
 	var gotUA, gotMethod string

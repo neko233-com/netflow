@@ -19,7 +19,9 @@ import (
 // the native UI thread so concurrent user and Agent actions stay serialized.
 func (a *App) importURLAsync(raw string, done func(error)) {
 	go func() {
-		result, err := fetchProfileResponse(raw, &http.Client{Timeout: 20 * time.Second}, "")
+		client := newSubscriptionClient("", 20*time.Second, false)
+		defer client.CloseIdleConnections()
+		result, err := fetchProfileResponse(raw, client, "")
 		a.runOnMain(func() {
 			if err == nil {
 				err = a.importURLData(raw, result.body, result.headers)
@@ -79,6 +81,7 @@ func (a *App) subscriptionClient(opt profile.CatalogOption, forceProxy bool) (*h
 
 func newSubscriptionClient(proxyAddr string, timeout time.Duration, acceptInvalid bool) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
 	if acceptInvalid {
 		// This is an explicit, per-subscription user choice.
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec

@@ -25,6 +25,24 @@ var Version = "0.0.0"
 // ImportOption.TimeoutSeconds is nil (SUB-03).
 const DefaultTimeoutSeconds = 20
 
+// MaxSubscriptionBytes bounds both memory and the persisted remote profile.
+const MaxSubscriptionBytes = 8 << 20
+
+// CheckSubscriptionRedirect permits ordinary HTTP(S) redirects but never
+// sends an HTTPS subscription request, including its credentials, over HTTP.
+func CheckSubscriptionRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("too many subscription redirects")
+	}
+	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+		return errors.New("unsupported subscription redirect scheme")
+	}
+	if len(via) > 0 && via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
+		return errors.New("subscription redirect from HTTPS to HTTP refused")
+	}
+	return nil
+}
+
 const remoteFileName = "Remote File"
 
 const uidAlphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -113,7 +131,7 @@ func ProxyKindFor(selfProxy, withProxy bool) ProxyKind {
 
 // ImportHTTP downloads a remote profile into profilesDir.
 // trip supplies the RoundTripper for the resolved ProxyKind. A nil trip
-// uses http.DefaultTransport for ProxyNone and returns an error for the
+// uses a direct transport for ProxyNone and returns an error for the
 // other kinds.
 //
 // On any error the profiles directory is left without a new file.
@@ -127,8 +145,11 @@ func ImportHTTP(ctx context.Context, rawURL string, opt ImportOption, profilesDi
 		ctx = context.Background()
 	}
 	parsed, err := url.ParseRequestURI(rawURL)
-	if err != nil || parsed.Host == "" {
+	if err != nil {
 		return Item{}, fmt.Errorf("failed to parse subscription URL: %w", err)
+	}
+	if parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return Item{}, errors.New("subscription URL must use HTTP or HTTPS")
 	}
 
 	kind := ProxyKindFor(opt.SelfProxy, opt.WithProxy)
@@ -157,7 +178,7 @@ func ImportHTTP(ctx context.Context, rawURL string, opt ImportOption, profilesDi
 	}
 	req.Header.Set("User-Agent", ua)
 
-	resp, err := (&http.Client{Transport: transport}).Do(req)
+	resp, err := (&http.Client{Transport: transport, CheckRedirect: CheckSubscriptionRedirect}).Do(req)
 	if err != nil {
 		return Item{}, fmt.Errorf("failed to fetch remote profile: %w", err)
 	}
@@ -165,9 +186,12 @@ func ImportHTTP(ctx context.Context, rawURL string, opt ImportOption, profilesDi
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return Item{}, fmt.Errorf("failed to fetch remote profile with status %d", resp.StatusCode)
 	}
-	payload, err := io.ReadAll(resp.Body)
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, MaxSubscriptionBytes+1))
 	if err != nil {
 		return Item{}, fmt.Errorf("failed to fetch remote profile: %w", err)
+	}
+	if len(payload) > MaxSubscriptionBytes {
+		return Item{}, errors.New("remote profile exceeds 8 MiB")
 	}
 	for bytesHasPrefixBOM(payload) {
 		payload = payload[3:]
@@ -209,7 +233,9 @@ func transportFor(kind ProxyKind, trip func(ProxyKind) (http.RoundTripper, error
 		if kind != ProxyNone {
 			return nil, fmt.Errorf("proxy kind %s is not configured", kind)
 		}
-		return http.DefaultTransport, nil
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = nil
+		return transport, nil
 	}
 	rt, err := trip(kind)
 	if err != nil {
