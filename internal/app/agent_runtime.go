@@ -11,10 +11,13 @@ import (
 	"time"
 
 	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/migration"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/ui"
 	"github.com/neko233-com/netflow/internal/validation"
 )
+
+var vergeScriptPreviewSlots = make(chan struct{}, 1)
 
 func (a *App) startAgent() error {
 	bridge, err := agent.Start(a.dir, a.dispatchAgent)
@@ -39,6 +42,59 @@ func (a *App) stopAgent() {
 }
 
 func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMessage) (any, error) {
+	if method == "verge-script-preview" {
+		var in agent.VergeScriptPreviewArgs
+		if err := decodeStrict(args, &in); err != nil {
+			return nil, err
+		}
+		if !in.Global && !in.Profile {
+			return nil, errors.New("select at least one archived script")
+		}
+		select {
+		case vergeScriptPreviewSlots <- struct{}{}:
+			defer func() { <-vergeScriptPreviewSlots }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		var draft vergeScriptDraft
+		var prepareErr error
+		executed := false
+		a.runOnMain(func() {
+			executed = true
+			if prepareErr = ctx.Err(); prepareErr == nil {
+				draft, prepareErr = a.captureVergeScriptDraft(in.ProfileID)
+			}
+		})
+		if !executed {
+			return nil, errors.New("application is shutting down")
+		}
+		if prepareErr != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, errors.New("script preview configuration is unavailable or has changed")
+		}
+		prepared, err := a.prepareVergeScript(ctx, draft, migration.ScriptSelection{Global: in.Global, Profile: in.Profile})
+		if err != nil {
+			return nil, err
+		}
+		if err := a.checkAgentSources(draft.hashes); err != nil {
+			return nil, errors.New("script preview sources changed")
+		}
+		var result agent.VergeScriptPreview
+		var finishErr error
+		executed = false
+		a.runOnMain(func() {
+			executed = true
+			if finishErr = ctx.Err(); finishErr == nil {
+				result, finishErr = a.finishVergeScriptPreview(draft, prepared)
+			}
+		})
+		if !executed {
+			return nil, errors.New("application is shutting down")
+		}
+		return result, finishErr
+	}
 	if method == "chain-preview" {
 		var in agent.ChainPreviewArgs
 		if err := decodeStrict(args, &in); err != nil {
@@ -157,6 +213,18 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 
 func (a *App) agentCommand(method string, args json.RawMessage) (value any, callErr error) {
 	switch method {
+	case "verge-script-preview-rules":
+		var input agent.PreviewRulesArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.vergeScriptPreviewRules(input)
+		}
+	case "verge-script-preview-cancel":
+		var input agent.ApplyArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			preview, exists := a.agentScriptPreviews[input.ProposalID]
+			delete(a.agentScriptPreviews, input.ProposalID)
+			value = agent.ActionResult{OK: exists && preview.expires.After(time.Now())}
+		}
 	case "chain-status":
 		var input agent.Empty
 		if callErr = decodeStrict(args, &input); callErr == nil {

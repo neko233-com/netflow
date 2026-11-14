@@ -319,6 +319,24 @@ type PreviewRulesResult struct {
 	Rules      []string `json:"rules"`
 }
 
+// VergeScriptPreviewArgs explicitly opts into running archived scripts in a
+// bounded guest for this read-only preview. It does not enable scripts.
+type VergeScriptPreviewArgs struct {
+	ProfileID string `json:"profile_id,omitempty" jsonschema:"subscription profile id; defaults to active profile"`
+	Global    bool   `json:"global" jsonschema:"execute the archived global script"`
+	Profile   bool   `json:"profile" jsonschema:"execute the archived subscription script"`
+}
+type VergeScriptPreview struct {
+	PreviewID          string             `json:"preview_id"`
+	TargetProfile      string             `json:"target_profile"`
+	ChangedFields      []string           `json:"changed_fields"`
+	OtherChangedFields int                `json:"other_changed_fields"`
+	RulesBefore        PreviewRulesResult `json:"rules_before"`
+	RulesAfter         PreviewRulesResult `json:"rules_after"`
+	Warnings           []string           `json:"warnings"`
+	ExpiresAt          time.Time          `json:"expires_at"`
+}
+
 type ApplyArgs struct {
 	ProposalID string `json:"proposal_id" jsonschema:"proposal id returned by preview"`
 }

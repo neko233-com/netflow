@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/neko233-com/netflow"
@@ -17,6 +18,25 @@ type Empty struct{}
 // local bridge. No subscription URLs, core secrets, or token are returned.
 func NewMCP(client Client) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "netflow", Version: netflow.Version()}, nil)
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_preview_verge_script", Description: "Run explicitly selected archived Clash Verge scripts in a bounded guest for a read-only preview, with offline core validation. Does not enable or apply scripts. Inspect all rule pages and warnings.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in VergeScriptPreviewArgs) (*mcp.CallToolResult, VergeScriptPreview, error) {
+		var out VergeScriptPreview
+		c := client
+		if c.Timeout <= 0 {
+			c.Timeout = 60 * time.Second
+		}
+		err := c.Call(ctx, "verge-script-preview", in, &out)
+		return nil, out, err
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_verge_script_preview_rules", Description: "Page through before or after rules of a read-only Verge script preview. Pass the preview_id as proposal_id.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in PreviewRulesArgs) (*mcp.CallToolResult, PreviewRulesResult, error) {
+		var out PreviewRulesResult
+		err := client.Call(ctx, "verge-script-preview-rules", in, &out)
+		return nil, out, err
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_cancel_verge_script_preview", Description: "Discard a read-only Verge script preview and its stored rules. Pass the preview_id as proposal_id."}, func(ctx context.Context, _ *mcp.CallToolRequest, in ApplyArgs) (*mcp.CallToolResult, ActionResult, error) {
+		var out ActionResult
+		err := client.Call(ctx, "verge-script-preview-cancel", in, &out)
+		return nil, out, err
+	})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_status", Description: "List core status, profiles, a bounded first page of active connections, and agent-managed rewrite state. Subscription URLs are omitted.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, Status, error) {
 			var out Status

@@ -78,6 +78,7 @@ type App struct {
 	agentBridge             *agent.Bridge
 	agentProposals          map[string]agentProposal
 	agentChainProposals     map[string]chainProposal
+	agentScriptPreviews     map[string]vergeScriptPreviewPages
 	agentExpiryStop         chan struct{}
 	expiryFallbackSignature string
 	rewriteWarning          string

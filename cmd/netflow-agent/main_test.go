@@ -534,3 +534,48 @@ func TestChainCLIUsesPreviewApplyAndDisconnect(t *testing.T) {
 		t.Fatal("unknown preview field accepted")
 	}
 }
+
+func TestVergeScriptCLIPreviewAndPaging(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		switch method {
+		case "verge-script-preview":
+			var in agent.VergeScriptPreviewArgs
+			if json.Unmarshal(raw, &in) != nil || in.ProfileID != "sub" || !in.Global || !in.Profile {
+				return nil, errors.New("bad preview")
+			}
+			return agent.VergeScriptPreview{PreviewID: "p"}, nil
+		case "verge-script-preview-rules":
+			var in agent.PreviewRulesArgs
+			if json.Unmarshal(raw, &in) != nil || in.ProposalID != "p" || in.Offset != 2 {
+				return nil, errors.New("bad page")
+			}
+			return agent.PreviewRulesResult{Rules: []string{"MATCH,DIRECT"}}, nil
+		case "verge-script-preview-cancel":
+			return agent.ActionResult{OK: true}, nil
+		default:
+			return nil, errors.New("unexpected method")
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	for _, tc := range []struct {
+		args  []string
+		input string
+	}{
+		{[]string{"verge-script-preview"}, `{"profile_id":"sub","global":true,"profile":true}`},
+		{[]string{"verge-script-preview-rules", "p", "after", "2", "1"}, ""},
+		{[]string{"verge-script-preview-cancel", "p"}, ""},
+	} {
+		var out bytes.Buffer
+		if err := run(append([]string{"--config-dir", dir}, tc.args...), strings.NewReader(tc.input), &out); err != nil {
+			t.Fatalf("%v: %v", tc.args, err)
+		}
+	}
+	var out bytes.Buffer
+	if err := run([]string{"--config-dir", dir, "verge-script-preview"}, strings.NewReader(`{"unknown":1}`), &out); err == nil {
+		t.Fatal("unknown input accepted")
+	}
+}

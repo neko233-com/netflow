@@ -124,6 +124,11 @@ func (a *App) pruneExpiredProposals(now time.Time) {
 			delete(a.agentProposals, id)
 		}
 	}
+	for id, preview := range a.agentScriptPreviews {
+		if !preview.expires.After(now) {
+			delete(a.agentScriptPreviews, id)
+		}
+	}
 }
 
 func (a *App) agentStatus() (agent.Status, error) {
@@ -371,6 +376,9 @@ func (a *App) finishAgentPreview(draft previewDraft, checked validation.Result) 
 	used := 0
 	for _, proposal := range a.agentProposals {
 		used += proposal.ruleBytes
+	}
+	for _, preview := range a.agentScriptPreviews {
+		used += preview.bytes
 	}
 	if ruleBytes > maxPreviewRuleMemory-used {
 		return agent.Preview{}, errors.New("pending preview rules exceed the in-memory size limit; apply, cancel or wait for existing previews")
