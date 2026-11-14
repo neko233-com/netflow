@@ -445,6 +445,15 @@ func RestoreOutside(ctx context.Context, archive, destination, forbiddenRoot str
 	return restoreContext(ctx, archive, destination, forbiddenRoot, nil, false)
 }
 
+// RestoreOutsideFile validates and restores a caller-owned open archive while
+// keeping the destination outside a running configuration directory.
+func RestoreOutsideFile(ctx context.Context, file *os.File, destination, forbiddenRoot string) (Manifest, error) {
+	if file == nil || !filepath.IsAbs(forbiddenRoot) {
+		return Manifest{}, errors.New("valid file and active configuration path are required")
+	}
+	return restoreContext(ctx, "", destination, forbiddenRoot, file, false)
+}
+
 // InspectFile validates an already-open backup without extracting it. The
 // caller retains ownership of the file and must prevent concurrent mutation.
 func InspectFile(ctx context.Context, file *os.File) (Manifest, error) {
@@ -462,7 +471,7 @@ func restoreContext(ctx context.Context, archive, destination, forbiddenRoot str
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	if !inspectOnly && (!filepath.IsAbs(archive) || !filepath.IsAbs(destination)) {
+	if !inspectOnly && ((provided == nil && !filepath.IsAbs(archive)) || !filepath.IsAbs(destination)) {
 		return result, errors.New("backup paths must be absolute")
 	}
 	archiveFile := provided

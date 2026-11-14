@@ -24,7 +24,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags := flag.NewFlagSet("netflow-agent", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, update-geo, tun on|off, profiles, import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, webdav-upload (JSON stdin), backup-export PATH, backup-restore PATH")
+		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, update-geo, tun on|off, profiles, import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -107,7 +107,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	case "help":
 		flags.Usage()
 		return nil
-	case "diagnostics", "shutdown", "update-geo", "groups", "profiles", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "webdav-upload", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
+	case "diagnostics", "shutdown", "update-geo", "groups", "profiles", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "webdav-upload", "webdav-restore", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
 		method := flags.Arg(0)
 		stdin := input
 		var input any
@@ -150,23 +150,28 @@ func run(args []string, input io.Reader, output io.Writer) error {
 				return errors.New("profile-job-status requires a job ID")
 			}
 			input = agent.ProfileJobArgs{JobID: flags.Arg(1)}
-		case "webdav-upload":
+		case "webdav-upload", "webdav-restore":
 			if flags.NArg() != 1 {
-				return errors.New("webdav-upload reads one JSON object from stdin")
+				return errors.New("WebDAV operation reads one JSON object from stdin")
 			}
 			body, err := io.ReadAll(io.LimitReader(stdin, 32769))
 			if err != nil || len(body) > 32768 {
-				return errors.New("invalid WebDAV upload input")
+				return errors.New("invalid WebDAV input")
 			}
-			var value agent.WebDAVUploadArgs
+			var value any
+			if method == "webdav-upload" {
+				value = &agent.WebDAVUploadArgs{}
+			} else {
+				value = &agent.WebDAVRestoreArgs{}
+			}
 			decoder := json.NewDecoder(bytes.NewReader(body))
 			decoder.DisallowUnknownFields()
-			if decoder.Decode(&value) != nil {
-				return errors.New("invalid WebDAV upload input")
+			if decoder.Decode(value) != nil {
+				return errors.New("invalid WebDAV input")
 			}
 			var extra any
 			if decoder.Decode(&extra) != io.EOF {
-				return errors.New("invalid WebDAV upload input")
+				return errors.New("invalid WebDAV input")
 			}
 			input = value
 		case "backup-schedule-set":

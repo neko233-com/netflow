@@ -49,16 +49,21 @@ func (a *App) browseRestore() (string, string, error) {
 	if err != nil || len(archives) == 0 {
 		return "", "", err
 	}
+	destination, err := a.browseRestoreDestination()
+	return archives[0], destination, err
+}
+
+func (a *App) browseRestoreDestination() (string, error) {
 	parents, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "选择恢复目录的上一级文件夹", Directory: true})
 	if err != nil || len(parents) == 0 {
-		return "", "", err
+		return "", err
 	}
 	var nonce [4]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return "", "", err
+		return "", err
 	}
 	name := "NetFlow-restored-" + time.Now().Format("20060102-150405") + "-" + hex.EncodeToString(nonce[:])
-	return archives[0], filepath.Join(parents[0], name), nil
+	return filepath.Join(parents[0], name), nil
 }
 
 func validArchivePath(path string) bool {

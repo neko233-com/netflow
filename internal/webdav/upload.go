@@ -1,4 +1,4 @@
-// Package webdav uploads explicitly selected, unencrypted NetFlow backups.
+// Package webdav transfers explicitly selected, unencrypted NetFlow backups.
 // Credentials and server responses are never included in returned errors.
 package webdav
 
@@ -88,6 +88,33 @@ func validate(c Credentials) (*url.URL, string, string, error) {
 	return u, user, password, nil
 }
 
+func resourceURL(u *url.URL, name string) string {
+	escaped := strings.TrimRight(u.EscapedPath(), "/") + "/" + name
+	u.Path = strings.TrimRight(u.Path, "/") + "/" + name
+	u.RawPath = escaped
+	return u.String()
+}
+
+func (c Client) httpClient() (http.Client, func()) {
+	var client http.Client
+	closeIdle := func() {}
+	if c.HTTP != nil {
+		client = *c.HTTP
+	} else {
+		transport := &http.Transport{
+			Proxy:                 nil,
+			DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			DisableCompression:    true,
+		}
+		client.Transport = transport
+		closeIdle = transport.CloseIdleConnections
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return client, closeIdle
+}
+
 // Upload writes to a new randomly named resource within the given collection.
 // A conforming server will reject an existing resource via If-None-Match.
 // Interruption may leave a partial remote resource; it is never deleted here.
@@ -104,13 +131,11 @@ func (c Client) Upload(ctx context.Context, credentials Credentials, archive io.
 		return "", errors.New("could not allocate backup name")
 	}
 	name := "netflow-" + time.Now().UTC().Format("20060102-150405") + "-" + hex.EncodeToString(nonce[:]) + ".zip"
-	escaped := strings.TrimRight(u.EscapedPath(), "/") + "/" + name
-	u.Path = strings.TrimRight(u.Path, "/") + "/" + name
-	u.RawPath = escaped
+	resource := resourceURL(u, name)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	reader := &countedReader{r: io.LimitReader(archive, size), done: make(chan struct{})}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u.String(), reader)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, resource, reader)
 	if err != nil {
 		return "", errors.New("invalid WebDAV request")
 	}
@@ -120,21 +145,8 @@ func (c Client) Upload(ctx context.Context, credentials Credentials, archive io.
 	if user != "" || password != "" {
 		req.SetBasicAuth(user, password)
 	}
-	var client http.Client
-	if c.HTTP != nil {
-		client = *c.HTTP
-	} else {
-		transport := &http.Transport{
-			Proxy:                 nil,
-			DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-			TLSHandshakeTimeout:   15 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-			DisableCompression:    true,
-		}
-		defer transport.CloseIdleConnections()
-		client.Transport = transport
-	}
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	client, closeIdle := c.httpClient()
+	defer closeIdle()
 	resp, err := client.Do(req)
 	// net/http may close the body asynchronously after Do returns. Ensure
 	// archive reads have stopped before the caller seeks or hashes the file.

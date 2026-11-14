@@ -84,6 +84,15 @@ type WebDAVUploadArgs struct {
 	Password string `json:"password,omitempty" jsonschema:"optional WebDAV password"`
 	UseSaved bool   `json:"use_saved,omitempty" jsonschema:"use existing saved WebDAV credentials instead of providing credentials"`
 }
+
+type WebDAVRestoreArgs struct {
+	RemoteName  string `json:"remote_name" jsonschema:"generated WebDAV backup filename returned by an upload job"`
+	Destination string `json:"destination" jsonschema:"absolute path to a new directory outside the running configuration"`
+	URL         string `json:"url,omitempty" jsonschema:"HTTPS WebDAV collection URL; may contain secrets"`
+	User        string `json:"user,omitempty" jsonschema:"optional WebDAV username"`
+	Password    string `json:"password,omitempty" jsonschema:"optional WebDAV password"`
+	UseSaved    bool   `json:"use_saved,omitempty" jsonschema:"use existing saved WebDAV credentials instead of supplying credentials"`
+}
 type Status struct {
 	Running              bool          `json:"running"`
 	Headless             bool          `json:"headless"`

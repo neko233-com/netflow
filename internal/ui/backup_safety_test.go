@@ -93,11 +93,41 @@ func TestWebDAVActionsFitMinimumWindowHeight(t *testing.T) {
 	m := DemoModel()
 	m.Dialogs.WebDAV, m.WebDAVSecretStored = true, true
 	tt := renderModel(m, WindowWidth, WindowMinHeight, false)
-	for _, id := range []string{"webdav-upload", "webdav-upload-saved", "webdav-clear-secret", "close-WebDAV"} {
+	for _, id := range []string{"webdav-upload", "webdav-upload-saved", "webdav-restore", "webdav-restore-saved", "webdav-clear-secret", "close-WebDAV"} {
 		element, ok := tt.Find(id)
 		if !ok || element.Y < 0 || element.Y+element.H > WindowMinHeight {
 			t.Fatalf("WebDAV action %s is outside the minimum window: %+v", id, element)
 		}
+	}
+}
+
+func TestWebDAVRestoreSelectsNewDestinationAndClearsPassword(t *testing.T) {
+	m := DemoModel()
+	m.Dialogs.WebDAV = true
+	m.WebDAVURLDraft, m.WebDAVPasswordDraft = "https://backup.invalid/dav", "synthetic-password"
+	m.WebDAVRemoteDraft = "netflow-20261114-120000-0123456789abcdef0123456789abcdef.zip"
+	m.RestorePath = `C:\Restore\old`
+	m.Hooks.BrowseRestoreDestination = func() (string, error) { return `C:\Restore\new`, nil }
+	called := false
+	var callback func(error)
+	m.Hooks.RestoreWebDAVAsync = func(args agent.WebDAVRestoreArgs, done func(error)) error {
+		called = true
+		if args.Destination != `C:\Restore\new` || args.Password != "synthetic-password" {
+			t.Error("restore arguments lost")
+		}
+		callback = done
+		return nil
+	}
+	tt := renderModel(m, WindowWidth, WindowHeight, false)
+	if err := tt.Click("webdav-restore"); err != nil {
+		t.Fatal(err)
+	}
+	if callback == nil || m.RestorePath != "" {
+		t.Fatal("old destination remained visible during restore")
+	}
+	callback(nil)
+	if !called || m.WebDAVPasswordDraft != "" || m.RestorePath != `C:\Restore\new` {
+		t.Fatal("restore did not finish correctly")
 	}
 }
 

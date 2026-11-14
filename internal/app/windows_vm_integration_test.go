@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -194,21 +195,42 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	}
 	defer logFile.Close()
 	webdavReceived := make(chan [32]byte, 1)
+	var webdavMu sync.Mutex
+	var webdavBody []byte
+	var webdavName string
 	webdavServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, password, ok := r.BasicAuth()
-		if !ok || user != "vm-user" || password != "synthetic-webdav-secret" || r.URL.RawQuery != "token=synthetic-webdav-token" || r.Header.Get("If-None-Match") != "*" || r.Method != http.MethodPut {
+		if !ok || user != "vm-user" || password != "synthetic-webdav-secret" || r.URL.RawQuery != "token=synthetic-webdav-token" {
 			http.Error(w, "invalid request", http.StatusForbidden)
 			return
 		}
-		h := sha256.New()
-		if _, err := io.Copy(h, io.LimitReader(r.Body, 544<<20)); err != nil {
-			http.Error(w, "read failed", http.StatusBadRequest)
-			return
+		switch r.Method {
+		case http.MethodPut:
+			if r.Header.Get("If-None-Match") != "*" {
+				http.Error(w, "precondition missing", http.StatusBadRequest)
+				return
+			}
+			body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
+			if err != nil {
+				http.Error(w, "read failed", http.StatusBadRequest)
+				return
+			}
+			webdavMu.Lock()
+			webdavBody, webdavName = body, filepath.Base(r.URL.Path)
+			webdavMu.Unlock()
+			webdavReceived <- sha256.Sum256(body)
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodGet:
+			webdavMu.Lock()
+			defer webdavMu.Unlock()
+			if webdavName == "" || filepath.Base(r.URL.Path) != webdavName {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write(webdavBody)
+		default:
+			http.Error(w, "invalid method", http.StatusMethodNotAllowed)
 		}
-		var digest [32]byte
-		copy(digest[:], h.Sum(nil))
-		webdavReceived <- digest
-		w.WriteHeader(http.StatusCreated)
 	}))
 	defer webdavServer.Close()
 	certPath := filepath.Join(t.TempDir(), "webdav-test-ca.pem")
@@ -434,6 +456,38 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatal("WebDAV server did not receive backup")
 	}
 	t.Log("installed headless Agent uploaded a validated backup to a local TLS WebDAV server without leaking credentials")
+	remoteParent := t.TempDir()
+	remoteDestination := filepath.Join(remoteParent, "restored")
+	remoteArgs, _ := json.Marshal(agent.WebDAVRestoreArgs{RemoteName: uploadJob.RemoteName, Destination: remoteDestination, URL: webdavServer.URL + "/collection/?token=synthetic-webdav-token", User: "vm-user", Password: "synthetic-webdav-secret"})
+	requestCtx, requestDone = context.WithTimeout(context.Background(), 30*time.Second)
+	request = vmCommand(requestCtx, agentExe, "--config-dir", dir, "webdav-restore")
+	request.Stdin = strings.NewReader(string(remoteArgs))
+	payload, err = request.CombinedOutput()
+	requestDone()
+	var remoteJob agent.BackupJob
+	if err != nil || json.Unmarshal(payload, &remoteJob) != nil || strings.Contains(string(payload), "synthetic-webdav") {
+		t.Fatalf("WebDAV restore request failed or leaked credentials: %v", err)
+	}
+	until = time.Now().Add(45 * time.Second)
+	for remoteJob.State == "pending" && time.Now().Before(until) {
+		payload, err = call("backup-job-status", remoteJob.JobID)
+		if err != nil || json.Unmarshal(payload, &remoteJob) != nil || strings.Contains(string(payload), "synthetic-webdav") {
+			t.Fatalf("WebDAV restore status failed or leaked credentials: %v", err)
+		}
+		if remoteJob.State == "pending" {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	remoteFiles, err := os.ReadDir(remoteParent)
+	if err != nil || remoteJob.State != "succeeded" || len(remoteFiles) != 1 {
+		t.Fatalf("WebDAV restore failed or left temporary file: %+v %v", remoteJob, err)
+	}
+	remoteCatalog, e1 := vmHash(filepath.Join(remoteDestination, "profiles.json"))
+	currentCatalog, e2 := vmHash(filepath.Join(dir, "profiles.json"))
+	if e1 != nil || e2 != nil || remoteCatalog != currentCatalog {
+		t.Fatal("WebDAV restore lost profile catalog")
+	}
+	t.Log("installed headless Agent restored the remote backup into a new directory and removed its temporary download")
 	restored := filepath.Join(backupRoot, "restored")
 	payload, err = call("restore-create", liveArchive, restored)
 	var restoreJob agent.BackupJob

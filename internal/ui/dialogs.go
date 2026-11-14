@@ -48,6 +48,7 @@ func (m *Model) overlay(c *mygoui.Context, pal Palette) {
 	m.simpleDialog(c, pal, &m.Dialogs.WebDAV, "WebDAV", m.webdavBody)
 	if !m.Dialogs.WebDAV {
 		m.WebDAVURLDraft, m.WebDAVUserDraft, m.WebDAVPasswordDraft = "", "", ""
+		m.WebDAVRemoteDraft = ""
 	}
 	m.dnsConfirm(c, pal)
 	m.connColumnDialog(c, pal)
@@ -660,6 +661,7 @@ func (m *Model) backupBody(c *mygoui.Context, pal Palette) {
 			return
 		}
 		if archive != "" && destination != "" {
+			m.RestorePath = ""
 			m.BackupBusy = true
 			m.Notice = "正在验证并恢复备份…"
 			if err := m.Hooks.RestoreBackupAsync(archive, destination, func(err error) {
@@ -705,6 +707,19 @@ func (m *Model) webdavBody(c *mygoui.Context, pal Palette) {
 			m.webdavUpload(true)
 		}
 	})
+	mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
+		mygoui.Text(c, "远端文件名").FontSize(13)
+		mygoui.TextInput(c, &m.WebDAVRemoteDraft).Grow(1).Label("webdav-remote-name")
+		if backupButton(c, pal, "恢复", "webdav-restore", m.BackupBusy) {
+			m.webdavRestore(false)
+		}
+		if m.WebDAVSecretStored && backupButton(c, pal, "已存配置恢复", "webdav-restore-saved", m.BackupBusy) {
+			m.webdavRestore(true)
+		}
+	})
+	if m.RestorePath != "" && backupButton(c, pal, "复制恢复目录", "webdav-copy-restore", false) {
+		m.copy(m.RestorePath)
+	}
 	if m.WebDAVSecretStored {
 		mygoui.Text(c, "检测到旧版 WebDAV 配置。Windows 会尝试使用当前账户保护；其他平台可能仍以明文保存。复制会写入剪贴板。").FontSize(12).TextColor(pal.TextMuted)
 		mygoui.Row(c).Gap(4).Children(func() {
@@ -767,6 +782,41 @@ func (m *Model) webdavUpload(useSaved bool) {
 	}); err != nil {
 		m.BackupBusy = false
 		m.Notice = "无法开始上传: " + err.Error()
+	}
+}
+
+func (m *Model) webdavRestore(useSaved bool) {
+	if m.Hooks.BrowseRestoreDestination == nil || m.Hooks.RestoreWebDAVAsync == nil {
+		m.Notice = "WebDAV 恢复不可用"
+		return
+	}
+	destination, err := m.Hooks.BrowseRestoreDestination()
+	if err != nil {
+		m.Notice = "选择恢复位置失败: " + err.Error()
+		return
+	}
+	if destination == "" {
+		return
+	}
+	args := agent.WebDAVRestoreArgs{Destination: destination, RemoteName: m.WebDAVRemoteDraft, UseSaved: useSaved}
+	if !useSaved {
+		args.URL, args.User, args.Password = m.WebDAVURLDraft, m.WebDAVUserDraft, m.WebDAVPasswordDraft
+	}
+	m.WebDAVPasswordDraft = ""
+	m.RestorePath = ""
+	m.BackupBusy = true
+	m.Notice = "正在下载并校验备份…"
+	if err := m.Hooks.RestoreWebDAVAsync(args, func(err error) {
+		m.BackupBusy = false
+		if err != nil {
+			m.Notice = "恢复失败，新目录可能不完整"
+		} else {
+			m.RestorePath = destination
+			m.Notice = "已恢复到新目录"
+		}
+	}); err != nil {
+		m.BackupBusy = false
+		m.Notice = "无法开始恢复: " + err.Error()
 	}
 }
 

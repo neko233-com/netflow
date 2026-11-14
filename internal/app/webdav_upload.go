@@ -44,22 +44,30 @@ func archiveDigest(ctx context.Context, f *os.File, size int64) ([32]byte, error
 	return result, nil
 }
 
-func (a *App) beginWebDAVUpload(args agent.WebDAVUploadArgs, now time.Time, done func(string, error)) (agent.BackupJob, error) {
-	if !validArchivePath(args.Archive) {
-		return agent.BackupJob{}, errors.New("backup archive must be an absolute path")
-	}
-	creds := webdav.Credentials{URL: args.URL, User: args.User, Password: args.Password}
-	if args.UseSaved {
-		if args.URL != "" || args.User != "" || args.Password != "" {
-			return agent.BackupJob{}, errors.New("cannot combine saved and supplied WebDAV credentials")
+func (a *App) webDAVCredentials(url, user, password string, useSaved bool) (webdav.Credentials, error) {
+	creds := webdav.Credentials{URL: url, User: user, Password: password}
+	if useSaved {
+		if url != "" || user != "" || password != "" {
+			return webdav.Credentials{}, errors.New("cannot combine saved and supplied WebDAV credentials")
 		}
 		saved, err := a.savedWebDAV()
 		if err != nil {
-			return agent.BackupJob{}, errors.New("saved WebDAV credentials are unavailable")
+			return webdav.Credentials{}, errors.New("saved WebDAV credentials are unavailable")
 		}
 		creds = webdav.Credentials{URL: saved.URL, User: saved.User, Password: saved.Password}
 	}
 	if err := webdav.Validate(creds); err != nil {
+		return webdav.Credentials{}, err
+	}
+	return creds, nil
+}
+
+func (a *App) beginWebDAVUpload(args agent.WebDAVUploadArgs, now time.Time, done func(string, error)) (agent.BackupJob, error) {
+	if !validArchivePath(args.Archive) {
+		return agent.BackupJob{}, errors.New("backup archive must be an absolute path")
+	}
+	creds, err := a.webDAVCredentials(args.URL, args.User, args.Password, args.UseSaved)
+	if err != nil {
 		return agent.BackupJob{}, err
 	}
 	archive := args.Archive
@@ -70,7 +78,7 @@ func (a *App) beginWebDAVUpload(args agent.WebDAVUploadArgs, now time.Time, done
 	var job agent.BackupJob
 	var remoteName string
 	assigned := make(chan struct{})
-	job, err := a.beginArchiveJob("webdav-upload", now, func(err error) {
+	job, err = a.beginArchiveJob("webdav-upload", now, func(err error) {
 		<-assigned
 		if record, ok := a.backupJobs[job.JobID]; ok {
 			record.job.RemoteName = remoteName
