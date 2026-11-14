@@ -1463,7 +1463,15 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	if err := os.WriteFile(filepath.Join(dir, "providers", "slow.yaml"), []byte("proxies: [{name: old, type: direct}]\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	config := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\nproxy-providers:\n  slow: {type: http, url: '" + provider.URL + "', path: providers/slow.yaml, interval: 3600, health-check: {enable: false}}\nrules: ['MATCH,DIRECT']\n"
+	dnsReservation, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsAddress := dnsReservation.LocalAddr().String()
+	if err := dnsReservation.Close(); err != nil {
+		t.Fatal(err)
+	}
+	config := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\nprofile: {store-fake-ip: false}\ndns: {enable: true, listen: '" + dnsAddress + "', enhanced-mode: fake-ip, nameserver: ['127.0.0.1:3']}\nproxy-providers:\n  slow: {type: http, url: '" + provider.URL + "', path: providers/slow.yaml, interval: 3600, health-check: {enable: false}}\nrules: ['MATCH,DIRECT']\n"
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -1494,6 +1502,21 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	if !status.TUN {
 		t.Fatalf("provider busy test did not start TUN: %+v", status)
 	}
+	lookupFake := func(name string) string {
+		query := new(dns.Msg)
+		query.SetQuestion(name, dns.TypeA)
+		answer, _, err := (&dns.Client{Net: "udp", Timeout: 5 * time.Second}).Exchange(query, dnsAddress)
+		if err != nil || answer == nil || len(answer.Answer) == 0 {
+			t.Fatalf("busy transition DNS lookup %s: %+v %v", name, answer, err)
+		}
+		record, ok := answer.Answer[0].(*dns.A)
+		if !ok || !strings.HasPrefix(record.A.String(), "198.18.") {
+			t.Fatalf("unexpected Fake-IP for %s: %+v", name, answer.Answer)
+		}
+		return record.A.String()
+	}
+	alpha := lookupFake("busy-alpha.netflow-test.example.")
+	beta := lookupFake("busy-beta.netflow-test.example.")
 	var job agent.ProviderJob
 	if err := client.Call(context.Background(), "update-provider", agent.ProviderUpdateArgs{Kind: "proxy", Name: "slow"}, &job); err != nil {
 		t.Fatal(err)
@@ -1543,6 +1566,10 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	if status.TUN || status.TUNPending || !status.Running {
 		t.Fatalf("TUN off did not complete: %+v", status)
 	}
+	if lookupFake("busy-beta.netflow-test.example.") != beta || lookupFake("busy-alpha.netflow-test.example.") != alpha {
+		t.Fatal("busy TUN-off handoff lost in-memory Fake-IP mappings")
+	}
+	gamma := lookupFake("busy-gamma.netflow-test.example.")
 	if data, err := os.ReadFile(filepath.Join(dir, "providers", "slow.yaml")); err != nil || !strings.Contains(string(data), "fresh") {
 		t.Fatal("TUN off lost previously completed provider cache")
 	}
@@ -1560,6 +1587,9 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	}
 	if !status.TUN {
 		t.Fatalf("TUN did not restart: %+v", status)
+	}
+	if lookupFake("busy-gamma.netflow-test.example.") != gamma || lookupFake("busy-beta.netflow-test.example.") != beta || lookupFake("busy-alpha.netflow-test.example.") != alpha {
+		t.Fatal("TUN re-enable lost Fake-IP mappings after busy handoff")
 	}
 	slow.Store(false)
 	shutdownSlow.Store(true)
@@ -1595,7 +1625,7 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	for time.Now().Before(deadline) {
 		routes, dns, e := vmNetworkSnapshot()
 		if e == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
-			t.Log("TUN off and shutdown canceled stalled provider updates, preserved cache and restored networking")
+			t.Log("TUN off and shutdown canceled stalled provider updates, preserved cache and in-memory Fake-IP mappings, and restored networking")
 			return
 		}
 		time.Sleep(time.Second)
