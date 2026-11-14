@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/neko233-com/netflow/internal/profile"
 	"go.yaml.in/yaml/v3"
@@ -94,6 +95,9 @@ func readArchiveExtensions(archive []byte, uid string) (*Source, error) {
 }
 
 func readArchiveExtensionsWithScript(archive []byte, uid string, includeScript bool) (*Source, error) {
+	return readArchiveSelected(archive, uid, true, includeScript, false)
+}
+func readArchiveSelected(archive []byte, uid string, includeData, includeScript, includeGlobalScript bool) (*Source, error) {
 	zr, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
 	if err != nil {
 		return nil, err
@@ -169,15 +173,21 @@ func readArchiveExtensionsWithScript(archive []byte, uid string, includeScript b
 		return nil, errors.New("Verge 存档中的订阅不存在")
 	}
 	item := index.Items[i]
-	wanted := []string{"Merge", item.Option.Merge, item.Option.Proxies, item.Option.Groups}
+	var wanted []string
+	if includeData {
+		wanted = append(wanted, "Merge", item.Option.Merge, item.Option.Proxies, item.Option.Groups)
+		if item.Option.Proxies == "" {
+			wanted = append(wanted, "Proxies")
+		}
+		if item.Option.Groups == "" {
+			wanted = append(wanted, "Groups")
+		}
+	}
 	if includeScript {
 		wanted = append(wanted, item.Option.Script)
 	}
-	if item.Option.Proxies == "" {
-		wanted = append(wanted, "Proxies")
-	}
-	if item.Option.Groups == "" {
-		wanted = append(wanted, "Groups")
+	if includeGlobalScript {
+		wanted = append(wanted, "Script")
 	}
 	files := make(map[string][]byte)
 	for _, id := range wanted {
@@ -200,4 +210,106 @@ func readArchiveExtensionsWithScript(archive []byte, uid string, includeScript b
 		files[name] = data
 	}
 	return &Source{index: index, itemByID: byID, files: files}, nil
+}
+
+// ArchivedScript is an explicitly retrievable artifact; reading it never
+// authorizes or runs it. Hashes let later previews reject stale archives.
+type ArchivedScript struct {
+	UID    string
+	Source []byte
+	SHA256 [32]byte
+}
+type ArchivedScriptSnapshot struct {
+	OriginalProfileName string
+	Global              *ArchivedScript
+	Profile             *ArchivedScript
+	ArchivePath         string
+	ArchiveSHA256       [32]byte
+}
+
+// ReadArchivedScripts returns the global Script and the referenced profile
+// script from the original import snapshot. Missing or mismatched explicit
+// profile references fail rather than silently selecting unrelated content.
+func ReadArchivedScripts(root, relative, uid string) (ArchivedScriptSnapshot, error) {
+	snapshot, _, err := readArchivedScriptSnapshot(root, relative, uid, false)
+	return snapshot, err
+}
+
+// ReadArchivedCompositionSnapshot obtains data extensions and scripts from a
+// single archive read, so preview inputs all share one immutable archive hash.
+func ReadArchivedCompositionSnapshot(root, relative, uid string) (ArchivedScriptSnapshot, profile.VergeExtensions, error) {
+	return readArchivedScriptSnapshot(root, relative, uid, true)
+}
+func readArchivedScriptSnapshot(root, relative, uid string, includeData bool) (ArchivedScriptSnapshot, profile.VergeExtensions, error) {
+	var empty profile.VergeExtensions
+	var result ArchivedScriptSnapshot
+	archivePath, err := ArchivePath(root, relative)
+	if err != nil {
+		return result, empty, err
+	}
+	data, err := readManaged(root, "verge-imports", relative, maxTotal)
+	if err != nil {
+		return result, empty, err
+	}
+	source, err := readArchiveSelected(data, uid, includeData, true, true)
+	if err != nil {
+		return result, empty, err
+	}
+	snapshot, err := archivedScriptsFromSource(source, uid, archivePath, sha256.Sum256(data))
+	if err != nil {
+		return result, empty, err
+	}
+	if !includeData {
+		return snapshot, empty, nil
+	}
+	extensions, err := source.extensions(uid)
+	if err != nil {
+		return result, empty, err
+	}
+	return snapshot, extensions, nil
+}
+func archivedScriptsFromSource(source *Source, uid, archivePath string, archiveHash [32]byte) (ArchivedScriptSnapshot, error) {
+	var result ArchivedScriptSnapshot
+	var err error
+	index, ok := source.itemByID[uid]
+	if !ok {
+		return result, errors.New("Verge 订阅不存在")
+	}
+	item := source.index.Items[index]
+	lookup := func(id string, required bool) (*ArchivedScript, error) {
+		if id == "" {
+			return nil, nil
+		}
+		i, found := source.itemByID[id]
+		if !found {
+			if required {
+				return nil, errors.New("引用的 Verge 脚本不存在")
+			}
+			return nil, nil
+		}
+		entry := source.index.Items[i]
+		if entry.Type != "script" {
+			return nil, errors.New("Verge 脚本引用类型无效")
+		}
+		contents, found := source.files["profiles/"+entry.File]
+		if !found {
+			return nil, errors.New("Verge 脚本文件缺失")
+		}
+		if len(contents) > 1<<20 || !utf8.Valid(contents) || bytes.IndexByte(contents, 0) >= 0 {
+			return nil, errors.New("Verge 脚本编码无效或超过大小限制")
+		}
+		return &ArchivedScript{UID: id, Source: append([]byte(nil), contents...), SHA256: sha256.Sum256(contents)}, nil
+	}
+	result.Global, err = lookup("Script", false)
+	if err != nil {
+		return ArchivedScriptSnapshot{}, err
+	}
+	result.Profile, err = lookup(item.Option.Script, item.Option.Script != "")
+	if err != nil {
+		return ArchivedScriptSnapshot{}, err
+	}
+	result.OriginalProfileName = item.Name
+	result.ArchivePath = archivePath
+	result.ArchiveSHA256 = archiveHash
+	return result, nil
 }

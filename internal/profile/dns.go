@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -180,6 +181,12 @@ func parseMapping(text string) (*yaml.Node, error) {
 // flattenMapping applies YAML merge keys while preserving the order of the
 // winning entries. Explicit entries take precedence over merged entries.
 func flattenMapping(node *yaml.Node, depth int) (*yaml.Node, error) {
+	return flattenMappingContext(context.Background(), node, depth)
+}
+func flattenMappingContext(ctx context.Context, node *yaml.Node, depth int) (*yaml.Node, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if node == nil || node.Kind != yaml.MappingNode || depth > 512 {
 		return nil, errors.New("YAML 合并映射无效")
 	}
@@ -188,6 +195,9 @@ func flattenMapping(node *yaml.Node, depth int) (*yaml.Node, error) {
 	out.Content = nil
 	explicit := make(map[string]bool)
 	for i := 0; i+1 < len(node.Content); i += 2 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		key := node.Content[i]
 		if key.Tag == "!!merge" {
 			continue
@@ -199,7 +209,7 @@ func flattenMapping(node *yaml.Node, depth int) (*yaml.Node, error) {
 	}
 	merged := make(map[string]bool)
 	appendMerge := func(m *yaml.Node) error {
-		resolved, err := flattenMapping(m, depth+1)
+		resolved, err := flattenMappingContext(ctx, m, depth+1)
 		if err != nil {
 			return err
 		}
@@ -213,6 +223,9 @@ func flattenMapping(node *yaml.Node, depth int) (*yaml.Node, error) {
 		return nil
 	}
 	for i := 0; i+1 < len(node.Content); i += 2 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		key, value := node.Content[i], node.Content[i+1]
 		if key.Tag != "!!merge" {
 			out.Content = append(out.Content, key, value)

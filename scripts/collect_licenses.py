@@ -86,6 +86,7 @@ def main():
     (DEST / "go").mkdir(exist_ok=True)
     shutil.copyfile(goroot / "LICENSE", DEST / "go" / "LICENSE")
     lines.append("- Go standard library — [go](go/)")
+    lines.append("- Bundled fastschema/qjs v0.0.6 and QuickJS-NG — [fastschema-qjs](fastschema-qjs/)")
     if missing:
         lines += ["", "## Modules without a root notice", ""] + [f"- {entry}" for entry in missing]
     (DEST / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

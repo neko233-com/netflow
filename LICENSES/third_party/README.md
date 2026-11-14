@@ -58,7 +58,7 @@ The original module paths and versions are listed below. Module source is availa
 - `github.com/metacubex/jls-tls@v0.0.0-20260723084315-67adc0e2f796` — [github.com_metacubex_jls-tls_v0.0.0-20260723084315-67adc0e2f796](github.com_metacubex_jls-tls_v0.0.0-20260723084315-67adc0e2f796/)
 - `github.com/metacubex/kcp-go@v0.0.0-20260105040817-550693377604` — [github.com_metacubex_kcp-go_v0.0.0-20260105040817-550693377604](github.com_metacubex_kcp-go_v0.0.0-20260105040817-550693377604/)
 - `github.com/metacubex/mhurl@v0.1.0` — [github.com_metacubex_mhurl_v0.1.0](github.com_metacubex_mhurl_v0.1.0/)
-- `github.com/metacubex/mihomo@v1.19.33` (replaced by `github.com/neko233-com/mihomo@v1.19.33-netflow.6`) — [github.com_metacubex_mihomo_v1.19.33](github.com_metacubex_mihomo_v1.19.33/)
+- `github.com/metacubex/mihomo@v1.19.33` (replaced by `github.com/neko233-com/mihomo@v1.19.33-netflow.12`) — [github.com_metacubex_mihomo_v1.19.33](github.com_metacubex_mihomo_v1.19.33/)
 - `github.com/metacubex/mipstack@v0.0.0-20261019124225-9a80a07eaeb9` — [github.com_metacubex_mipstack_v0.0.0-20261019124225-9a80a07eaeb9](github.com_metacubex_mipstack_v0.0.0-20261019124225-9a80a07eaeb9/)
 - `github.com/metacubex/mlkem@v0.1.0` — [github.com_metacubex_mlkem_v0.1.0](github.com_metacubex_mlkem_v0.1.0/)
 - `github.com/metacubex/qpack@v0.6.0` — [github.com_metacubex_qpack_v0.6.0](github.com_metacubex_qpack_v0.6.0/)
@@ -122,3 +122,4 @@ The original module paths and versions are listed below. Module source is availa
 - `golang.org/x/time@v0.15.0` — [golang.org_x_time_v0.15.0](golang.org_x_time_v0.15.0/)
 - `google.golang.org/protobuf@v1.34.2` — [google.golang.org_protobuf_v1.34.2](google.golang.org_protobuf_v1.34.2/)
 - Go standard library — [go](go/)
+- Bundled fastschema/qjs v0.0.6 and QuickJS-NG — [fastschema-qjs](fastschema-qjs/)

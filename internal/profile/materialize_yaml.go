@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"context"
 	"errors"
 
 	"go.yaml.in/yaml/v3"
@@ -9,10 +10,21 @@ import (
 // MaterializeYAMLNode expands aliases without reordering mapping entries.
 // The limits also reject recursive or excessive alias expansion.
 func MaterializeYAMLNode(node *yaml.Node) (*yaml.Node, error) {
+	return MaterializeYAMLNodeContext(context.Background(), node)
+}
+
+// MaterializeYAMLNodeContext also stops alias expansion when the caller cancels.
+func MaterializeYAMLNodeContext(ctx context.Context, node *yaml.Node) (*yaml.Node, error) {
+	if ctx == nil {
+		return nil, errors.New("context is required")
+	}
 	remaining := 1000000
 	active := make(map[*yaml.Node]bool)
 	var clone func(*yaml.Node, int) (*yaml.Node, error)
 	clone = func(n *yaml.Node, depth int) (*yaml.Node, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if n == nil || depth > 512 || remaining == 0 {
 			return nil, errors.New("YAML 引用过深或过大")
 		}
