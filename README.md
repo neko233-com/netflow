@@ -228,6 +228,15 @@ Windows 默认将用户数据保存在 `%APPDATA%\netflow`。开发时可通过�
 
 在 Windows 上安装 WiX Toolset 3.14 后，运行 `pwsh -File scripts/build-release.ps1` 可构建上述两个平台并生成 ZIP、Windows MSI 和 SHA-256 校验文件。发布脚本在构建前检查目标文件及排他锁，已有同版本产物时拒绝覆盖；构建完成后记录输入摘要和 Windows 文件哈希。程序不嵌入打包时可能尚未提交的 Git 工作区标记，可通过发行标签查看源码。打包脚本不创建 DMG，也不会替代 macOS 原机运行测试、签名或公证。更新依赖后运行 `python scripts/collect_licenses.py` 并检查 [第三方许可清单](LICENSES/third_party/README.md)。
 
+有可用 Windows 代码签名证书时，可显式传入证书存储中的 40 位指纹和 RFC 3161 HTTPS 时间戳地址：
+
+```powershell
+pwsh -File scripts/build-release.ps1 -RequireSigned -SigningThumbprint '<证书指纹>' -TimestampUrl 'https://时间戳服务地址' -SigningStore CurrentUser
+pwsh -File scripts/test-windows-vm.ps1 -RequireSigned -SigningThumbprint '<证书指纹>' -TimestampUrl 'https://时间戳服务地址' -SigningStore CurrentUser
+```
+
+`SigningStore` 可选 `CurrentUser` 或 `LocalMachine`；必须显式指定证书，脚本不会自动选用其他项目的密钥。构建前检查私钥、用途、证书有效期及本机信任链并请求在线吊销检查；构建中以 SHA-256 签名三个 Windows 程序和 MSI，要求时间戳并验证签名，再打包和计算哈希。验证器同样检查指定签名，并在 Windows 来宾用该来宾的信任存储验证 MSI 和安装后的程序；来宾验证不联网检查吊销状态。本机或来宾信任不保证其他电脑也信任该证书；现阶段没有用于 NetFlow 的公开可信证书，上述真实签名发布路径尚未端到端验证。未传签名参数时仍生成未签名预览包。
+
 隔离 Windows 验证器可通过 `pwsh -File scripts/test-windows-vm.ps1` 运行：缺少当前版本的 MSI 时会先自动在本机构建，已有产物则复用；运行前核对构建输入、Go 设置、三个程序及 MSI 的哈希，发现修改或缺少记录时拒绝测试，需要更新版本后重新构建。摘要是本地一致性检查，不是数字签名或可复现构建证明。验证器需要 Go、MyGo 所需依赖、Python、WiX Toolset 3.14、支持嵌套 KVM 的 Docker Desktop、约 4 GB 内存和足够磁盘空间；首次运行从微软下载约 4.9 GB 的 Windows 10 LTSC 评估镜像，并在专用 Docker 卷中创建一个 32 GB 上限的稀疏虚拟磁盘，后续运行复用该磁盘。Dockerfile 提供来宾环境，PowerShell 脚本负责宿主机构建和调度。测试只在经过 QEMU、单磁盘及非提升令牌检查的来宾中执行，不会切换宿主机 TUN。来宾内为无人值守测试启用 UAC 但自动同意该来宾的管理员提示；不要将其用于日常工作。验证涵盖 MSI、Verge 迁入、TUN 流量和异常恢复，不代表所有生产场景均已验证。
 
 ## 许可与来源

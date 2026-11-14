@@ -1,4 +1,15 @@
+param(
+    [string]$SigningThumbprint = '',
+    [string]$TimestampUrl = '',
+    [ValidateSet('CurrentUser', 'LocalMachine')][string]$SigningStore = 'CurrentUser',
+    [switch]$RequireSigned
+)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'windows-signing.ps1')
+$signing = $null
+if (Assert-NetFlowSigningOptions $SigningThumbprint $TimestampUrl ([bool]$RequireSigned)) {
+    $signing = New-NetFlowSigningConfig $SigningThumbprint $TimestampUrl $SigningStore
+}
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $oldLocation = Get-Location
 $releaseLock = $null
@@ -42,6 +53,11 @@ try {
     $wix = 'C:\Program Files (x86)\WiX Toolset v3.14\bin'
     if (-not (Test-Path -LiteralPath (Join-Path $wix 'heat.exe'))) { throw 'WiX Toolset v3.14 is required' }
     $source = (Resolve-Path "$buildDir/windows-amd64").Path
+    if ($null -ne $signing) {
+        foreach ($name in @('NetFlow.exe', 'netflow-agent.exe', 'netflow-kernel-worker.exe')) {
+            Invoke-NetFlowSignFile $signing (Join-Path $source $name)
+        }
+    }
     $icon = (Resolve-Path 'resources/icon.ico').Path
     & (Join-Path $wix 'heat.exe') dir $source -cg ApplicationFiles -dr INSTALLFOLDER -srd -sreg -scom -ag -var var.SourceDir -out "$msiDir/files.wxs"
     if ($LASTEXITCODE -ne 0) { throw 'WiX harvest failed' }
@@ -51,6 +67,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'WiX compile failed' }
     & (Join-Path $wix 'light.exe') -nologo -sice:ICE91 -out "$msiDir/NetFlow-$version-windows-amd64.msi" "$msiDir/netflow.wixobj" "$msiDir/files.wixobj"
     if ($LASTEXITCODE -ne 0) { throw 'WiX link failed' }
+    if ($null -ne $signing) { Invoke-NetFlowSignFile $signing (Join-Path $msiDir "NetFlow-$version-windows-amd64.msi") }
     & python scripts/package_release.py
     if ($LASTEXITCODE -ne 0) { throw "Packaging failed with exit code $LASTEXITCODE" }
     & python scripts/build_inputs.py record $inputDigest

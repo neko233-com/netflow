@@ -43,6 +43,29 @@ func TestVerifyMediaRejectsAlteredFilesAndWrongRun(t *testing.T) {
 	}
 }
 
+func TestManifestRequiresValidExpectedSigner(t *testing.T) {
+	m := manifest{ID: strings.Repeat("a", 32), Files: map[string]artifact{}, Expected: map[string]string{}}
+	for _, name := range []string{"netflow-app.test.exe", "NetFlow.msi"} {
+		m.Files[name] = artifact{SHA256: strings.Repeat("b", 64), Size: 1}
+	}
+	for _, name := range []string{"NetFlow.exe", "netflow-agent.exe", "netflow-kernel-worker.exe"} {
+		m.Expected[name] = strings.Repeat("c", 64)
+	}
+	if err := validateManifest(m); err != nil {
+		t.Fatal("unsigned preview manifest rejected", err)
+	}
+	m.Signer = strings.Repeat("d", 40)
+	if err := validateManifest(m); err != nil {
+		t.Fatal("signed manifest rejected", err)
+	}
+	for _, invalid := range []string{"x", strings.Repeat("A", 40), strings.Repeat("z", 40)} {
+		m.Signer = invalid
+		if err := validateManifest(m); err == nil {
+			t.Fatalf("invalid signer %q accepted", invalid)
+		}
+	}
+}
+
 func TestLegacyAutostartCommandMatchesOnlyOwnedPaths(t *testing.T) {
 	for _, tc := range []struct {
 		command string

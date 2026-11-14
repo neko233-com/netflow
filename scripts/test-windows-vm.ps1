@@ -1,5 +1,19 @@
-param([int]$TimeoutMinutes = 45, [switch]$TestPolicyOnly, [switch]$VerifyBootRetry, [ValidateSet('auto', '3G', '4G')][string]$GuestMemory = 'auto')
+param(
+    [int]$TimeoutMinutes = 45,
+    [switch]$TestPolicyOnly,
+    [switch]$VerifyBootRetry,
+    [ValidateSet('auto', '3G', '4G')][string]$GuestMemory = 'auto',
+    [string]$SigningThumbprint = '',
+    [string]$TimestampUrl = '',
+    [ValidateSet('CurrentUser', 'LocalMachine')][string]$SigningStore = 'CurrentUser',
+    [switch]$RequireSigned
+)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'windows-signing.ps1')
+$requiredSigning = $null
+if (Assert-NetFlowSigningOptions $SigningThumbprint $TimestampUrl ([bool]$RequireSigned)) {
+    $requiredSigning = [pscustomobject]@{ Thumbprint = $SigningThumbprint.ToUpperInvariant(); Tool = (Get-NetFlowSignTool) }
+}
 function Test-NetFlowBootRetry([int]$Attempt, [bool]$HasResult, [string]$Log) {
     return $Attempt -lt 2 -and -not $HasResult -and $Log.Contains('Timeout while waiting for QEMU to boot the machine, terminating...')
 }
@@ -20,6 +34,27 @@ function Protect-NetFlowDiagnostic([string]$Log, [string[]]$Secrets = @()) {
 function Assert-NetFlowReleaseCurrent {
     & python scripts/build_inputs.py verify
     if ($LASTEXITCODE -ne 0) { throw 'Cannot validate stale, modified or unrecorded release artifacts.' }
+    if ($null -ne $requiredSigning) {
+        $source = Join-Path $repo "build/release-artifacts-$version/windows-amd64"
+        foreach ($name in @('NetFlow.exe', 'netflow-agent.exe', 'netflow-kernel-worker.exe')) {
+            Assert-NetFlowSignedFile $requiredSigning (Join-Path $source $name)
+        }
+        Assert-NetFlowSignedFile $requiredSigning $msi
+    }
+}
+function Assert-NetFlowPayloadCurrent {
+    $copied = Join-Path $payload 'NetFlow.msi'
+    $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $msi).Hash
+    $copyHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $copied).Hash
+    if ($sourceHash -ne $copyHash) { throw 'Guest MSI payload differs from the verified release' }
+    $expected = Get-Content -Raw -LiteralPath (Join-Path $payload 'expected.json') | ConvertFrom-Json -AsHashtable
+    if ($expected -isnot [System.Collections.IDictionary] -or $expected.Count -ne 3) { throw 'Guest binary hash policy is invalid' }
+    foreach ($name in @('NetFlow.exe', 'netflow-agent.exe', 'netflow-kernel-worker.exe')) {
+        if ($expected[$name] -cne $hashes[$name]) { throw 'Guest binary hash policy changed during validation' }
+    }
+    $actualSigner = [IO.File]::ReadAllText((Join-Path $payload 'signer.txt'), [Text.Encoding]::ASCII)
+    if ($actualSigner -cne $signer) { throw 'Guest signing policy changed during validation' }
+    if ($null -ne $requiredSigning) { Assert-NetFlowSignedFile $requiredSigning $copied }
 }
 function Ensure-NetFlowKVM {
     # The Docker Desktop VM may unload KVM while the local build or image
@@ -37,6 +72,39 @@ if ($TestPolicyOnly) {
     if (-not $invalidStateRejected) { throw 'Invalid disk state accepted' }
     $redacted = Protect-NetFlowDiagnostic 'failure https://example.invalid/path?token=synthetic-secret guest-password retained' @('guest-password')
     if ($redacted.Contains('synthetic-secret') -or $redacted.Contains('guest-password') -or -not $redacted.Contains('retained')) { throw 'Diagnostic redaction failed' }
+    $testBuild = (Resolve-Path ([IO.Path]::GetTempPath())).Path
+    $testDir = Join-Path $testBuild ('payload-policy-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $testDir | Out-Null
+    try {
+        $payload = $testDir
+        $msi = Join-Path $testDir 'source.bin'
+        $signer = ''
+        $hashes = [ordered]@{ 'NetFlow.exe' = 'a'; 'netflow-agent.exe' = 'b'; 'netflow-kernel-worker.exe' = 'c' }
+        [IO.File]::WriteAllText($msi, 'synthetic')
+        [IO.File]::WriteAllText((Join-Path $payload 'NetFlow.msi'), 'synthetic')
+        [IO.File]::WriteAllText((Join-Path $payload 'signer.txt'), '')
+        [IO.File]::WriteAllText((Join-Path $payload 'expected.json'), ($hashes | ConvertTo-Json -Compress))
+        Assert-NetFlowPayloadCurrent
+        [IO.File]::WriteAllText((Join-Path $payload 'NetFlow.msi'), 'modified')
+        $rejected = $false
+        try { Assert-NetFlowPayloadCurrent } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Altered MSI payload was accepted' }
+        [IO.File]::WriteAllText((Join-Path $payload 'NetFlow.msi'), 'synthetic')
+        [IO.File]::WriteAllText((Join-Path $payload 'signer.txt'), 'changed')
+        $rejected = $false
+        try { Assert-NetFlowPayloadCurrent } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Changed signing policy was accepted' }
+        [IO.File]::WriteAllText((Join-Path $payload 'signer.txt'), '')
+        [IO.File]::WriteAllText((Join-Path $payload 'expected.json'), '{}')
+        $rejected = $false
+        try { Assert-NetFlowPayloadCurrent } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Changed binary hash policy was accepted' }
+    } finally {
+        $resolved = (Resolve-Path -LiteralPath $testDir).Path
+        $prefix = $testBuild.TrimEnd('\') + '\payload-policy-'
+        if (-not $resolved.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing to remove unexpected test path' }
+        Remove-Item -LiteralPath $resolved -Recurse -Force
+    }
     Write-Output 'Boot retry policy passed'
     return
 }
@@ -73,7 +141,9 @@ try {
     $msi = Join-Path $repo "build/releases/$version/NetFlow-$version-windows-amd64.msi"
     if (-not (Test-Path -LiteralPath $msi -PathType Leaf)) {
         Write-Output 'Release MSI is absent; building it locally before validation.'
-        & pwsh -NoProfile -File (Join-Path $repo 'scripts/build-release.ps1')
+        $signArgs = @()
+        if ($null -ne $requiredSigning) { $signArgs = @('-SigningThumbprint', $SigningThumbprint, '-TimestampUrl', $TimestampUrl, '-SigningStore', $SigningStore, '-RequireSigned') }
+        & pwsh -NoProfile -File (Join-Path $repo 'scripts/build-release.ps1') @signArgs
         if ($LASTEXITCODE -ne 0) { throw 'Automatic local release build failed' }
     }
     Assert-NetFlowReleaseCurrent
@@ -108,8 +178,11 @@ try {
         $hashes[$name] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $source $name)).Hash.ToLowerInvariant()
     }
     [IO.File]::WriteAllText((Join-Path $payload 'expected.json'), ($hashes | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+    $signer = if ($null -ne $requiredSigning) { $requiredSigning.Thumbprint.ToLowerInvariant() } else { '' }
+    [IO.File]::WriteAllText((Join-Path $payload 'signer.txt'), $signer, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $payload 'ready'), 'ready', [Text.UTF8Encoding]::new($false))
     Assert-NetFlowReleaseCurrent
+    Assert-NetFlowPayloadCurrent
     docker build -t netflow-windows-vm:local $context
     if ($LASTEXITCODE -ne 0) { throw 'Docker image build failed' }
     docker run --rm --network none --cpus=1 --entrypoint python3 netflow-windows-vm:local /opt/netflow/test_monitor.py
@@ -128,6 +201,7 @@ try {
     $containerMemory = if ($selectedMemory -eq '3G') { '4g' } else { '5g' }
     Write-Output "Windows guest memory: $selectedMemory; container limit: $containerMemory"
     Ensure-NetFlowKVM
+    Assert-NetFlowPayloadCurrent
     docker run -d --name $container --label "$label=1" --cpus=1 "--memory=$containerMemory" --device=/dev/kvm --mount "type=volume,source=$volume,target=/storage" --mount "type=bind,source=$payload,target=/payload,readonly" -e "NETFLOW_RUN_ID=$runID" -e "RAM_SIZE=$selectedMemory" -e USERNAME=NetFlowTest -e "PASSWORD=$guestPassword" @testEnv netflow-windows-vm:local | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not start Windows validation guest' }
     $guestStarted = $true
@@ -146,6 +220,7 @@ try {
                 $record.output
                 if (-not $record.ok) { throw "Windows validation failed: $($record.error)" }
                 Assert-NetFlowReleaseCurrent
+                Assert-NetFlowPayloadCurrent
                 Write-Output "Windows validation passed: $runID"
                 return
             }
@@ -172,6 +247,7 @@ try {
             $record.output
             if (-not $record.ok) { throw "Windows validation failed: $($record.error)" }
             Assert-NetFlowReleaseCurrent
+            Assert-NetFlowPayloadCurrent
             # Once a bootable disk has passed validation, the verified ISO is
             # no longer needed. Keep the virtual disk and all result records.
             docker exec $container sh -c 'if test -f /storage/windows.system || test -f /storage/windows.boot; then rm -f -- /storage/netflow-media/win10x64-enterprise-ltsc-eval.iso /storage/netflow-media/win10x64-enterprise-ltsc-eval.iso.aria2; fi'

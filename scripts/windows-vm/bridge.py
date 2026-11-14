@@ -190,8 +190,11 @@ def load_manifest():
     expected = json.loads((PAYLOAD / "expected.json").read_text(encoding="utf-8"))
     if set(expected) != {"NetFlow.exe", "netflow-agent.exe", "netflow-kernel-worker.exe"}:
         raise ValueError("invalid expected binary list")
+    signer = (PAYLOAD / "signer.txt").read_text(encoding="ascii").strip()
+    if signer and not re.fullmatch(r"[0-9a-f]{40}", signer):
+        raise ValueError("invalid expected signer")
     files.update(candidate)
-    manifest = json.dumps({"id": RUN_ID, "files": files, "expected": expected}, separators=(",", ":")).encode()
+    manifest = json.dumps({"id": RUN_ID, "files": files, "expected": expected, "signer": signer}, separators=(",", ":")).encode()
     return manifest
 
 class Handler(BaseHTTPRequestHandler):

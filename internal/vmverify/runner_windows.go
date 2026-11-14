@@ -37,6 +37,7 @@ type manifest struct {
 	ID       string              `json:"id"`
 	Files    map[string]artifact `json:"files"`
 	Expected map[string]string   `json:"expected"`
+	Signer   string              `json:"signer,omitempty"`
 }
 type result struct {
 	ID     string `json:"id"`
@@ -69,21 +70,28 @@ func getManifest() (manifest, error) {
 	if err = dec.Decode(&m); err != nil {
 		return m, err
 	}
-	if !validHex(m.ID, 32) || len(m.Files) != 2 || len(m.Expected) != 3 {
-		return m, errors.New("invalid manifest")
+	if err := validateManifest(m); err != nil {
+		return m, err
+	}
+	return m, nil
+}
+
+func validateManifest(m manifest) error {
+	if !validHex(m.ID, 32) || len(m.Files) != 2 || len(m.Expected) != 3 || (m.Signer != "" && !validHex(m.Signer, 40)) {
+		return errors.New("invalid manifest")
 	}
 	for _, name := range []string{"netflow-app.test.exe", "NetFlow.msi"} {
 		f, ok := m.Files[name]
 		if !ok || !validHex(f.SHA256, 64) || f.Size <= 0 || f.Size > maxArtifact {
-			return m, errors.New("invalid artifact metadata")
+			return errors.New("invalid artifact metadata")
 		}
 	}
 	for _, name := range []string{"NetFlow.exe", "netflow-agent.exe", "netflow-kernel-worker.exe"} {
 		if !validHex(m.Expected[name], 64) {
-			return m, errors.New("invalid expected binary hash")
+			return errors.New("invalid expected binary hash")
 		}
 	}
-	return m, nil
+	return nil
 }
 func digestFile(path string) (string, int64, error) {
 	f, err := os.Open(path)
@@ -169,7 +177,11 @@ func execute(m manifest, media string) result {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, exe, "-test.v", "-test.run=^TestWindowsVMEndToEnd$", "-test.timeout=10m")
 	hashes, _ := json.Marshal(m.Expected)
-	cmd.Env = append(os.Environ(), "NETFLOW_WINDOWS_VM=1", "NETFLOW_VM_MSI="+msi, "NETFLOW_VM_EXPECTED="+string(hashes), "GOMAXPROCS=1")
+	signed := "false"
+	if m.Signer != "" {
+		signed = "true"
+	}
+	cmd.Env = append(os.Environ(), "NETFLOW_WINDOWS_VM=1", "NETFLOW_VM_MSI="+msi, "NETFLOW_VM_EXPECTED="+string(hashes), "NETFLOW_VM_SIGNED="+signed, "GOMAXPROCS=1")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000 | 0x00004000}
 	var output cappedBuffer
 	cmd.Stdout = &output

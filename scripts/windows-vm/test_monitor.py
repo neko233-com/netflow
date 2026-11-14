@@ -1,5 +1,6 @@
 """Exercise setup-media removal in throwaway, paused QEMU instances."""
 import ast
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,31 @@ if len(functions) != 6:
     raise RuntimeError("setup-media monitor functions missing")
 scope = {"re": re, "socket": socket, "time": time, "Path": Path}
 exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), "exec"), scope)
+manifest_fn = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "load_manifest"]
+if len(manifest_fn) != 1:
+    raise RuntimeError("validation manifest builder missing")
+with tempfile.TemporaryDirectory() as directory:
+    payload = Path(directory)
+    (payload / "ready").write_text("ready")
+    for name in ("netflow-app.test.exe", "NetFlow.msi"):
+        (payload / name).write_bytes(name.encode())
+    (payload / "expected.json").write_text(json.dumps({name: "a" * 64 for name in ("NetFlow.exe", "netflow-agent.exe", "netflow-kernel-worker.exe")}))
+    manifest_scope = {"PAYLOAD": payload, "manifest": None, "files": {}, "FILES": ("netflow-app.test.exe", "NetFlow.msi"), "hashlib": hashlib, "json": json, "re": re, "RUN_ID": "b" * 32}
+    exec(compile(ast.Module(body=manifest_fn, type_ignores=[]), str(source), "exec"), manifest_scope)
+    for signer in ("", "c" * 40):
+        (payload / "signer.txt").write_text(signer)
+        manifest_scope["manifest"] = None
+        if json.loads(manifest_scope["load_manifest"]())["signer"] != signer:
+            raise AssertionError("signer policy was not preserved")
+    for signer in ("bad", "C" * 40):
+        (payload / "signer.txt").write_text(signer)
+        manifest_scope["manifest"] = None
+        try:
+            manifest_scope["load_manifest"]()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid signer policy was accepted")
 if scope["drive_order"]("F") != "FEGDHIJKLMNOPQRSTUVWXYZ" or scope["drive_order"]("../bad") != "DEFGHIJKLMNOPQRSTUVWXYZ":
     raise AssertionError("invalid remembered media drive handling")
 

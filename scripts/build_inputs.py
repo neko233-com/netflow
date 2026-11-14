@@ -13,7 +13,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 FILES = (
     "go.mod", "go.sum", "mygo.json", "version.go", "README.md", "LICENSE",
-    "scripts/build-release.ps1", "scripts/package_release.py",
+    "scripts/build-release.ps1", "scripts/windows-signing.ps1", "scripts/package_release.py",
     "scripts/fix_msi_components.py", "scripts/build_inputs.py",
 )
 DIRECTORIES = ("cmd", "internal", "resources", "installer", "LICENSES")

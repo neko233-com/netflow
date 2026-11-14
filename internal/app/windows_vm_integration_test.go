@@ -70,6 +70,59 @@ func vmCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 	return c
 }
 
+// vmVerifyAuthenticode checks the guest's Windows trust store without UI or
+// network retrieval. The host separately checks signer identity and
+// timestamp; signing preflight also requests online revocation checks.
+func vmVerifyAuthenticode(path string) error {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	file := windows.WinTrustFileInfo{Size: uint32(unsafe.Sizeof(windows.WinTrustFileInfo{})), FilePath: name}
+	data := windows.WinTrustData{
+		Size: uint32(unsafe.Sizeof(windows.WinTrustData{})), UIChoice: windows.WTD_UI_NONE,
+		RevocationChecks: windows.WTD_REVOKE_NONE, UnionChoice: windows.WTD_CHOICE_FILE,
+		StateAction:                     windows.WTD_STATEACTION_VERIFY,
+		ProvFlags:                       windows.WTD_CACHE_ONLY_URL_RETRIEVAL | windows.WTD_REVOCATION_CHECK_NONE,
+		FileOrCatalogOrBlobOrSgnrOrCert: unsafe.Pointer(&file),
+	}
+	verifyErr := windows.WinVerifyTrustEx(windows.InvalidHWND, &windows.WINTRUST_ACTION_GENERIC_VERIFY_V2, &data)
+	data.StateAction = windows.WTD_STATEACTION_CLOSE
+	closeErr := windows.WinVerifyTrustEx(windows.InvalidHWND, &windows.WINTRUST_ACTION_GENERIC_VERIFY_V2, &data)
+	return errors.Join(verifyErr, closeErr)
+}
+
+func TestWindowsAuthenticodeTrustCheck(t *testing.T) {
+	unsigned := filepath.Join(t.TempDir(), "unsigned.exe")
+	if err := os.WriteFile(unsigned, []byte("not a signed executable"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := vmVerifyAuthenticode(unsigned); err == nil {
+		t.Fatal("unsigned file passed Windows trust verification")
+	}
+	// PowerShell 7 is an embedded-Authenticode-signed executable on the host;
+	// the disposable guest need not have it because this is a host unit test.
+	signed, err := exec.LookPath("pwsh.exe")
+	if err != nil {
+		t.Skip("PowerShell 7 is unavailable for the signed test fixture")
+	}
+	if err := vmVerifyAuthenticode(signed); err != nil {
+		t.Fatal("known signed executable did not pass Windows trust verification", err)
+	}
+	body, err := os.ReadFile(signed)
+	if err != nil || len(body) < 2 {
+		t.Fatal("could not read signed fixture", err)
+	}
+	body[len(body)/2] ^= 1
+	tampered := filepath.Join(t.TempDir(), "tampered.exe")
+	if err := os.WriteFile(tampered, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := vmVerifyAuthenticode(tampered); err == nil {
+		t.Fatal("modified signed executable passed Windows trust verification")
+	}
+}
+
 func requireDisposableVM(t *testing.T) {
 	t.Helper()
 	if os.Getenv("NETFLOW_WINDOWS_VM") != "1" || windows.GetCurrentProcessToken().IsElevated() {
@@ -1614,6 +1667,15 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	if !filepath.IsAbs(msi) {
 		t.Fatal("missing MSI")
 	}
+	signed := os.Getenv("NETFLOW_VM_SIGNED")
+	if signed != "true" && signed != "false" {
+		t.Fatal("missing signed-artifact verification policy")
+	}
+	if signed == "true" {
+		if err := vmVerifyAuthenticode(msi); err != nil {
+			t.Fatalf("guest does not trust MSI signature: %v", err)
+		}
+	}
 	install := filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "NetFlow")
 	matching := true
 	for _, name := range []string{"NetFlow.exe", "netflow-agent.exe", "netflow-kernel-worker.exe"} {
@@ -1634,6 +1696,11 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		h, err := vmHash(filepath.Join(install, name))
 		if err != nil || h != expected[name] {
 			t.Fatalf("installed %s hash mismatch: %s %v", name, h, err)
+		}
+		if signed == "true" {
+			if err := vmVerifyAuthenticode(filepath.Join(install, name)); err != nil {
+				t.Fatalf("guest does not trust installed %s signature: %v", name, err)
+			}
 		}
 	}
 	t.Log("MSI installation and installed binary hashes verified")
