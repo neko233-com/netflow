@@ -1431,10 +1431,17 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	var slow atomic.Bool
 	var signaled atomic.Bool
+	var reloadSlow, reloadSignaled atomic.Bool
+	reloadEntered, reloadCanceled := make(chan struct{}), make(chan struct{})
 	var shutdownSlow, shutdownSignaled atomic.Bool
 	shutdownEntered, shutdownRelease, shutdownCanceled := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if shutdownSlow.Load() && shutdownSignaled.CompareAndSwap(false, true) {
+		if reloadSlow.Load() && reloadSignaled.CompareAndSwap(false, true) {
+			close(reloadEntered)
+			<-r.Context().Done()
+			close(reloadCanceled)
+			return
+		} else if shutdownSlow.Load() && shutdownSignaled.CompareAndSwap(false, true) {
 			close(shutdownEntered)
 			select {
 			case <-shutdownRelease:
@@ -1531,6 +1538,43 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	if job.State != "succeeded" {
 		t.Fatalf("initial provider update failed: %+v", job)
 	}
+	reloadSlow.Store(true)
+	if err := client.Call(context.Background(), "update-provider", agent.ProviderUpdateArgs{Kind: "proxy", Name: "slow"}, &job); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-reloadEntered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("reload provider update did not start")
+	}
+	var modeResult agent.ActionResult
+	started := time.Now()
+	if err := client.Call(context.Background(), "mode", agent.ModeArgs{Mode: "direct"}, &modeResult); err != nil || !modeResult.OK || time.Since(started) >= 5*time.Second {
+		t.Fatalf("mode reload waited for provider: %+v %v", modeResult, err)
+	}
+	select {
+	case <-reloadCanceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reload did not cancel provider request")
+	}
+	reloadSlow.Store(false)
+	if data, err := os.ReadFile(filepath.Join(dir, "providers", "slow.yaml")); err != nil || !strings.Contains(string(data), "fresh") {
+		t.Fatal("reload lost completed provider cache")
+	}
+	if err := client.Call(context.Background(), "update-provider", agent.ProviderUpdateArgs{Kind: "proxy", Name: "slow"}, &job); err != nil {
+		t.Fatalf("provider unusable after reload: %v", err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for job.State == "pending" && time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		if err := client.Call(context.Background(), "provider-job-status", agent.ProviderJobArgs{JobID: job.JobID}, &job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if job.State != "succeeded" {
+		t.Fatalf("provider did not resume after reload: %+v", job)
+	}
+	t.Log("ordinary mode reload canceled a stalled provider and preserved its cache and future updates")
 	slow.Store(true)
 	if err := client.Call(context.Background(), "update-provider", agent.ProviderUpdateArgs{Kind: "proxy", Name: "slow"}, &job); err != nil {
 		t.Fatal(err)
@@ -1542,7 +1586,7 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	}
 	off := false
 	var result agent.TunResult
-	started := time.Now()
+	started = time.Now()
 	err = client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &off}, &result)
 	if err != nil || !result.Accepted || time.Since(started) >= 5*time.Second {
 		t.Fatalf("TUN off was not accepted promptly: %+v %v", result, err)

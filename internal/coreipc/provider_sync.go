@@ -57,11 +57,21 @@ func (c *Client) setCacheWarning(err error) {
 func (c *Client) CacheWarning() string { c.mu.Lock(); defer c.mu.Unlock(); return c.cacheWarning }
 
 func (c *Client) syncProviderCaches() error {
+	return c.syncProviderCachesWithTimeout(45 * time.Second)
+}
+
+func (c *Client) syncProviderCachesWithTimeout(timeout time.Duration) error {
 	if !c.caches.running || !c.caches.isolated {
 		return nil
 	}
 	stop := c.stopSignalSnapshot()
-	result, err := c.readProviderCachesUntil(c.cacheQuery(), 45*time.Second, stop)
+	c.mu.Lock()
+	reload, pending := c.reloadSignal, c.reloadPending
+	c.mu.Unlock()
+	if pending {
+		return errors.New("provider cache snapshot interrupted by reload")
+	}
+	result, err := c.readProviderCachesUntil(c.cacheQuery(), timeout, stop, reload)
 	if err != nil {
 		c.setCacheWarning(err)
 		return err
@@ -69,6 +79,8 @@ func (c *Client) syncProviderCaches() error {
 	select {
 	case <-stop:
 		return errors.New("provider cache snapshot interrupted by shutdown")
+	case <-reload:
+		return errors.New("provider cache snapshot interrupted by reload")
 	default:
 	}
 	return c.applyProviderCaches(result)
@@ -77,13 +89,15 @@ func (c *Client) syncProviderCaches() error {
 // A slow read-only cache snapshot must not tear down a healthy TUN. Keep at
 // most one abandoned read in flight; its eventual result is discarded.
 func (c *Client) readProviderCaches(query ProviderCacheQuery, timeout time.Duration) (ProviderCaches, error) {
-	return c.readProviderCachesUntil(query, timeout, nil)
+	return c.readProviderCachesUntil(query, timeout, nil, nil)
 }
 
-func (c *Client) readProviderCachesUntil(query ProviderCacheQuery, timeout time.Duration, stop <-chan struct{}) (ProviderCaches, error) {
+func (c *Client) readProviderCachesUntil(query ProviderCacheQuery, timeout time.Duration, stop, reload <-chan struct{}) (ProviderCaches, error) {
 	select {
 	case <-stop:
 		return ProviderCaches{}, errors.New("provider cache snapshot interrupted by shutdown")
+	case <-reload:
+		return ProviderCaches{}, errors.New("provider cache snapshot interrupted by reload")
 	default:
 	}
 	c.mu.Lock()
@@ -108,6 +122,9 @@ func (c *Client) readProviderCachesUntil(query ProviderCacheQuery, timeout time.
 	case <-stop:
 		go func() { <-done; clear() }()
 		return ProviderCaches{}, errors.New("provider cache snapshot interrupted by shutdown")
+	case <-reload:
+		go func() { <-done; clear() }()
+		return ProviderCaches{}, errors.New("provider cache snapshot interrupted by reload")
 	}
 }
 

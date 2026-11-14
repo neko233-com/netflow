@@ -14,7 +14,9 @@ import (
 
 	"github.com/metacubex/mihomo/component/profile/cachefile"
 	C "github.com/metacubex/mihomo/constant"
+	P "github.com/metacubex/mihomo/constant/provider"
 	mihomodns "github.com/metacubex/mihomo/dns"
+	"github.com/metacubex/mihomo/tunnel"
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/rules"
@@ -55,6 +57,10 @@ type TextResult struct{ Value string }
 type TextListResult struct{ Values []string }
 type ConfigResult struct{ Value []byte }
 type FakeIPStateResult struct{ State *mihomodns.FakeIPState }
+type ProviderPause struct {
+	Token    string
+	Deadline int64
+}
 type Connections struct {
 	Items            []conn.Item
 	Upload, Download int64
@@ -85,6 +91,85 @@ type Worker struct {
 	stage           fileStage
 	cacheConfigured bool
 	finalCacheBusy  atomic.Bool
+	pausedProviders []providerPauser
+	pauseToken      string
+	pauseTimer      *time.Timer
+}
+
+type providerPauser interface {
+	PauseUpdates()
+	ResumeUpdates()
+}
+
+func (w *Worker) resumeProvidersLocked() {
+	if w.pauseTimer != nil {
+		w.pauseTimer.Stop()
+		w.pauseTimer = nil
+	}
+	for _, p := range w.pausedProviders {
+		p.ResumeUpdates()
+	}
+	w.pausedProviders = nil
+	w.pauseToken = ""
+}
+
+// PauseProviderUpdates is a bounded lease, so a lost response cannot leave
+// providers permanently paused. A deadline rejects delayed RPC requests.
+func (w *Worker) PauseProviderUpdates(in ProviderPause, _ *Empty) error {
+	w.applyMu.Lock()
+	defer w.applyMu.Unlock()
+	if w.closed || in.Token == "" || time.Now().UnixNano() >= in.Deadline {
+		return errors.New("provider pause expired")
+	}
+	if w.pauseToken != "" {
+		return errors.New("provider pause already in progress")
+	}
+	var providers []providerPauser
+	for _, p := range tunnel.Providers() {
+		if p != nil && p.VehicleType() != P.Compatible && p.VehicleType() != P.Inline {
+			v, ok := p.(providerPauser)
+			if !ok {
+				return errors.New("provider cannot be paused")
+			}
+			providers = append(providers, v)
+		}
+	}
+	for _, p := range tunnel.RuleProviders() {
+		if p != nil && p.VehicleType() != P.Inline {
+			v, ok := p.(providerPauser)
+			if !ok {
+				return errors.New("rule provider cannot be paused")
+			}
+			providers = append(providers, v)
+		}
+	}
+	for _, p := range providers {
+		p.PauseUpdates()
+	}
+	if time.Now().UnixNano() >= in.Deadline {
+		for _, p := range providers {
+			p.ResumeUpdates()
+		}
+		return errors.New("provider pause expired")
+	}
+	w.pausedProviders, w.pauseToken = providers, in.Token
+	w.pauseTimer = time.AfterFunc(90*time.Second, func() {
+		w.applyMu.Lock()
+		defer w.applyMu.Unlock()
+		if w.pauseToken == in.Token {
+			w.resumeProvidersLocked()
+		}
+	})
+	return nil
+}
+
+func (w *Worker) ResumeProviderUpdates(in Name, _ *Empty) error {
+	w.applyMu.Lock()
+	defer w.applyMu.Unlock()
+	if w.pauseToken == in.Value {
+		w.resumeProvidersLocked()
+	}
+	return nil
 }
 
 func NewWorker() *Worker {

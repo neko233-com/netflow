@@ -25,9 +25,12 @@ type Client struct {
 	rpc           *rpc.Client
 	mu            sync.Mutex
 	applyMu       sync.Mutex
+	reloadMu      sync.Mutex
 	stopMu        sync.Mutex
 	stopping      bool
 	stopSignal    chan struct{}
+	reloadSignal  chan struct{}
+	reloadPending bool
 	profileID     string
 	dir           string
 	transform     func([]byte, string) ([]byte, error)
@@ -57,7 +60,7 @@ func NewClient(c io.ReadWriteCloser) (*Client, error) {
 	if c == nil {
 		return nil, errors.New("nil kernel transport")
 	}
-	return &Client{rpc: rpc.NewClient(c), cacheStop: make(chan struct{}), stopSignal: make(chan struct{}), cacheInterval: 30 * time.Second}, nil
+	return &Client{rpc: rpc.NewClient(c), cacheStop: make(chan struct{}), stopSignal: make(chan struct{}), reloadSignal: make(chan struct{}), cacheInterval: 30 * time.Second}, nil
 }
 
 func (c *Client) isStopping() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.stopping }
@@ -122,6 +125,20 @@ func (c *Client) call(method string, in, out any, timeout time.Duration) error {
 }
 func (c *Client) short(method string, in, out any) error {
 	return c.call(method, in, out, 15*time.Second)
+}
+
+// Provider pause requests carry their own expiration. A slow provider must not
+// close the transport and tear down an otherwise healthy TUN on timeout.
+func (c *Client) providerPauseCall(method string, in any, timeout time.Duration) error {
+	done := c.rpc.Go("Kernel."+method, in, &Empty{}, make(chan *rpc.Call, 1)).Done
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case result := <-done:
+		return result.Error
+	case <-timer.C:
+		return fmt.Errorf("kernel %s timed out", method)
+	}
 }
 func (c *Client) SetTransformer(fn func([]byte, string) ([]byte, error)) {
 	c.mu.Lock()
@@ -204,10 +221,55 @@ func (c *Client) Start(dir string) error {
 	return nil
 }
 func (c *Client) Reload() error {
-	c.applyMu.Lock()
-	defer c.applyMu.Unlock()
+	c.reloadMu.Lock()
+	defer c.reloadMu.Unlock()
 	if c.isStopping() {
 		return errors.New("kernel is stopping")
+	}
+	c.mu.Lock()
+	c.reloadPending = true
+	if c.reloadSignal != nil {
+		close(c.reloadSignal)
+	}
+	c.mu.Unlock()
+	defer func() { c.mu.Lock(); c.reloadPending = false; c.reloadSignal = make(chan struct{}); c.mu.Unlock() }()
+	token := fmt.Sprintf("%d", time.Now().UnixNano())
+	deadline := time.Now().Add(3 * time.Second)
+	if err := c.providerPauseCall("PauseProviderUpdates", ProviderPause{Token: token, Deadline: deadline.UnixNano()}, 4*time.Second); err != nil {
+		return fmt.Errorf("pause provider updates: %w", err)
+	}
+	locked := false
+	defer func() {
+		if err := c.providerPauseCall("ResumeProviderUpdates", Name{token}, 4*time.Second); err != nil {
+			log.Printf("resume provider updates: %v", err)
+		}
+		if locked {
+			c.applyMu.Unlock()
+		}
+	}()
+	wait := time.NewTimer(5 * time.Second)
+	defer wait.Stop()
+	for !c.applyMu.TryLock() {
+		select {
+		case <-wait.C:
+			return ErrKernelBusy
+		case <-c.stopSignalSnapshot():
+			return errors.New("kernel is stopping")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	locked = true
+	if c.isStopping() {
+		return errors.New("kernel is stopping")
+	}
+	// Persist completed provider writes before staging user files back into the
+	// worker. A failed snapshot aborts reload instead of overwriting fresh data.
+	c.mu.Lock()
+	c.reloadPending = false
+	c.reloadSignal = make(chan struct{})
+	c.mu.Unlock()
+	if err := c.syncProviderCachesWithTimeout(3 * time.Second); err != nil {
+		return fmt.Errorf("provider cache before reload: %w", err)
 	}
 	return c.reloadLocked()
 }
@@ -219,6 +281,12 @@ func (c *Client) TryReload() error {
 		return ErrKernelBusy
 	}
 	defer c.applyMu.Unlock()
+	c.mu.Lock()
+	busy := c.reloadPending || c.cachePending
+	c.mu.Unlock()
+	if busy {
+		return ErrKernelBusy
+	}
 	if c.isStopping() {
 		return errors.New("kernel is stopping")
 	}
