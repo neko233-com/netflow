@@ -3,15 +3,19 @@ $ErrorActionPreference = 'Stop'
 function Test-NetFlowBootRetry([int]$Attempt, [bool]$HasResult, [string]$Log) {
     return $Attempt -lt 2 -and -not $HasResult -and $Log.Contains('Timeout while waiting for QEMU to boot the machine, terminating...')
 }
-function Protect-NetFlowDiagnostic([string]$Log) {
-    return [regex]::Replace($Log, '(?i)https?://[^\s"\\<>]+', '[URL redacted]')
+function Protect-NetFlowDiagnostic([string]$Log, [string[]]$Secrets = @()) {
+    $safe = [regex]::Replace($Log, '(?i)https?://[^\s"\\<>]+', '[URL redacted]')
+    foreach ($secret in $Secrets) {
+        if ($secret) { $safe = $safe.Replace($secret, '[secret redacted]') }
+    }
+    return $safe
 }
 if ($TestPolicyOnly) {
     $message = 'Timeout while waiting for QEMU to boot the machine, terminating...'
     if (-not (Test-NetFlowBootRetry 1 $false $message)) { throw 'Expected one boot retry' }
     if ((Test-NetFlowBootRetry 2 $false $message) -or (Test-NetFlowBootRetry 1 $true $message) -or (Test-NetFlowBootRetry 1 $false 'unrelated failure')) { throw 'Unsafe boot retry decision' }
-    $redacted = Protect-NetFlowDiagnostic 'failure https://example.invalid/path?token=synthetic-secret retained'
-    if ($redacted.Contains('synthetic-secret') -or -not $redacted.Contains('retained')) { throw 'Diagnostic redaction failed' }
+    $redacted = Protect-NetFlowDiagnostic 'failure https://example.invalid/path?token=synthetic-secret guest-password retained' @('guest-password')
+    if ($redacted.Contains('synthetic-secret') -or $redacted.Contains('guest-password') -or -not $redacted.Contains('retained')) { throw 'Diagnostic redaction failed' }
     Write-Output 'Boot retry policy passed'
     return
 }
@@ -103,7 +107,7 @@ try {
                 Write-Output "Windows validation passed: $runID"
                 return
             }
-            $logs = Protect-NetFlowDiagnostic (docker logs --tail 100 $container 2>&1 | Out-String)
+            $logs = Protect-NetFlowDiagnostic (docker logs --tail 100 $container 2>&1 | Out-String) @($guestPassword)
             $logPath = Join-Path $repo "build/windows-vm-boot-$runID-attempt-$bootAttempt.log"
             [IO.File]::WriteAllText($logPath, $logs, [Text.UTF8Encoding]::new($false))
             Write-Output $logs
@@ -133,7 +137,10 @@ try {
         }
         Start-Sleep -Seconds 10
     }
-    docker logs --tail 100 $container
+    $logs = Protect-NetFlowDiagnostic (docker logs --tail 100 $container 2>&1 | Out-String) @($guestPassword)
+    $logPath = Join-Path $repo "build/windows-vm-timeout-$runID.log"
+    [IO.File]::WriteAllText($logPath, $logs, [Text.UTF8Encoding]::new($false))
+    Write-Output $logs
     throw "Windows validation exceeded $TimeoutMinutes minutes"
 } finally {
     if ($guestStarted) {
