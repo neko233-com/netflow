@@ -271,6 +271,33 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	if bytes.Contains(active, []byte("0.0.0.0:9090")) || a.core.Status().TUN || a.core.Status().Mode == "global" {
 		t.Fatal("cached script modified protected runtime controls")
 	}
+	updateDraft, err := a.captureVergeScriptDraft(draft.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateSource, err := a.snapshotProfileSource(updateDraft.item.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloaded := bytes.Replace(updateDraft.base, []byte("MATCH,DIRECT"), []byte("DOMAIN,new-subscription.test,DIRECT"), 1)
+	updatedPreview, err := a.prepareVergeScriptUpdate(context.Background(), updateDraft, updateSource, downloaded)
+	if err != nil {
+		t.Fatal("subscription script update preview failed", err)
+	}
+	if !bytes.Contains(updatedPreview.Effective, []byte("DOMAIN,new-subscription.test,DIRECT")) || !bytes.Contains(updatedPreview.Effective, []byte("DOMAIN,profile.test,DIRECT")) || !bytes.Contains(updatedPreview.Baseline, []byte("DOMAIN,profile.test,DIRECT")) {
+		t.Fatal("subscription update preview omitted existing script or new subscription rules")
+	}
+	if current, err := a.core.EffectiveConfig(); err != nil || !bytes.Equal(active, current) {
+		t.Fatal("subscription update preview changed the running core", err)
+	}
+	if _, err := a.prepareVergeScriptUpdate(context.Background(), updateDraft, updateSource, []byte("invalid: [")); err == nil {
+		t.Fatal("invalid subscription was accepted for script update")
+	}
+	staleSource := updateSource
+	staleSource.hash[0] ^= 1
+	if _, err := a.prepareVergeScriptUpdate(context.Background(), updateDraft, staleSource, downloaded); !errors.Is(err, scriptpreview.ErrSourcesChanged) {
+		t.Fatal("download based on a stale subscription snapshot was accepted", err)
+	}
 	// Preview and commit the previous data-only configuration, then preview
 	// the reverse transition. Both directions go through offline validation.
 	for step := 0; step < 2; step++ {
