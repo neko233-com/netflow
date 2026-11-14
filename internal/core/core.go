@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
@@ -70,6 +71,7 @@ type Core struct {
 	applyStateMu      sync.Mutex
 	applying          *pendingApply
 	interruptCheck    func() bool
+	stopping          atomic.Int32
 }
 
 type applyProvider interface{ PauseUpdates() }
@@ -101,7 +103,7 @@ func (c *Core) InterruptApply() {
 func (c *Core) applyInterrupted(op *pendingApply) bool {
 	c.applyStateMu.Lock()
 	defer c.applyStateMu.Unlock()
-	return op.interrupted || (c.interruptCheck != nil && c.interruptCheck())
+	return op.interrupted || c.stopping.Load() > 0 || (c.interruptCheck != nil && c.interruptCheck())
 }
 
 func (c *Core) registerApplyProviders(op *pendingApply, providers ...P.Provider) bool {
@@ -111,7 +113,7 @@ func (c *Core) registerApplyProviders(op *pendingApply, providers ...P.Provider)
 			op.providers = append(op.providers, p)
 		}
 	}
-	interrupted := op.interrupted || (c.interruptCheck != nil && c.interruptCheck())
+	interrupted := op.interrupted || c.stopping.Load() > 0 || (c.interruptCheck != nil && c.interruptCheck())
 	if interrupted {
 		op.interrupted = true
 	}
@@ -237,6 +239,9 @@ func (c *Core) Stop() error {
 	if c == nil {
 		return nil
 	}
+	c.stopping.Add(1)
+	defer c.stopping.Add(-1)
+	c.InterruptApply()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.running {

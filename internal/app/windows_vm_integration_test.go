@@ -3340,11 +3340,12 @@ ruleRefreshed:
 		t.Logf("%s Windows TUN stack forwarded fake-IP traffic", stack)
 	}
 	initialEntered, initialCanceled, initialRelease := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var initialEnteredOnce, initialCanceledOnce sync.Once
 	initialServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(initialEntered)
+		initialEnteredOnce.Do(func() { close(initialEntered) })
 		select {
 		case <-r.Context().Done():
-			close(initialCanceled)
+			initialCanceledOnce.Do(func() { close(initialCanceled) })
 		case <-initialRelease:
 		}
 	}))
@@ -3401,11 +3402,12 @@ ruleRefreshed:
 	}
 	t.Log("stopping TUN canceled uncached provider initialization and restored networking")
 	disconnectEntered, disconnectCanceled, disconnectRelease := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var disconnectEnteredOnce, disconnectCanceledOnce sync.Once
 	disconnectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(disconnectEntered)
+		disconnectEnteredOnce.Do(func() { close(disconnectEntered) })
 		select {
 		case <-r.Context().Done():
-			close(disconnectCanceled)
+			disconnectCanceledOnce.Do(func() { close(disconnectCanceled) })
 		case <-disconnectRelease:
 		}
 	}))
@@ -3443,6 +3445,7 @@ ruleRefreshed:
 		t.Fatal("disconnected reload did not finish")
 	}
 	waitRestored("worker disconnect")
+	writeStack("system")
 	t.Log("worker disconnect canceled initial provider and restored IPv4/IPv6 routes and DNS")
 
 	launchWorker := func() *coreipc.Client {
