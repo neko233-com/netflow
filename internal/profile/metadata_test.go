@@ -42,6 +42,35 @@ func TestRenameRetainsDisabledScriptHistory(t *testing.T) {
 	}
 }
 
+func TestRenameUpgradesLegacyScriptSnapshotWithoutOverwritingKnownName(t *testing.T) {
+	for _, existingName := range []string{"", "Historical"} {
+		store := NewStore(t.TempDir())
+		item := CatalogItem{UID: "p", Name: "Old", Type: "remote", URL: "https://example.invalid/sub", File: filepath.Join("profiles", "new.yaml"), Option: CatalogOption{VergeScriptPrevious: &scriptmeta.Previous{Approval: &scriptmeta.Approval{}, Subscription: &scriptmeta.SubscriptionSnapshot{File: filepath.Join("profiles", "old.yaml"), Name: existingName}}}}
+		if err := store.Save(File{Items: []CatalogItem{item}}); err != nil {
+			t.Fatal(err)
+		}
+		name := "New"
+		if _, err := store.PatchMetadata("p", MetadataPatch{Name: &name}); err != nil {
+			t.Fatal(err)
+		}
+		catalog, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot := catalog.Items[0].Option.VergeScriptPrevious.Subscription
+		want := existingName
+		if want == "" {
+			want = "Old"
+		}
+		if snapshot.Name != want || snapshot.File != item.Option.VergeScriptPrevious.Subscription.File {
+			t.Fatal("legacy history was not preserved")
+		}
+		if existingName == "" && snapshot.URL != item.URL {
+			t.Fatal("legacy URL was not retained")
+		}
+	}
+}
+
 func TestScriptApprovalProtectsProfileNameAcrossMetadataAPIs(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)

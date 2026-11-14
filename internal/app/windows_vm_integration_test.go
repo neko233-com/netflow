@@ -42,6 +42,7 @@ import (
 	"github.com/neko233-com/netflow/internal/migration"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/safepath"
+	"github.com/neko233-com/netflow/internal/scriptmeta"
 	"github.com/neko233-com/netflow/internal/tun"
 	"github.com/neko233-com/netflow/internal/validation"
 	"github.com/neko233-com/netflow/internal/vmverify"
@@ -1958,6 +1959,27 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		out, err = callMigration("rules")
 		if err != nil || strings.Contains(string(out), "local-script.netflow-test.example") {
 			t.Fatalf("script rollback left rules active: %s %v", out, err)
+		}
+		// Emulate an older retained snapshot that has no name or URL. The
+		// next rename must freeze those inputs before they are changed.
+		legacyStore := profile.NewStore(migrationTarget)
+		legacyCatalog, legacyBytes, legacyErr := legacyStore.LoadForUpdate()
+		if legacyErr != nil {
+			t.Fatal(legacyErr)
+		}
+		legacyFound := false
+		for i := range legacyCatalog.Items {
+			item := &legacyCatalog.Items[i]
+			if item.UID == status.ActiveProfile && item.Option.VergeScriptPrevious != nil && item.Option.VergeScriptPrevious.Approval != nil {
+				item.Option.VergeScriptPrevious.Subscription = &scriptmeta.SubscriptionSnapshot{File: item.File}
+				legacyFound = true
+			}
+		}
+		if !legacyFound {
+			t.Fatal("legacy script history fixture is missing")
+		}
+		if err := legacyStore.SaveIfUnchanged(legacyCatalog, legacyBytes); err != nil {
+			t.Fatal(err)
 		}
 		settingsCtx, settingsCancel = context.WithTimeout(context.Background(), 40*time.Second)
 		settingsCommand = vmCommand(settingsCtx, agentExe, "--config-dir", migrationTarget, "profile-settings-set")

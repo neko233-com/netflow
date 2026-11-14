@@ -23,6 +23,7 @@ import (
 	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/scriptapproval"
+	"github.com/neko233-com/netflow/internal/scriptmeta"
 	"github.com/neko233-com/netflow/internal/scriptpreview"
 	"github.com/neko233-com/netflow/internal/sysproxy"
 	"github.com/neko233-com/netflow/internal/tun"
@@ -488,6 +489,15 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
+			// A 0.2.91 retained snapshot has a file but no recorded name or URL.
+			beforeRename.Items[0].Option.VergeScriptPrevious.Subscription = &scriptmeta.SubscriptionSnapshot{File: beforeRename.Items[0].File}
+			if err := a.profiles.SaveIfUnchanged(beforeRename, beforeRenameBytes); err != nil {
+				t.Fatal(err)
+			}
+			beforeRename, beforeRenameBytes, err = a.profiles.LoadForUpdate()
+			if err != nil {
+				t.Fatal(err)
+			}
 			renamed := "renamed with scripts disabled"
 			if _, err := a.profiles.PatchMetadata(draft.target, profile.MetadataPatch{Name: &renamed}); err != nil {
 				t.Fatal(err)
@@ -624,6 +634,62 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	unchanged, err := a.core.EffectiveConfig()
 	if err != nil || !bytes.Equal(beforeInactive, unchanged) {
 		t.Fatal("inactive apply changed running core", err)
+	}
+	localBefore, localBeforeBytes, err := a.profiles.LoadForUpdate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	localName := ""
+	for _, item := range localBefore.Items {
+		if item.UID == other {
+			localName = item.Name
+		}
+	}
+	localDisable, _ := json.Marshal(agent.VergeScriptPreviewArgs{ProfileID: other})
+	value, err = a.dispatchAgent(context.Background(), "verge-script-preview", localDisable)
+	if err != nil {
+		t.Fatal("local script disable preview failed", err)
+	}
+	localApply, _ := json.Marshal(agent.ApplyArgs{ProposalID: value.(agent.VergeScriptPreview).PreviewID})
+	if _, err := a.dispatchAgent(context.Background(), "verge-script-apply", localApply); err != nil {
+		t.Fatal("local script disable failed", err)
+	}
+	localRenamed := "local renamed"
+	if _, err := a.profiles.PatchMetadata(other, profile.MetadataPatch{Name: &localRenamed}); err != nil {
+		t.Fatal(err)
+	}
+	localRollback, _ := json.Marshal(agent.ProfileArgs{ProfileID: other})
+	for n := 0; n < 2; n++ {
+		value, err = a.dispatchAgent(context.Background(), "verge-script-rollback-preview", localRollback)
+		if err != nil {
+			t.Fatal("local rename rollback preview failed", err)
+		}
+		localApply, _ = json.Marshal(agent.ApplyArgs{ProposalID: value.(agent.VergeScriptPreview).PreviewID})
+		if _, err := a.dispatchAgent(context.Background(), "verge-script-apply", localApply); err != nil {
+			t.Fatal("local rename rollback failed", err)
+		}
+		state, err := a.profiles.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range state.Items {
+			if item.UID == other {
+				want := localName
+				if n == 1 {
+					want = localRenamed
+				}
+				if item.Name != want || (item.Option.VergeScriptApproval != nil) != (n == 0) {
+					t.Fatal("local rename history was not restored")
+				}
+			}
+		}
+	}
+	localAfter, _, err := a.profiles.LoadForUpdate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.profiles.RestoreSnapshotIfUnchanged(localAfter, localBeforeBytes); err != nil {
+		t.Fatal(err)
 	}
 	inactiveCatalog, inactiveSnapshot, err := a.profiles.LoadForUpdate()
 	if err != nil {

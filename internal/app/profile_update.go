@@ -14,7 +14,6 @@ import (
 
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/safepath"
-	"github.com/neko233-com/netflow/internal/scriptmeta"
 )
 
 // UpdateProfile replaces one remote subscription only after it has been
@@ -142,11 +141,10 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 	}
 	// A disabled script can still be the previous rollback target. Preserve
 	// its original subscription and metadata before updating that file.
-	item := &f.Items[index]
-	if previous := item.Option.VergeScriptPrevious; item.Option.VergeScriptApproval == nil && previous != nil && previous.Approval != nil && previous.Subscription == nil && (!bytes.Equal(body, oldFile) || nextURL != expectedURL) {
-		copy := *previous
-		copy.Subscription = &scriptmeta.SubscriptionSnapshot{File: item.File, URL: item.URL, Name: item.Name, Updated: item.Updated, Used: item.Used, Total: item.Total, Expire: item.Expire}
-		item.Option.VergeScriptPrevious = &copy
+	if !bytes.Equal(body, oldFile) || nextURL != expectedURL {
+		if err := profile.PreserveScriptHistory(&f.Items[index]); err != nil {
+			return err
+		}
 	}
 	shared, err := a.profiles.SharedProfileFile(f, uid)
 	if err != nil {

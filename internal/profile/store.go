@@ -74,15 +74,31 @@ type MetadataPatch struct {
 	AutoUpdate, UseCoreProxy, UseSystemProxy, AllowInsecure *bool
 }
 
-// Preserve the input name used by a disabled script's previous approval.
-// The referenced file may be shared with the current profile until an update
-// replaces it; SharedProfileFile treats the retained reference as shared.
-func retainScriptHistoryBeforeRename(item *CatalogItem, name string) error {
-	if item == nil || name == item.Name || item.Option.VergeScriptApproval != nil {
+// PreserveScriptHistory freezes inputs used by a disabled script's previous
+// approval before changing the current name, URL or subscription contents.
+// SharedProfileFile treats the retained file as shared during updates.
+func PreserveScriptHistory(item *CatalogItem) error {
+	if item == nil || item.Option.VergeScriptApproval != nil {
 		return nil
 	}
 	previous := item.Option.VergeScriptPrevious
-	if previous == nil || previous.Approval == nil || previous.Subscription != nil {
+	if previous == nil || previous.Approval == nil {
+		return nil
+	}
+	if previous.Subscription != nil {
+		if previous.Subscription.Name != "" {
+			return nil
+		}
+		// 0.2.91 snapshots predate recorded names and URLs. They used the
+		// current name when created; freeze it before allowing a rename.
+		copy := *previous
+		snapshot := *previous.Subscription
+		snapshot.Name = item.Name
+		if snapshot.URL == "" {
+			snapshot.URL = item.URL
+		}
+		copy.Subscription = &snapshot
+		item.Option.VergeScriptPrevious = &copy
 		return nil
 	}
 	if err := validateManagedProfilePath(item.File); err != nil {
@@ -124,8 +140,10 @@ func (s *Store) PatchMetadata(uid string, patch MetadataPatch) (CatalogItem, err
 			if item.Option.VergeScriptApproval != nil && name != item.Name {
 				return CatalogItem{}, errors.New("已启用的 Verge 脚本绑定订阅名称；请先关闭脚本，修改名称后重新预览并启用")
 			}
-			if err := retainScriptHistoryBeforeRename(item, name); err != nil {
-				return CatalogItem{}, err
+			if name != item.Name {
+				if err := PreserveScriptHistory(item); err != nil {
+					return CatalogItem{}, err
+				}
 			}
 			item.Name = name
 		}
@@ -311,8 +329,10 @@ func (s *Store) UpdateMetadata(uid, name, description string, options *CatalogOp
 			if f.Items[i].Option.VergeScriptApproval != nil && name != f.Items[i].Name {
 				return errors.New("已启用的 Verge 脚本绑定订阅名称；请先关闭脚本，修改名称后重新预览并启用")
 			}
-			if err := retainScriptHistoryBeforeRename(&f.Items[i], name); err != nil {
-				return err
+			if name != f.Items[i].Name {
+				if err := PreserveScriptHistory(&f.Items[i]); err != nil {
+					return err
+				}
 			}
 			if options != nil && f.Items[i].Type == "remote" {
 				if options.UpdateInterval < 1 || options.UpdateInterval > 43200 {

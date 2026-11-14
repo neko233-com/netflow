@@ -21,6 +21,12 @@ function Assert-NetFlowReleaseCurrent {
     & python scripts/build_inputs.py verify
     if ($LASTEXITCODE -ne 0) { throw 'Cannot validate stale, modified or unrecorded release artifacts.' }
 }
+function Ensure-NetFlowKVM {
+    # The Docker Desktop VM may unload KVM while the local build or image
+    # preparation is running. Loading the appropriate module is idempotent.
+    wsl.exe -d docker-desktop -u root -- sh -c 'test -c /dev/kvm || { if grep -q AuthenticAMD /proc/cpuinfo; then modprobe kvm-amd; else modprobe kvm-intel; fi; }; test -c /dev/kvm'
+    if ($LASTEXITCODE -ne 0) { throw 'Nested KVM is unavailable; a real Windows guest is required' }
+}
 if ($TestPolicyOnly) {
     $message = 'Timeout while waiting for QEMU to boot the machine, terminating...'
     if (-not (Test-NetFlowBootRetry 1 $false $message)) { throw 'Expected one boot retry' }
@@ -57,9 +63,7 @@ try {
     $payload = Join-Path $repo 'build/windows-vm-payload'
     New-Item -ItemType Directory -Force -Path $context, $payload | Out-Null
     if ((docker version --format '{{.Server.Os}}') -ne 'linux') { throw 'A Linux Docker engine with nested KVM is required' }
-    # Docker Desktop's Linux VM may not load the nested KVM driver until needed.
-    wsl.exe -d docker-desktop -u root -- sh -c 'test -c /dev/kvm || { if grep -q AuthenticAMD /proc/cpuinfo; then modprobe kvm-amd; else modprobe kvm-intel; fi; }; test -c /dev/kvm'
-    if ($LASTEXITCODE -ne 0) { throw 'Nested KVM is unavailable; a real Windows guest is required' }
+    Ensure-NetFlowKVM
     $version = (Get-Content -Raw mygo.json | ConvertFrom-Json).version
     $msi = Join-Path $repo "build/releases/$version/NetFlow-$version-windows-amd64.msi"
     if (-not (Test-Path -LiteralPath $msi -PathType Leaf)) {
@@ -122,6 +126,7 @@ try {
     }
     $containerMemory = if ($selectedMemory -eq '3G') { '4g' } else { '5g' }
     Write-Output "Windows guest memory: $selectedMemory; container limit: $containerMemory"
+    Ensure-NetFlowKVM
     docker run -d --name $container --label "$label=1" --cpus=1 "--memory=$containerMemory" --device=/dev/kvm --mount "type=volume,source=$volume,target=/storage" --mount "type=bind,source=$payload,target=/payload,readonly" -e "NETFLOW_RUN_ID=$runID" -e "RAM_SIZE=$selectedMemory" -e USERNAME=NetFlowTest -e "PASSWORD=$guestPassword" @testEnv netflow-windows-vm:local | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not start Windows validation guest' }
     $guestStarted = $true
