@@ -47,6 +47,8 @@ type Status struct {
 type ProxyNode struct {
 	Name                        string
 	Type                        string
+	Provider                    string
+	DialerProxy                 string
 	UDP, TFO, XUDP, MPTCP, SMUX bool
 }
 

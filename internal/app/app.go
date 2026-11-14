@@ -887,7 +887,7 @@ func (a *App) loadGroupsWithSelection(restoreSelection bool) error {
 			gg.Icon = actual.Icon
 			gg.Hidden = actual.Hidden
 			for _, n := range actual.Nodes {
-				gg.Nodes = append(gg.Nodes, ui.ProxyNode{Name: n.Name, Type: n.Type, Delay: -1, UDP: n.UDP, TFO: n.TFO, XUDP: n.XUDP, MPTCP: n.MPTCP, SMUX: n.SMUX, Preset: n.Name == "DIRECT" || n.Name == "REJECT"})
+				gg.Nodes = append(gg.Nodes, ui.ProxyNode{Name: n.Name, Type: n.Type, Provider: n.Provider, DialerProxy: n.DialerProxy, Delay: -1, UDP: n.UDP, TFO: n.TFO, XUDP: n.XUDP, MPTCP: n.MPTCP, SMUX: n.SMUX, Preset: n.Name == "DIRECT" || n.Name == "REJECT"})
 			}
 		} else {
 			for _, n := range g.Proxies {

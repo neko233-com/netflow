@@ -48,6 +48,9 @@ rules:
 	if len(group.Nodes) != 2 || group.Nodes[0].Name != "inline-one" || group.Nodes[1].Name != "inline-two" {
 		t.Fatalf("provider nodes missing: %+v", group)
 	}
+	if group.Nodes[0].Provider != "test-provider" || group.Nodes[1].Provider != "test-provider" {
+		t.Fatalf("provider identities missing: %+v", group.Nodes)
+	}
 	providers := c.ProxyProviders()
 	if len(providers) != 1 || providers[0].Name != "test-provider" || providers[0].Count != 2 {
 		t.Fatalf("providers: %+v", providers)

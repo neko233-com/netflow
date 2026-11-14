@@ -114,7 +114,7 @@ func (a *App) agentGroupNodes(in agent.GroupNodesArgs) (agent.GroupNodesResult, 
 	}
 	items := make([]agent.ProxyNode, 0, len(g.Nodes))
 	for _, n := range g.Nodes {
-		items = append(items, agent.ProxyNode{Name: n.Name, Type: n.Type, UDP: n.UDP})
+		items = append(items, agent.ProxyNode{Name: n.Name, Type: n.Type, Provider: n.Provider, DialerProxy: n.DialerProxy, UDP: n.UDP})
 	}
 	page, offset, next, err := boundedAgentPage(items, in.Offset, in.Limit, maxAgentPageBytes/2)
 	if err != nil {
@@ -149,7 +149,7 @@ func (a *App) agentGroupsPage(in agent.PageArgs) (agent.GroupsResult, error) {
 		}
 		allNodes := make([]agent.ProxyNode, 0, len(g.Nodes))
 		for _, node := range g.Nodes {
-			allNodes = append(allNodes, agent.ProxyNode{Name: node.Name, Type: node.Type, UDP: node.UDP})
+			allNodes = append(allNodes, agent.ProxyNode{Name: node.Name, Type: node.Type, Provider: node.Provider, DialerProxy: node.DialerProxy, UDP: node.UDP})
 		}
 		nodes, _, next, pageErr := boundedAgentPage(allNodes, 0, 100, maxAgentPageBytes/2)
 		out := agent.ProxyGroup{Name: g.Name, Type: g.Type, Current: g.Now, Nodes: nodes, NodesTotal: len(allNodes), NodesTruncated: pageErr != nil || next < len(allNodes)}

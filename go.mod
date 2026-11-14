@@ -3,6 +3,7 @@ module github.com/neko233-com/netflow
 go 1.27.3
 
 require (
+	github.com/dlclark/regexp2 v1.12.0
 	github.com/egoist/mygo v0.7.4
 	github.com/metacubex/bbolt v0.0.0-20260706163408-d4ec34ad7c48
 	github.com/metacubex/mihomo v1.19.33
@@ -27,7 +28,6 @@ require (
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/coder/websocket v1.8.12 // indirect
 	github.com/coreos/go-iptables v0.8.0 // indirect
-	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/dunglas/httpsfv v1.0.2 // indirect
 	github.com/easytier/easytier/easytier-go v0.0.0-20260910071355-3d0c9c3ca5e2 // indirect
 	github.com/ebitengine/purego v0.11.1 // indirect

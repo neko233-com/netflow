@@ -317,9 +317,11 @@ type ApplyResult struct {
 }
 
 type ProxyNode struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	UDP  bool   `json:"udp"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Provider    string `json:"provider,omitempty"`
+	DialerProxy string `json:"dialer_proxy,omitempty"`
+	UDP         bool   `json:"udp"`
 }
 type ProxyGroup struct {
 	Name           string      `json:"name"`

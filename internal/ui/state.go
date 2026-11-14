@@ -52,16 +52,18 @@ type CurrentNode struct {
 
 // ProxyNode is one member of a proxy group.
 type ProxyNode struct {
-	Name   string
-	Type   string
-	Delay  int
-	Now    string
-	UDP    bool
-	TFO    bool
-	XUDP   bool
-	MPTCP  bool
-	SMUX   bool
-	Preset bool
+	Name        string
+	Type        string
+	Provider    string
+	DialerProxy string
+	Delay       int
+	Now         string
+	UDP         bool
+	TFO         bool
+	XUDP        bool
+	MPTCP       bool
+	SMUX        bool
+	Preset      bool
 }
 
 // ProxyGroup is one collapsible group on the proxies page.

@@ -46,7 +46,7 @@ func (c *Core) Group(name string) (ProxyGroup, error) {
 			continue
 		}
 		info := member.ProxyInfo()
-		out.Nodes = append(out.Nodes, ProxyNode{Name: member.Name(), Type: member.Type().String(), UDP: member.SupportUDP(), TFO: info.TFO, XUDP: info.XUDP, MPTCP: info.MPTCP, SMUX: info.SMUX})
+		out.Nodes = append(out.Nodes, ProxyNode{Name: member.Name(), Type: member.Type().String(), Provider: info.ProviderName, DialerProxy: info.DialerProxy, UDP: member.SupportUDP(), TFO: info.TFO, XUDP: info.XUDP, MPTCP: info.MPTCP, SMUX: info.SMUX})
 	}
 	return out, nil
 }
