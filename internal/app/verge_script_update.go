@@ -155,7 +155,7 @@ func (a *App) prepareVergeScriptUpdate(ctx context.Context, d vergeScriptDraft, 
 	if approval == nil || (!approval.Global && !approval.Profile) {
 		return empty, errors.New("profile has no approved scripts")
 	}
-	if err := validateProfile(downloaded); err != nil {
+	if err := validateProfileShape(downloaded); err != nil {
 		return empty, scriptpreview.ErrCandidate
 	}
 	old, path, err := readProfileFile(a.dir, d.item.File)

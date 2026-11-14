@@ -311,6 +311,16 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	if _, err := a.prepareVergeScriptUpdate(context.Background(), updateDraft, updateSource, []byte("invalid: [")); err == nil {
 		t.Fatal("invalid subscription was accepted for script update")
 	}
+	unresolved := bytes.Replace(updateDraft.base, []byte("MATCH,DIRECT"), []byte("RULE-SET,undefined-provider,REJECT"), 1)
+	if err := validateProfileShape(unresolved); err != nil {
+		t.Fatal("valid document shape rejected", err)
+	}
+	if err := validateProfile(unresolved); err == nil {
+		t.Fatal("fixture unexpectedly validates without its provider")
+	}
+	if _, err := a.prepareVergeScriptUpdate(context.Background(), updateDraft, updateSource, unresolved); !errors.Is(err, scriptpreview.ErrValidation) {
+		t.Fatal("unresolved provider bypassed composed configuration validation", err)
+	}
 	staleSource := updateSource
 	staleSource.hash[0] ^= 1
 	if _, err := a.prepareVergeScriptUpdate(context.Background(), updateDraft, staleSource, downloaded); !errors.Is(err, scriptpreview.ErrSourcesChanged) {
