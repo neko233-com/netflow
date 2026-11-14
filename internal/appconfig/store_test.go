@@ -100,6 +100,39 @@ func TestFileStoreDistinguishesMissingAndEmptyFiles(t *testing.T) {
 	}
 }
 
+func TestCheckCurrentDetectsChangesWithoutRefreshingSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	s := NewFileStore(dir)
+	if _, err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CheckCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte{}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CheckCurrent(); !errors.Is(err, safepath.ErrChanged) {
+		t.Fatalf("empty file creation: %v", err)
+	}
+	if err := s.Save(Settings{}); !errors.Is(err, safepath.ErrChanged) {
+		t.Fatalf("check refreshed snapshot: %v", err)
+	}
+	if _, err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CheckCurrent(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CheckCurrent(); !errors.Is(err, safepath.ErrChanged) {
+		t.Fatalf("empty file deletion: %v", err)
+	}
+}
+
 func TestMemoryStore(t *testing.T) {
 	m := NewMemory("/cfg")
 	if err := m.Save(Settings{SystemProxy: true}); err != nil {

@@ -170,6 +170,52 @@ func TestWorkerTUNPersistenceFailureRestoresKernel(t *testing.T) {
 	}
 }
 
+func TestTUNOffStaysOffWhenPersistenceFails(t *testing.T) {
+	store := appconfig.NewMemory(t.TempDir())
+	store.FailSave(errors.New("disk unavailable"))
+	engine := &switchTestEngine{running: true, tun: true}
+	a := &App{store: store, core: engine, settings: appconfig.Settings{TUN: true}}
+	engine.onReload = func() { engine.tun = a.settings.TUN }
+	err := a.setDirectTUN(false)
+	if err == nil || a.settings.TUN || engine.tun {
+		t.Fatalf("TUN did not stay off after save failure: %v settings=%v actual=%v", err, a.settings.TUN, engine.tun)
+	}
+}
+
+func TestTUNEnableRejectsKnownSettingsConflictBeforeReload(t *testing.T) {
+	dir := t.TempDir()
+	store := appconfig.NewFileStore(dir)
+	if _, err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	engine := &switchTestEngine{running: true}
+	reloaded := false
+	engine.onReload = func() { reloaded = true }
+	a := &App{store: store, core: engine}
+	var result error
+	a.requestTUN(true, func(err error) { result = err })
+	if result == nil || reloaded || a.tunBusy || a.settings.TUN {
+		t.Fatalf("known conflict was not rejected: %v reload=%v busy=%v tun=%v", result, reloaded, a.tunBusy, a.settings.TUN)
+	}
+}
+
+func TestTUNOffRetriesWorkerRelease(t *testing.T) {
+	worker := &switchTestEngine{running: true, dir: "config"}
+	local := &switchTestEngine{failStart: true}
+	a := &App{store: appconfig.NewMemory(t.TempDir()), core: newSwitchableEngine(worker), privilegedTUN: true}
+	a.localCoreFactory = func() coreEngine { return local }
+	if err := a.setDirectTUN(false); err == nil || !a.privilegedTUN {
+		t.Fatalf("expected a failed release: %v", err)
+	}
+	local.failStart = false
+	if err := a.setDirectTUN(false); err != nil || a.privilegedTUN {
+		t.Fatalf("retry failed: %v privileged=%v", err, a.privilegedTUN)
+	}
+}
+
 func TestAgentTUNCommandIsExplicit(t *testing.T) {
 	old := &switchTestEngine{running: true, dir: "config"}
 	a := &App{store: appconfig.NewMemory(t.TempDir()), tun: tun.NewMemory(), core: newSwitchableEngine(old)}

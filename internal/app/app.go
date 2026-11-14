@@ -471,6 +471,11 @@ func (a *App) SetSystemProxy(on bool) error {
 // mihomo profile, and stores the switch. Missing permission does not write
 // tun.enable or the saved switch. CI never reloads a running kernel into TUN.
 func (a *App) SetTUN(on bool) error {
+	if on {
+		if err := a.checkSettingsCurrent(); err != nil {
+			return err
+		}
+	}
 	if on && !a.tunAllowed() {
 		if a.model != nil {
 			a.model.Home.TUN = false
@@ -505,6 +510,10 @@ func (a *App) SetTUN(on bool) error {
 	a.settings.TUN = on
 	if a.store != nil {
 		if err := a.store.Save(a.settings); err != nil {
+			if !on {
+				a.refreshHome()
+				return fmt.Errorf("虚拟网卡已关闭，但设置保存失败: %w", err)
+			}
 			a.settings.TUN = prev
 			if a.tun != nil {
 				_ = a.tun.Set(prev)
@@ -514,6 +523,15 @@ func (a *App) SetTUN(on bool) error {
 		}
 	}
 	a.refreshHome()
+	return nil
+}
+
+func (a *App) checkSettingsCurrent() error {
+	if a != nil {
+		if store, ok := a.store.(interface{ CheckCurrent() error }); ok {
+			return store.CheckCurrent()
+		}
+	}
 	return nil
 }
 
@@ -534,8 +552,16 @@ func (a *App) setDirectTUN(on bool) error {
 	if on && tunCIBlocked() {
 		return tun.ErrNeedService
 	}
+	if on {
+		if err := a.checkSettingsCurrent(); err != nil {
+			return err
+		}
+	}
 	previous := a.settings.TUN
 	if previous == on && a.core.Status().TUN == on {
+		if !on {
+			return a.releaseWorkerTUN()
+		}
 		return nil
 	}
 	if a.tun != nil && !a.privilegedTUN {
@@ -563,13 +589,21 @@ func (a *App) setDirectTUN(on bool) error {
 	if err := a.core.Reload(); err != nil {
 		return rollback(err)
 	}
-	if err := a.store.Save(a.settings); err != nil {
-		return rollback(err)
+	saveErr := a.store.Save(a.settings)
+	if saveErr != nil && on {
+		return rollback(saveErr)
 	}
 	a.refreshHome()
 	if !on {
+		var warnings []error
+		if saveErr != nil {
+			warnings = append(warnings, fmt.Errorf("设置保存失败: %w", saveErr))
+		}
 		if err := a.releaseWorkerTUN(); err != nil {
-			return fmt.Errorf("虚拟网卡已关闭，但%w", err)
+			warnings = append(warnings, err)
+		}
+		if len(warnings) != 0 {
+			return fmt.Errorf("虚拟网卡已关闭，但%w", errors.Join(warnings...))
 		}
 	}
 	return nil

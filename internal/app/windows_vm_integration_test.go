@@ -1250,20 +1250,6 @@ func vmGUIAutoStartTUN(t *testing.T, guiExe, agentExe, dir string) {
 	if err := client.Call(context.Background(), "status", nil, &status); err != nil || !status.TUN {
 		t.Fatal("disabling startup preference changed active TUN")
 	}
-	var request agent.TunResult
-	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &enabled}, &request); err != nil || !request.Accepted {
-		t.Fatalf("TUN off request: %+v %v", request, err)
-	}
-	deadline = time.Now().Add(90 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := client.Call(context.Background(), "status", nil, &status); err == nil && !status.TUNPending && !status.TUN {
-			break
-		}
-		time.Sleep(time.Second)
-	}
-	if status.TUN || status.TUNPending {
-		t.Fatalf("GUI TUN did not stop: %+v", status)
-	}
 	settingsPath := filepath.Join(dir, "settings.json")
 	originalSettings, err := os.ReadFile(settingsPath)
 	if err != nil {
@@ -1279,20 +1265,50 @@ func vmGUIAutoStartTUN(t *testing.T, guiExe, agentExe, dir string) {
 			_ = os.WriteFile(settingsPath, originalSettings, 0600)
 		}
 	}()
-	enabled = true
-	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &enabled}, &request); err != nil || !request.Accepted {
-		t.Fatalf("TUN conflict test request: %+v %v", request, err)
+	if err := client.Call(context.Background(), "status", nil, &status); err != nil || status.SettingsWarning == "" {
+		t.Fatalf("settings conflict was not visible in status: %+v %v", status, err)
 	}
-	deadline = time.Now().Add(100 * time.Second)
+	var request agent.TunResult
+	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &enabled}, &request); err == nil || !strings.Contains(err.Error(), "settings changed outside NetFlow") {
+		t.Fatalf("TUN off must report settings conflict: %+v %v", request, err)
+	}
+	if err := client.Call(context.Background(), "status", nil, &status); err != nil || status.TUN || status.TUNPending {
+		t.Fatalf("TUN did not stay off after settings conflict: %+v %v", status, err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		status = agent.Status{}
-		if err := client.Call(context.Background(), "status", nil, &status); err == nil && !status.TUNPending && status.TUNError != "" {
+		routes, dns, snapshotErr := vmNetworkSnapshot()
+		if snapshotErr == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
 			break
 		}
 		time.Sleep(time.Second)
 	}
+	routes, dns, snapshotErr := vmNetworkSnapshot()
+	if snapshotErr != nil || !reflect.DeepEqual(routes, beforeRoutes) || !reflect.DeepEqual(dns, beforeDNS) {
+		t.Fatalf("TUN off after settings conflict did not restore networking: %v", snapshotErr)
+	}
+	if current, err := os.ReadFile(settingsPath); err != nil || !bytes.Equal(current, externalSettings) {
+		t.Fatal("TUN off overwrote external settings")
+	}
+	if err := os.WriteFile(settingsPath, originalSettings, 0600); err != nil {
+		t.Fatal(err)
+	}
+	status = agent.Status{}
+	if err := client.Call(context.Background(), "status", nil, &status); err != nil || status.SettingsWarning != "" {
+		t.Fatalf("settings warning did not clear: %+v %v", status, err)
+	}
+	if err := os.WriteFile(settingsPath, externalSettings, 0600); err != nil {
+		t.Fatal(err)
+	}
+	enabled = true
+	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &enabled}, &request); err == nil || !strings.Contains(err.Error(), "settings changed outside NetFlow") {
+		t.Fatalf("TUN conflict was not rejected before activation: %+v %v", request, err)
+	}
+	if err := client.Call(context.Background(), "status", nil, &status); err != nil {
+		t.Fatal(err)
+	}
 	if status.TUN || status.TUNPending || !strings.Contains(status.TUNError, "settings changed outside NetFlow") {
-		t.Fatalf("settings conflict did not roll back TUN: %+v", status)
+		t.Fatalf("settings conflict did not prevent TUN: %+v", status)
 	}
 	if current, err := os.ReadFile(settingsPath); err != nil || !bytes.Equal(current, externalSettings) {
 		t.Fatal("TUN conflict overwrote external settings")
@@ -1301,7 +1317,7 @@ func vmGUIAutoStartTUN(t *testing.T, guiExe, agentExe, dir string) {
 		t.Fatal(err)
 	}
 	restoredSettings = true
-	t.Log("settings conflict rejected TUN and rolled back the privileged worker")
+	t.Log("settings conflict kept TUN off on shutdown and prevented activation")
 	if err := gui.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}

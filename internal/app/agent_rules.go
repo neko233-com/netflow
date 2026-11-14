@@ -139,6 +139,9 @@ func (a *App) agentStatus() (agent.Status, error) {
 	if a.kernelOptions != nil && a.kernelOptions.CheckCurrent() != nil {
 		out.KernelOptionsWarning = "Kernel options file changed or is unreadable; inspect it and restart NetFlow."
 	}
+	if a.checkSettingsCurrent() != nil {
+		out.SettingsWarning = "Settings file changed or is unreadable; inspect it and restart NetFlow."
+	}
 	if source, ok := a.core.(interface{ CacheWarning() string }); ok {
 		out.ProviderCacheWarning = source.CacheWarning()
 	}

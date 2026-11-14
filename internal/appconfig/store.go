@@ -96,6 +96,30 @@ func (s *FileStore) loadLocked() (Settings, error) {
 	return out, nil
 }
 
+// CheckCurrent reports external edits without replacing the loaded snapshot.
+func (s *FileStore) CheckCurrent() error {
+	if s == nil || s.dir == "" {
+		return errors.New("settings store has no directory")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.loaded {
+		_, err := s.loadLocked()
+		return err
+	}
+	b, err := safepath.ReadFile(s.dir, "settings.json")
+	if errors.Is(err, os.ErrNotExist) {
+		if s.raw == nil {
+			return nil
+		}
+	} else if err != nil {
+		return err
+	} else if s.raw != nil && bytes.Equal(b, s.raw) {
+		return nil
+	}
+	return fmt.Errorf("settings changed outside NetFlow; inspect and restart: %w", safepath.ErrChanged)
+}
+
 // Save preserves unknown fields and refuses to overwrite changes made since
 // Load or the previous successful Save. A caller can explicitly reload.
 func (s *FileStore) Save(in Settings) error {

@@ -190,6 +190,7 @@ type Status struct {
 	ProviderCacheWarning string        `json:"provider_cache_warning,omitempty"`
 	RewriteWarning       string        `json:"rewrite_warning,omitempty"`
 	KernelOptionsWarning string        `json:"kernel_options_warning,omitempty"`
+	SettingsWarning      string        `json:"settings_warning,omitempty"`
 	TUNStacks            []string      `json:"tun_stacks"`
 	Mode                 string        `json:"mode"`
 	ActiveProfile        string        `json:"active_profile,omitempty"`

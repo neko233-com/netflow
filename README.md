@@ -19,6 +19,8 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 
 Windows 开启 TUN 可能请求管理员授权；服务就绪后会输出包含 `ready`、`headless` 和 `tun` 的 JSON。在另一个终端可运行 `& $agent status`、`& $agent shutdown` 及下面的 Agent 命令；`shutdown` 确认收到关闭请求后返回，GUI 实例会拒绝此命令。等待 `serve` 进程退出，确认内核已停止并恢复路由。前台终端按 Ctrl+C 也会请求干净退出；若启动器意外退出，子进程会检测控制管道关闭并退出。测试和诊断时可以使用 `serve --tun=false` 启动内核而不启用 TUN，再用 `tun on` 显式开启；不会修改系统代理设置。
 
+设置文件在运行中被外部修改或无法读取时，`status` 会显示 `settings_warning`，开启 TUN 前会拒绝已知的设置冲突。关闭 TUN 时即使设置保存失败，也会保持 TUN 关闭并报告错误；外部文件不会被覆盖，请检查文件后重启。最终写入与外部修改之间仍存在短暂竞争窗口。
+
 GUI 与无界面服务使用同一配置目录锁，不能同时操作同一个目录；如需独立实例，可在命令名前提供 `--config-dir <绝对路径>` 并确保网络端口、TUN 和路由不冲突。无界面模式不创建应用窗口；Agent MCP 的 `netflow_shutdown_headless` 可请求关闭。macOS 构建包含相同入口，但尚未在 Mac 上验证运行。
 
 ## 当前状态

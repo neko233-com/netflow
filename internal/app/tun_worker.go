@@ -61,6 +61,12 @@ func (a *App) requestTUN(on bool, done func(error)) {
 		finish(errors.New("虚拟网卡正在切换"))
 		return
 	}
+	if on {
+		if err := a.checkSettingsCurrent(); err != nil {
+			finish(err)
+			return
+		}
+	}
 	if !on || a.tunAllowed() {
 		finish(a.SetTUN(on))
 		return
