@@ -78,6 +78,7 @@ type Hooks struct {
 	PreviewVergeScriptAsync         func(agent.VergeScriptPreviewArgs, func(agent.VergeScriptPreview, error)) func()
 	PreviewVergeScriptRollbackAsync func(string, func(agent.VergeScriptPreview, error)) func()
 	PreviewVergeScriptUpdateAsync   func(string, func(agent.VergeScriptPreview, error)) func()
+	PreviewVergeScriptURLAsync      func(string, string, func(agent.VergeScriptPreview, error)) func()
 	ApplyVergeScriptAsync           func(string, func(agent.VergeScriptApplyResult, error)) func()
 	PruneVergeScriptCacheAsync      func(func(agent.VergeScriptCachePruneResult, error)) func()
 	VergeScriptPreviewRules         func(agent.PreviewRulesArgs) (agent.PreviewRulesResult, error)

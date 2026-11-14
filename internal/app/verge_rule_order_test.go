@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,6 +142,87 @@ func TestImportedVergeRulesRunBeforeScriptsAndRemainSeparateFromAgent(t *testing
 			}
 			if err := a.core.Reload(); err != nil {
 				t.Fatal(err)
+			}
+			if !defaultRules {
+				catalog, snapshot, err := a.profiles.LoadForUpdate()
+				if err != nil {
+					t.Fatal(err)
+				}
+				oldURL := "https://old.example/sub?token=old-secret"
+				catalog.Items[0].Type, catalog.Items[0].URL = "remote", oldURL
+				if err := a.profiles.SaveIfUnchanged(catalog, snapshot); err != nil {
+					t.Fatal(err)
+				}
+				body, _, err := readProfileFile(a.dir, catalog.Items[0].File)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body = bytes.Replace(body, []byte("MATCH,DIRECT"), []byte("DOMAIN,new-sub.test,DIRECT', 'MATCH,DIRECT"), 1)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
+				defer server.Close()
+				newURL := server.URL + "/sub?token=new-secret"
+				badArgs, _ := json.Marshal(agent.VergeScriptUpdateArgs{ProfileID: id, URL: "ftp://invalid.test/?token=bad-secret"})
+				if _, err := a.dispatchAgent(context.Background(), "verge-script-update-preview", badArgs); err == nil || strings.Contains(err.Error(), "bad-secret") {
+					t.Fatal("invalid replacement URL was accepted or exposed", err)
+				}
+				args, _ := json.Marshal(agent.VergeScriptUpdateArgs{ProfileID: id, URL: newURL})
+				value, err := a.dispatchAgent(context.Background(), "verge-script-update-preview", args)
+				if err != nil {
+					t.Fatal("replacement preview failed", err)
+				}
+				p := value.(agent.VergeScriptPreview)
+				encoded, _ := json.Marshal(p)
+				if strings.Contains(string(encoded), "secret") || !strings.Contains(strings.Join(p.Warnings, " "), "replaces the subscription URL") {
+					t.Fatal("replacement preview leaked a secret or omitted its warning")
+				}
+				beforeCatalog, err := a.profiles.Load()
+				if err != nil || beforeCatalog.Items[0].URL != oldURL {
+					t.Fatal("preview changed subscription URL", err)
+				}
+				changedCatalog, original, err := a.profiles.LoadForUpdate()
+				if err != nil {
+					t.Fatal(err)
+				}
+				changedCatalog.Items[0].Description = "external edit"
+				if err := a.profiles.SaveIfUnchanged(changedCatalog, original); err != nil {
+					t.Fatal(err)
+				}
+				apply, _ = json.Marshal(agent.ApplyArgs{ProposalID: p.PreviewID})
+				if _, err := a.dispatchAgent(context.Background(), "verge-script-apply", apply); err == nil {
+					t.Fatal("stale URL preview was applied")
+				}
+				if err := a.profiles.RestoreSnapshotIfUnchanged(changedCatalog, original); err != nil {
+					t.Fatal(err)
+				}
+				value, err = a.dispatchAgent(context.Background(), "verge-script-update-preview", args)
+				if err != nil {
+					t.Fatal(err)
+				}
+				p = value.(agent.VergeScriptPreview)
+				apply, _ = json.Marshal(agent.ApplyArgs{ProposalID: p.PreviewID})
+				if _, err := a.dispatchAgent(context.Background(), "verge-script-apply", apply); err != nil {
+					t.Fatal("replacement apply failed", err)
+				}
+				afterCatalog, err := a.profiles.Load()
+				if err != nil || afterCatalog.Items[0].URL != newURL {
+					t.Fatal("replacement URL was not committed", err)
+				}
+				effective, err = a.core.EffectiveConfig()
+				if err != nil || !bytes.Contains(effective, []byte("DOMAIN,new-sub.test,DIRECT")) {
+					t.Fatal("replacement content was not applied", err)
+				}
+				value, err = a.dispatchAgent(context.Background(), "verge-script-rollback-preview", rollback)
+				if err != nil {
+					t.Fatal(err)
+				}
+				apply, _ = json.Marshal(agent.ApplyArgs{ProposalID: value.(agent.VergeScriptPreview).PreviewID})
+				if _, err := a.dispatchAgent(context.Background(), "verge-script-apply", apply); err != nil {
+					t.Fatal(err)
+				}
+				afterCatalog, err = a.profiles.Load()
+				if err != nil || afterCatalog.Items[0].URL != oldURL {
+					t.Fatal("rollback did not restore original URL", err)
+				}
 			}
 		})
 	}

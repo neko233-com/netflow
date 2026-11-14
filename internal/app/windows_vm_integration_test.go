@@ -1955,6 +1955,40 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if err != nil || strings.Contains(string(out), "updated-subscription.netflow-test.example") || !strings.Contains(string(out), "local-script.netflow-test.example") {
 			t.Fatalf("subscription rollback did not restore old rules: %s %v", out, err)
 		}
+		urlCtx, urlCancel := context.WithTimeout(context.Background(), 90*time.Second)
+		urlCommand := vmCommand(urlCtx, agentExe, "--config-dir", migrationTarget, "verge-script-url-preview")
+		replacementURL := subscriptionServer.URL + "/replacement?token=replacement-secret"
+		urlInput, marshalErr := json.Marshal(agent.VergeScriptUpdateArgs{ProfileID: status.ActiveProfile, URL: replacementURL})
+		if marshalErr != nil {
+			urlCancel()
+			t.Fatal(marshalErr)
+		}
+		urlCommand.Stdin = bytes.NewReader(urlInput)
+		out, err = urlCommand.CombinedOutput()
+		urlCancel()
+		if err != nil || strings.Contains(string(out), "replacement-secret") || json.Unmarshal(out, &script) != nil || script.PreviewID == "" || !strings.Contains(strings.Join(script.Warnings, " "), "replaces the subscription URL") {
+			t.Fatalf("TUN subscription URL preview failed: %s %v", out, err)
+		}
+		out, err = callMigration("verge-script-apply", script.PreviewID)
+		if err != nil || json.Unmarshal(out, &applied) != nil || !applied.Applied {
+			t.Fatalf("TUN subscription URL apply failed: %s %v", out, err)
+		}
+		urlCatalog, err := profile.NewStore(migrationTarget).Load()
+		if err != nil || len(urlCatalog.Items) == 0 || urlCatalog.Items[0].URL != replacementURL {
+			t.Fatal("replacement URL was not committed", err)
+		}
+		out, err = callMigration("verge-script-rollback-preview", status.ActiveProfile)
+		if err != nil || json.Unmarshal(out, &script) != nil || script.PreviewID == "" {
+			t.Fatalf("TUN URL rollback preview failed: %s %v", out, err)
+		}
+		out, err = callMigration("verge-script-apply", script.PreviewID)
+		if err != nil || json.Unmarshal(out, &applied) != nil || !applied.Applied {
+			t.Fatalf("TUN URL rollback failed: %s %v", out, err)
+		}
+		urlCatalog, err = profile.NewStore(migrationTarget).Load()
+		if err != nil || len(urlCatalog.Items) == 0 || urlCatalog.Items[0].URL != subscriptionServer.URL+"?token=synthetic-secret" {
+			t.Fatal("rollback did not restore original URL", err)
+		}
 		disableCtx, disableCancel := context.WithTimeout(context.Background(), 90*time.Second)
 		disableCommand := vmCommand(disableCtx, agentExe, "--config-dir", migrationTarget, "verge-script-preview")
 		disableCommand.Stdin = strings.NewReader(`{"global":false,"profile":false}`)

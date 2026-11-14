@@ -138,7 +138,13 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var in agent.VergeScriptPreviewArgs
 		rollback := method == "verge-script-rollback-preview"
 		updating := method == "verge-script-update-preview"
-		if rollback || updating {
+		var updateRequest agent.VergeScriptUpdateArgs
+		if updating {
+			if err := decodeStrict(args, &updateRequest); err != nil {
+				return nil, err
+			}
+			in.ProfileID = updateRequest.ProfileID
+		} else if rollback {
 			var request agent.ProfileArgs
 			if err := decodeStrict(args, &request); err != nil {
 				return nil, err
@@ -195,11 +201,19 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var update *vergeSubscriptionUpdate
 		var err error
 		if updating {
+			nextURL := strings.TrimSpace(updateRequest.URL)
+			replacing := nextURL != ""
+			if replacing && (len(nextURL) > 8192 || strings.ContainsAny(nextURL, "\r\n\x00") || !profile.ValidURL(nextURL)) {
+				return nil, errors.New("invalid replacement subscription URL")
+			}
+			if !replacing {
+				nextURL = draft.item.URL
+			}
 			var source profileSourceSnapshot
 			source, err = a.snapshotProfileSource(draft.item.File)
 			var response subscriptionResponse
 			if err == nil {
-				response, err = fetchProfileResponseContext(ctx, draft.item.URL, client, draft.item.Option.UserAgent)
+				response, err = fetchProfileResponseContext(ctx, nextURL, client, draft.item.Option.UserAgent)
 			}
 			if err != nil {
 				if ctx.Err() != nil {
@@ -210,8 +224,9 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			prepared, err = a.prepareVergeScriptUpdate(ctx, draft, source, response.body)
 			if err == nil {
 				metadata := draft.item
+				metadata.URL = nextURL
 				profile.ApplySubscriptionUserInfo(&metadata, response.headers)
-				update = &vergeSubscriptionUpdate{body: response.body, snapshot: scriptmeta.SubscriptionSnapshot{URL: metadata.URL, Name: metadata.Name, Updated: time.Now().UTC().Truncate(time.Second), Used: metadata.Used, Total: metadata.Total, Expire: metadata.Expire}}
+				update = &vergeSubscriptionUpdate{body: response.body, replacementURL: replacing, snapshot: scriptmeta.SubscriptionSnapshot{URL: metadata.URL, Name: metadata.Name, Updated: time.Now().UTC().Truncate(time.Second), Used: metadata.Used, Total: metadata.Total, Expire: metadata.Expire}}
 			}
 		} else if rollback {
 			prepared, err = a.prepareVergeScriptRollback(ctx, draft)

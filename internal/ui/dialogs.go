@@ -63,11 +63,18 @@ func (m *Model) profileURLChangeDialog(c *mygoui.Context, pal Palette) {
 	if m.ProfileURLChangeUID == "" {
 		return
 	}
+	scriptBound := false
+	for _, item := range m.Profiles {
+		if item.UID == m.ProfileURLChangeUID {
+			scriptBound = item.Option.VergeScriptGlobal || item.Option.VergeScriptProfile
+			break
+		}
+	}
 	open := true
 	mygoui.Modal(c, &open, func() {
 		mygoui.Column(c).Width(440).Padding(16).Gap(8).Background(pal.Dialog).Radius(8).Children(func() {
 			mygoui.Text(c, "更换订阅链接").FontSize(18).Bold()
-			mygoui.Text(c, "保存前会下载并校验新配置；失败时保留原链接和配置。更改可能重载内核。").FontSize(13).TextColor(pal.TextMuted)
+			mygoui.Text(c, "将下载并校验新配置；已启用脚本的订阅需要审查预览后应用。更改可能重载内核。").FontSize(13).TextColor(pal.TextMuted)
 			mygoui.TextInput(c, &m.ProfileURLChange).FillWidth().Disabled(m.ProfileURLChangeBusy).Label("profile-new-url")
 			if m.ProfileURLChangeErr != "" {
 				mygoui.Text(c, m.ProfileURLChangeErr).FontSize(13).TextColor(pal.Error)
@@ -77,17 +84,32 @@ func (m *Model) profileURLChangeDialog(c *mygoui.Context, pal Palette) {
 					m.ProfileURLChangeUID, m.ProfileURLChange, m.ProfileURLChangeErr = "", "", ""
 				}
 				button := mygoui.ButtonBase(c.Key("profile-url-save")).Height(32).Padding(0, 12).Radius(6).Disabled(m.ProfileURLChangeBusy || m.ProfileBusy).Background(pal.Primary).TextColor(pal.OnPrimary).Label("profile-url-save")
-				button.Children(func() { mygoui.Text(c, "下载并保存").FontSize(13) })
+				button.Children(func() {
+					label := "下载并保存"
+					if scriptBound {
+						label = "下载并预览"
+					}
+					mygoui.Text(c, label).FontSize(13)
+				})
 				if button.Clicked() && !m.ProfileURLChangeBusy && !m.ProfileBusy {
 					if !ValidSubscriptionURL(m.ProfileURLChange) {
 						m.ProfileURLChangeErr = "请输入有效的订阅链接"
+						return
+					}
+					uid, url := m.ProfileURLChangeUID, m.ProfileURLChange
+					if scriptBound {
+						if m.Hooks.PreviewVergeScriptURLAsync == nil || m.Hooks.PreviewVergeScriptAsync == nil || m.Hooks.VergeScriptPreviewRules == nil {
+							m.ProfileURLChangeErr = "脚本订阅链接预览不可用"
+							return
+						}
+						m.ProfileURLChangeUID, m.ProfileURLChange, m.ProfileURLChangeErr = "", "", ""
+						m.startVergeScriptURLPreview(uid, url)
 						return
 					}
 					if m.Hooks.ChangeProfileURLAsync == nil {
 						m.ProfileURLChangeErr = "更换订阅链接不可用"
 						return
 					}
-					uid, url := m.ProfileURLChangeUID, m.ProfileURLChange
 					m.ProfileURLChangeBusy, m.ProfileBusy = true, true
 					m.ProfileURLChangeErr = "正在下载并校验…"
 					m.Hooks.ChangeProfileURLAsync(uid, url, func(err error) {

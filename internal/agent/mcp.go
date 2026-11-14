@@ -36,7 +36,7 @@ func NewMCP(client Client) *mcp.Server {
 		err := c.Call(ctx, "verge-script-rollback-preview", in, &out)
 		return nil, out, err
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "netflow_preview_verge_subscription_update", Description: "Download a remote subscription with its saved network options, run its currently approved Verge scripts, and validate the result without applying it. Inspect all rules, configuration and warnings before separately applying the preview.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in ProfileArgs) (*mcp.CallToolResult, VergeScriptPreview, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_preview_verge_subscription_update", Description: "Download a remote subscription, optionally from a replacement URL, with its saved network options; run its approved Verge scripts and validate without applying. Inspect rules, configuration and warnings before separately applying.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}, func(ctx context.Context, _ *mcp.CallToolRequest, in VergeScriptUpdateArgs) (*mcp.CallToolResult, VergeScriptPreview, error) {
 		var out VergeScriptPreview
 		c := client
 		if c.Timeout <= 0 {

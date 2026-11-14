@@ -105,6 +105,13 @@ type ProfileURLArgs struct {
 	URL       string `json:"url" jsonschema:"replacement HTTP or HTTPS subscription URL, which may contain credentials"`
 }
 
+// VergeScriptUpdateArgs optionally previews a replacement URL without exposing
+// credentials in command-line arguments or preview results.
+type VergeScriptUpdateArgs struct {
+	ProfileID string `json:"profile_id" jsonschema:"existing remote profile id"`
+	URL       string `json:"url,omitempty" jsonschema:"optional replacement HTTP or HTTPS subscription URL; may contain credentials"`
+}
+
 type ProfileJob struct {
 	JobID     string    `json:"job_id"`
 	Operation string    `json:"operation"`

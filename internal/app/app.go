@@ -1210,6 +1210,7 @@ func (a *App) bindHooks() {
 		PreviewVergeScriptAsync:         a.previewVergeScriptAsync,
 		PreviewVergeScriptRollbackAsync: a.previewVergeScriptRollbackAsync,
 		PreviewVergeScriptUpdateAsync:   a.previewVergeScriptUpdateAsync,
+		PreviewVergeScriptURLAsync:      a.previewVergeScriptURLAsync,
 		ApplyVergeScriptAsync:           a.applyVergeScriptAsync,
 		PruneVergeScriptCacheAsync:      a.pruneVergeScriptCacheAsync,
 		VergeScriptPreviewRules:         a.vergeScriptPreviewRules,

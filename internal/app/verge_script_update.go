@@ -18,8 +18,9 @@ import (
 // vergeSubscriptionUpdate is private preview state; body can contain tokens.
 // A nonempty snapshot path means rollback to an existing retained file.
 type vergeSubscriptionUpdate struct {
-	body     []byte
-	snapshot scriptmeta.SubscriptionSnapshot
+	body           []byte
+	snapshot       scriptmeta.SubscriptionSnapshot
+	replacementURL bool
 }
 
 // rollbackSubscription binds both the current and retained files to a
@@ -69,7 +70,7 @@ func (a *App) finishVergeSubscriptionUpdate(ctx context.Context, ready vergeScri
 		// Snapshots created by 0.2.91 did not record the unchanged URL.
 		nextURL = item.URL
 	}
-	if (item.Type == "remote" && !profile.ValidURL(nextURL)) || (item.Type != "remote" && nextURL != "") || (update.snapshot.File == "" && nextURL != item.URL) {
+	if (item.Type == "remote" && !profile.ValidURL(nextURL)) || (item.Type != "remote" && nextURL != "") || (update.snapshot.File == "" && nextURL != item.URL && !update.replacementURL) {
 		return false, scriptpreview.ErrSourcesChanged
 	}
 	nextName := update.snapshot.Name

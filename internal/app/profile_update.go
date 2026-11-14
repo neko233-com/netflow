@@ -135,7 +135,7 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 	// normalize the name, so it needs the same protection even for equal bytes.
 	if f.Items[index].Option.VergeScriptApproval != nil && (!bytes.Equal(body, oldFile) || nextURL != expectedURL) {
 		if nextURL != expectedURL {
-			return errors.New("已启用的 Verge 脚本绑定当前订阅；更换链接前请先关闭脚本，再重新预览并启用")
+			return errors.New("已启用的 Verge 脚本绑定当前订阅；请预览新链接并单独应用")
 		}
 		return errors.New("已启用的 Verge 脚本绑定当前订阅；请在脚本对话框预览订阅更新并应用，或先关闭脚本再更新")
 	}

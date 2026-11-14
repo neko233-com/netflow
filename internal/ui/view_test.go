@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	mygoui "github.com/egoist/mygo/ui"
+	"github.com/neko233-com/netflow/internal/agent"
 )
 
 // Window-free page locks live in sidebar_logo_test.go, proxies_select_test.go,
@@ -484,6 +485,29 @@ func TestProfileURLChangeDialogReportsFailureAndSuccess(t *testing.T) {
 	finish(nil)
 	if m.ProfileURLChangeUID != "" || m.ProfileURLChange != "" || m.ProfileBusy || m.Notice != "订阅链接已更新" {
 		t.Fatal("successful change did not clear the draft")
+	}
+}
+
+func TestScriptBoundProfileURLChangeOpensPreview(t *testing.T) {
+	m := NewModel(demoHome())
+	m.Router.Replace("/profile")
+	m.Profiles = []ProfileItem{{UID: "profile", Type: "remote", Option: ProfileOption{VergeScriptGlobal: true}}}
+	m.ProfileURLChangeUID, m.ProfileURLChange = "profile", "https://example.test/sub?token=secret"
+	m.Hooks.ChangeProfileURLAsync = func(string, string, func(error)) { t.Fatal("script-bound URL bypassed preview") }
+	m.Hooks.PreviewVergeScriptAsync = func(agent.VergeScriptPreviewArgs, func(agent.VergeScriptPreview, error)) func() { return func() {} }
+	m.Hooks.VergeScriptPreviewRules = func(agent.PreviewRulesArgs) (agent.PreviewRulesResult, error) { return agent.PreviewRulesResult{}, nil }
+	called := false
+	m.Hooks.PreviewVergeScriptURLAsync = func(id, url string, done func(agent.VergeScriptPreview, error)) func() {
+		called = id == "profile" && url == "https://example.test/sub?token=secret"
+		done(agent.VergeScriptPreview{PreviewID: "p", Operation: "update-subscription"}, nil)
+		return func() {}
+	}
+	tt := mygoui.NewTester(m.View, WindowWidth, WindowHeight)
+	if err := tt.Click("profile-url-save"); err != nil {
+		t.Fatal(err)
+	}
+	if !called || m.ProfileURLChangeUID != "" || !m.VergeScriptPreview.Open || m.VergeScriptPreview.PreviewID != "p" {
+		t.Fatal("URL replacement did not open the review dialog")
 	}
 }
 

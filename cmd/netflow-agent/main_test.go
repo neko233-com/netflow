@@ -557,12 +557,18 @@ func TestVergeScriptCLIPreviewAndPaging(t *testing.T) {
 				return nil, errors.New("bad config page")
 			}
 			return agent.VergeScriptConfigPage{Text: "private fixture"}, nil
-		case "verge-script-rollback-preview", "verge-script-update-preview":
+		case "verge-script-rollback-preview":
 			var in agent.ProfileArgs
 			if json.Unmarshal(raw, &in) != nil || in.ProfileID != "sub" {
 				return nil, errors.New("bad rollback preview")
 			}
 			return agent.VergeScriptPreview{PreviewID: "p", Operation: "rollback"}, nil
+		case "verge-script-update-preview":
+			var in agent.VergeScriptUpdateArgs
+			if json.Unmarshal(raw, &in) != nil || in.ProfileID != "sub" || (in.URL != "" && in.URL != "https://example.test/?token=secret") {
+				return nil, errors.New("bad update preview")
+			}
+			return agent.VergeScriptPreview{PreviewID: "p", Operation: "update-subscription"}, nil
 		case "verge-script-apply":
 			var in agent.ApplyArgs
 			if json.Unmarshal(raw, &in) != nil || in.ProposalID != "p" {
@@ -590,6 +596,7 @@ func TestVergeScriptCLIPreviewAndPaging(t *testing.T) {
 		{[]string{"verge-script-preview-config", "p", "after", "4", "8"}, ""},
 		{[]string{"verge-script-rollback-preview", "sub"}, ""},
 		{[]string{"verge-script-update-preview", "sub"}, ""},
+		{[]string{"verge-script-url-preview"}, `{"profile_id":"sub","url":"https://example.test/?token=secret"}`},
 		{[]string{"verge-script-apply", "p"}, ""},
 		{[]string{"verge-script-cache-prune"}, ""},
 		{[]string{"verge-script-preview-cancel", "p"}, ""},
@@ -602,6 +609,9 @@ func TestVergeScriptCLIPreviewAndPaging(t *testing.T) {
 	var out bytes.Buffer
 	if err := run([]string{"--config-dir", dir, "verge-script-preview"}, strings.NewReader(`{"unknown":1}`), &out); err == nil {
 		t.Fatal("unknown input accepted")
+	}
+	if err := run([]string{"--config-dir", dir, "verge-script-url-preview"}, strings.NewReader(`{"profile_id":"sub"}`), &out); err == nil {
+		t.Fatal("empty replacement URL accepted")
 	}
 }
 

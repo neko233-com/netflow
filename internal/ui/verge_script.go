@@ -45,6 +45,8 @@ func vergeScriptWarning(s string) string {
 		return "内核未运行；应用只保存设置，启动内核后才会生效。"
 	case "Rollback can restore subscription contents, name, URL and traffic metadata; retained URLs can contain credentials.":
 		return "回滚可恢复订阅内容、名称、链接和流量信息；保留的链接可能包含凭据。"
+	case "Applying this preview also replaces the subscription URL.":
+		return "应用此预览也会更换订阅链接。"
 	default:
 		return s
 	}
@@ -117,6 +119,20 @@ func (m *Model) startVergeScriptUpdatePreview() {
 	id := e.ProfileID
 	m.runVergeScriptPreview(func(done func(agent.VergeScriptPreview, error)) func() {
 		return m.Hooks.PreviewVergeScriptUpdateAsync(id, done)
+	})
+}
+
+func (m *Model) startVergeScriptURLPreview(id, url string) {
+	m.openVergeScriptPreview(id)
+	if !m.VergeScriptPreview.Open {
+		return
+	}
+	if m.Hooks.PreviewVergeScriptURLAsync == nil {
+		m.VergeScriptPreview.Error = "脚本订阅链接预览不可用"
+		return
+	}
+	m.runVergeScriptPreview(func(done func(agent.VergeScriptPreview, error)) func() {
+		return m.Hooks.PreviewVergeScriptURLAsync(id, url, done)
 	})
 }
 

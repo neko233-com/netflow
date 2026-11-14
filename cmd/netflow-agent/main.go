@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/neko233-com/netflow"
@@ -27,7 +28,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags.Usage = func() {
 		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, kernel-options, kernel-option NAME VALUE|inherit, update-geo, tun on|off, profiles, profile-settings ID, profile-settings-set|profile-url-set (JSON stdin), import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, rewrite-history, clear-rewrite-history, preview|rollback-preview (JSON stdin), chain-status, chain-preview (JSON stdin), chain-apply ID, chain-cancel-preview ID, chain-disconnect, preview-rules ID before|after [OFFSET [LIMIT]], cancel-preview ID, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, backup-on-change on|off, backup-webdav on|off, webdav-config, webdav-clear, webdav-save|webdav-list|webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
 		fmt.Fprintln(output, "tun-autostart [on|off] sets the GUI startup preference; connections, profiles and groups accept [OFFSET [LIMIT]]; group-nodes GROUP and provider-page proxy|rule accept [OFFSET [LIMIT]]")
-		fmt.Fprintln(output, "verge-script-preview (JSON stdin), verge-script-update-preview PROFILE, verge-script-rollback-preview PROFILE, verge-script-apply ID, verge-script-preview-rules|verge-script-preview-config ID before|after [OFFSET [LIMIT]], verge-script-preview-cancel ID, verge-script-cache-prune; config contains private data")
+		fmt.Fprintln(output, "verge-script-preview (JSON stdin), verge-script-update-preview PROFILE, verge-script-url-preview (JSON stdin), verge-script-rollback-preview PROFILE, verge-script-apply ID, verge-script-preview-rules|verge-script-preview-config ID before|after [OFFSET [LIMIT]], verge-script-preview-cancel ID, verge-script-cache-prune; config contains private data")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -425,7 +426,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 			return err
 		}
 		return json.NewEncoder(output).Encode(out)
-	case "preview", "rollback-preview", "chain-preview", "verge-script-preview":
+	case "preview", "rollback-preview", "chain-preview", "verge-script-preview", "verge-script-url-preview":
 		if flags.NArg() != 1 {
 			return fmt.Errorf("%s reads one JSON object from stdin", flags.Arg(0))
 		}
@@ -437,6 +438,9 @@ func run(args []string, input io.Reader, output io.Writer) error {
 		} else if flags.Arg(0) == "verge-script-preview" {
 			request = &agent.VergeScriptPreviewArgs{}
 			client.Timeout = 60 * time.Second
+		} else if flags.Arg(0) == "verge-script-url-preview" {
+			request = &agent.VergeScriptUpdateArgs{}
+			client.Timeout = 6 * time.Minute
 		} else {
 			request = &agent.RollbackArgs{}
 		}
@@ -456,8 +460,16 @@ func run(args []string, input io.Reader, output io.Writer) error {
 		if err := dec.Decode(&extra); err != io.EOF {
 			return errors.New("unexpected trailing JSON")
 		}
+		method := flags.Arg(0)
+		if method == "verge-script-url-preview" {
+			args := request.(*agent.VergeScriptUpdateArgs)
+			if strings.TrimSpace(args.ProfileID) == "" || strings.TrimSpace(args.URL) == "" {
+				return errors.New("profile_id and url are required")
+			}
+			method = "verge-script-update-preview"
+		}
 		var out json.RawMessage
-		if err := client.Call(ctx, flags.Arg(0), request, &out); err != nil {
+		if err := client.Call(ctx, method, request, &out); err != nil {
 			return err
 		}
 		return json.NewEncoder(output).Encode(out)

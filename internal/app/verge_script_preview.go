@@ -67,6 +67,10 @@ func (a *App) previewVergeScriptUpdateAsync(id string, done func(agent.VergeScri
 	return a.previewVergeScriptOperationAsync("verge-script-update-preview", agent.ProfileArgs{ProfileID: id}, done)
 }
 
+func (a *App) previewVergeScriptURLAsync(id, url string, done func(agent.VergeScriptPreview, error)) func() {
+	return a.previewVergeScriptOperationAsync("verge-script-update-preview", agent.VergeScriptUpdateArgs{ProfileID: id, URL: url}, done)
+}
+
 func (a *App) previewVergeScriptOperationAsync(method string, in any, done func(agent.VergeScriptPreview, error)) func() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -180,7 +184,7 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 	bytes += len(p.Baseline) + len(p.Effective)
 	bytes += len(p.Candidate.Body) + len(d.base) + len(d.activeEffective)
 	if update != nil {
-		bytes += len(update.body) + len(update.snapshot.File)
+		bytes += len(update.body) + len(update.snapshot.File) + len(update.snapshot.URL)
 	}
 	catalogBytes, err := json.Marshal(d.catalog)
 	if err != nil || len(catalogBytes) > 8<<20 {
@@ -274,6 +278,9 @@ func (a *App) finishVergeScriptPreview(d vergeScriptDraft, p scriptpreview.Prepa
 	}
 	if update != nil {
 		warnings = append(warnings, "Rollback can restore subscription contents, name, URL and traffic metadata; retained URLs can contain credentials.")
+		if update.replacementURL && update.snapshot.URL != d.item.URL {
+			warnings = append(warnings, "Applying this preview also replaces the subscription URL.")
+		}
 	}
 	if !d.status.Running {
 		warnings = append(warnings, "The core is stopped; applying only saves settings until the core is started.")
