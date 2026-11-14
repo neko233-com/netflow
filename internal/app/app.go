@@ -202,24 +202,13 @@ func (a *App) Prepare() error {
 		}
 	}
 	a.settings = settings
-	// Headless startup always begins with TUN disabled; an explicit serve
-	// request turns it on after the Agent bridge is ready and host checks pass.
-	if a.headless && settings.TUN {
+	// A previous runtime state is not permission to enable TUN on startup.
+	// GUI opt-in and headless --tun each use the normal request path later.
+	previousTUN := settings.TUN
+	if previousTUN {
 		settings.TUN = false
 		if err := a.store.Save(settings); err != nil {
 			return fmt.Errorf("关闭上次的 TUN 状态: %w", err)
-		}
-		a.settings = settings
-	}
-	tunNeedsConsent := settings.TUN && !a.tunAllowed()
-	var tunPreflightErr error
-	if settings.TUN && a.tunAllowed() {
-		tunPreflightErr = a.checkTUNHost()
-	}
-	if settings.TUN && (!a.tunAllowed() || tunPreflightErr != nil) {
-		settings.TUN = false
-		if err := a.store.Save(settings); err != nil {
-			return fmt.Errorf("关闭不可用的 TUN 设置: %w", err)
 		}
 		a.settings = settings
 	}
@@ -235,10 +224,8 @@ func (a *App) Prepare() error {
 	} else if geoCount > 0 {
 		a.model.Notice = strings.TrimSpace(a.model.Notice + fmt.Sprintf(" 已应用 %d 个 GeoData 数据库更新", geoCount))
 	}
-	if tunPreflightErr != nil {
-		a.model.Notice = strings.TrimSpace(a.model.Notice + " 虚拟网卡未启动: " + tunPreflightErr.Error())
-	} else if tunNeedsConsent {
-		a.model.Notice = strings.TrimSpace(a.model.Notice + " 虚拟网卡未自动启动，请重新开启并授权")
+	if previousTUN && !a.headless && !a.model.Prefs.AutoStartTUN {
+		a.model.Notice = strings.TrimSpace(a.model.Notice + " 上次的虚拟网卡状态已关闭，请按需重新开启")
 	}
 	for _, page := range ui.Pages() {
 		if page.Path == a.model.Prefs.StartPage {

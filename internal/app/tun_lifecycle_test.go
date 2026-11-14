@@ -14,7 +14,7 @@ import (
 	"github.com/neko233-com/netflow/internal/tun"
 )
 
-func TestTUNStartupFailureFallsBackWithoutChangingSource(t *testing.T) {
+func TestPreviousTUNStateDoesNotEnableOnStartup(t *testing.T) {
 	t.Setenv("CI", "1")
 	dir := t.TempDir()
 	base := []byte("mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ntun: {enable: true}\nrules: ['MATCH,DIRECT']\n")
@@ -31,12 +31,12 @@ func TestTUNStartupFailureFallsBackWithoutChangingSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.core.Stop()
-	if !a.core.Status().Running || a.core.Status().TUN || a.Home().TUN || !strings.Contains(a.model.Notice, "虚拟网卡启动失败") {
-		t.Fatalf("fallback state: %+v", a.Home())
+	if !a.core.Status().Running || a.core.Status().TUN || a.Home().TUN || !strings.Contains(a.model.Notice, "上次的虚拟网卡状态已关闭") {
+		t.Fatalf("startup state: %+v", a.Home())
 	}
 	saved, err := store.Load()
 	if err != nil || saved.TUN {
-		t.Fatal("failed TUN choice remained enabled")
+		t.Fatal("previous TUN state remained enabled")
 	}
 	after, err := os.ReadFile(path)
 	if err != nil || string(after) != string(base) {
@@ -57,6 +57,22 @@ func TestSubscriptionCannotEnableTUNWithoutExplicitChoice(t *testing.T) {
 	defer a.core.Stop()
 	if !a.core.Status().Running || a.core.Status().TUN || a.Home().TUN {
 		t.Fatal("subscription activated TUN without user choice")
+	}
+}
+
+func TestStartupRejectsFailureToClearPreviousTUNState(t *testing.T) {
+	dir := t.TempDir()
+	store := appconfig.NewMemory(dir)
+	if err := store.Save(appconfig.Settings{TUN: true}); err != nil {
+		t.Fatal(err)
+	}
+	store.FailSave(errors.New("settings unavailable"))
+	a := New(Options{Dirs: appdir.Fixed(dir), Store: store, Proxy: sysproxy.NewMemory(), TUN: tun.NewMemory(), Core: core.New()})
+	if err := a.Prepare(); err == nil || !strings.Contains(err.Error(), "settings unavailable") {
+		t.Fatalf("startup accepted a failed TUN reset: %v", err)
+	}
+	if a.core.Status().Running {
+		t.Fatal("kernel started after failed TUN reset")
 	}
 }
 

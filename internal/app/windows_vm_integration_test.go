@@ -34,6 +34,7 @@ import (
 	"github.com/miekg/dns"
 	"github.com/neko233-com/netflow"
 	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/appconfig"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/coreipc"
 	"github.com/neko233-com/netflow/internal/geoupdate"
@@ -1150,6 +1151,18 @@ func vmGUIAutoStartTUN(t *testing.T, guiExe, agentExe, dir string) {
 		t.Fatal(err)
 	}
 	client := agent.Client{Dir: dir, Timeout: 3 * time.Second}
+	markPreviousTUN := func() {
+		store := appconfig.NewFileStore(dir)
+		settings, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		settings.TUN = true
+		if err := store.Save(settings); err != nil {
+			t.Fatal(err)
+		}
+	}
+	markPreviousTUN()
 	// The GUI preference must not override an explicit headless --tun=false.
 	func() {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -1196,6 +1209,7 @@ func vmGUIAutoStartTUN(t *testing.T, guiExe, agentExe, dir string) {
 			t.Fatal("headless did not exit")
 		}
 	}()
+	markPreviousTUN()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	gui := vmCommand(ctx, guiExe)
@@ -1324,14 +1338,50 @@ func vmGUIAutoStartTUN(t *testing.T, guiExe, agentExe, dir string) {
 	<-finished
 	reaped = true
 	deadline = time.Now().Add(30 * time.Second)
+	restoredNetwork := false
 	for time.Now().Before(deadline) {
 		routes, dns, err := vmNetworkSnapshot()
 		if err == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
-			return
+			restoredNetwork = true
+			break
 		}
 		time.Sleep(time.Second)
 	}
-	t.Fatal("GUI auto-start TUN did not restore networking")
+	if !restoredNetwork {
+		t.Fatal("GUI auto-start TUN did not restore networking")
+	}
+	// Simulate a stale state left by an abnormal exit. With opt-in disabled,
+	// the next GUI must start with TUN off even if the old state was on.
+	markPreviousTUN()
+	second := vmCommand(ctx, guiExe)
+	second.Env = gui.Env
+	second.Stdout, second.Stderr = logFile, logFile
+	if err := second.Start(); err != nil {
+		t.Fatal(err)
+	}
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- second.Wait() }()
+	defer func() { _ = second.Process.Kill(); <-secondDone }()
+	status = agent.Status{}
+	deadline = time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := client.Call(context.Background(), "status", nil, &status); err == nil && !status.Headless && !status.TUNPending {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !status.Running || status.Headless || status.TUN || status.TUNPending {
+		t.Fatalf("stale TUN state was activated: %+v", status)
+	}
+	saved, err := appconfig.NewFileStore(dir).Load()
+	if err != nil || saved.TUN {
+		t.Fatalf("stale TUN state was not cleared: %+v %v", saved, err)
+	}
+	routes, dns, err = vmNetworkSnapshot()
+	if err != nil || !reflect.DeepEqual(routes, beforeRoutes) || !reflect.DeepEqual(dns, beforeDNS) {
+		t.Fatalf("stale state changed networking: %v", err)
+	}
+	t.Log("stale TUN state was cleared for headless and GUI startup")
 }
 
 // This test exercises the shipped MSI and real Wintun only inside the isolated,
