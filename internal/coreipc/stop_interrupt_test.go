@@ -2,6 +2,7 @@ package coreipc
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,228 @@ import (
 	"github.com/metacubex/mihomo/common/utils"
 	P "github.com/metacubex/mihomo/constant/provider"
 )
+
+func TestStopInterruptsInitialUncachedProvider(t *testing.T) {
+	t.Setenv("CI", "1")
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		select {
+		case <-r.Context().Done():
+			close(canceled)
+		case <-release:
+			_, _ = w.Write([]byte("proxies: [{name: fresh, type: direct}]\n"))
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+	userDir, stageDir := t.TempDir(), t.TempDir()
+	base := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	configPath := filepath.Join(userDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(base), 0600); err != nil {
+		t.Fatal(err)
+	}
+	left, right := net.Pipe()
+	worker := NewWorker()
+	worker.stageFactory = func() (fileStage, error) { return &testStage{dir: stageDir}, nil }
+	served := make(chan error, 1)
+	go func() { served <- worker.Serve(right) }()
+	client, err := NewClient(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close(); <-served }()
+	client.cacheInterval = time.Hour
+	if err := client.Start(userDir); err != nil {
+		t.Fatal(err)
+	}
+	config := base + "proxy-providers:\n  uncached: {type: http, url: '" + server.URL + "', path: providers/uncached.yaml, interval: 3600, health-check: {enable: false}}\n"
+	if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := make(chan error, 1)
+	go func() { reloaded <- client.Reload() }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial download did not start")
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- client.Stop() }()
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatalf("stop: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop waited for initial download")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial download was not canceled")
+	}
+	select {
+	case err := <-reloaded:
+		if err == nil {
+			t.Fatal("interrupted reload reported success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("interrupted reload did not finish")
+	}
+	if client.Status().Running {
+		t.Fatal("kernel still running")
+	}
+	if err := os.WriteFile(configPath, []byte(base), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Start(userDir); err != nil {
+		t.Fatalf("restart after interrupted reload: %v", err)
+	}
+	if err := client.Stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDisconnectInterruptsInitialUncachedProvider(t *testing.T) {
+	for _, initialStart := range []bool{true, false} {
+		t.Run(fmt.Sprintf("initialStart=%v", initialStart), func(t *testing.T) {
+			t.Setenv("CI", "1")
+			entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(entered)
+				select {
+				case <-r.Context().Done():
+					close(canceled)
+				case <-release:
+				}
+			}))
+			defer server.Close()
+			defer close(release)
+			dir := t.TempDir()
+			base := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+			path := filepath.Join(dir, "config.yaml")
+			if err := os.WriteFile(path, []byte(base), 0600); err != nil {
+				t.Fatal(err)
+			}
+			left, right := net.Pipe()
+			worker := NewWorker()
+			served := make(chan error, 1)
+			go func() { served <- worker.Serve(right) }()
+			client, err := NewClient(left)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !initialStart {
+				if err := client.Start(dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config := base + "proxy-providers:\n  uncached: {type: http, url: '" + server.URL + "', path: providers/new.yaml, interval: 3600, health-check: {enable: false}}\n"
+			if err := os.WriteFile(path, []byte(config), 0600); err != nil {
+				t.Fatal(err)
+			}
+			finished := make(chan error, 1)
+			go func() {
+				if initialStart {
+					finished <- client.Start(dir)
+				} else {
+					finished <- client.Reload()
+				}
+			}()
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				_ = client.Close()
+				t.Fatal("initial download did not start")
+			}
+			_ = client.Close()
+			select {
+			case <-canceled:
+			case <-time.After(5 * time.Second):
+				t.Fatal("download was not canceled on disconnect")
+			}
+			select {
+			case err := <-served:
+				if err != nil {
+					t.Fatalf("worker cleanup: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("worker cleanup waited for download")
+			}
+			select {
+			case err := <-finished:
+				if err == nil {
+					t.Fatal("disconnected apply reported success")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("client remained blocked")
+			}
+		})
+	}
+}
+
+func TestStopInterruptsInitialUncachedRuleProvider(t *testing.T) {
+	t.Setenv("CI", "1")
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		select {
+		case <-r.Context().Done():
+			close(canceled)
+		case <-release:
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+	dir := t.TempDir()
+	base := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(base), 0600); err != nil {
+		t.Fatal(err)
+	}
+	left, right := net.Pipe()
+	worker := NewWorker()
+	served := make(chan error, 1)
+	go func() { served <- worker.Serve(right) }()
+	client, err := NewClient(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close(); <-served }()
+	if err := client.Start(dir); err != nil {
+		t.Fatal(err)
+	}
+	config := base + "rule-providers:\n  uncached: {type: http, url: '" + server.URL + "', path: providers/rules.yaml, behavior: domain, format: yaml, interval: 3600}\n"
+	if err := os.WriteFile(path, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- client.Reload() }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial rule download did not start")
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- client.Stop() }()
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop waited for initial rule download")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial rule download was not canceled")
+	}
+	if err := <-done; err == nil {
+		t.Fatal("interrupted reload reported success")
+	}
+}
 
 func TestStopInterruptsSlowProviderAndPreservesCompletedCache(t *testing.T) {
 	t.Setenv("CI", "1")

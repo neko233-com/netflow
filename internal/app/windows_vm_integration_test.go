@@ -3339,11 +3339,111 @@ ruleRefreshed:
 		}
 		t.Logf("%s Windows TUN stack forwarded fake-IP traffic", stack)
 	}
+	initialEntered, initialCanceled, initialRelease := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	initialServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(initialEntered)
+		select {
+		case <-r.Context().Done():
+			close(initialCanceled)
+		case <-initialRelease:
+		}
+	}))
+	defer initialServer.Close()
+	defer close(initialRelease)
+	uncachedConfig := strings.Replace(workerConfig, "  local:\n", "  uncached: {type: http, url: '"+initialServer.URL+"', path: providers/uncached-vm.yaml, interval: 3600, health-check: {enable: false}}\n  local:\n", 1)
+	if uncachedConfig == workerConfig {
+		t.Fatal("could not add uncached VM provider")
+	}
+	uncachedTUN, err := tun.Compose([]byte(uncachedConfig), true, "NetFlowVM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workerDir, "config.yaml"), uncachedTUN, 0600); err != nil {
+		t.Fatal(err)
+	}
+	reloadDone := make(chan error, 1)
+	go func() { reloadDone <- worker.Reload() }()
+	select {
+	case <-initialEntered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("uncached provider did not start")
+	}
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- worker.Stop() }()
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("stop during initial provider: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("TUN stop waited for initial provider")
+	}
+	select {
+	case <-initialCanceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial provider request not canceled")
+	}
+	select {
+	case err := <-reloadDone:
+		if err == nil {
+			t.Fatal("interrupted reload reported success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("interrupted reload did not finish")
+	}
+	waitRestored("initial provider interruption")
+	writeStack("system")
+	if err := worker.Start(workerDir); err != nil {
+		t.Fatalf("restart after interrupted initial provider: %v", err)
+	}
+	if !worker.Status().TUN {
+		t.Fatal("TUN did not restart after interrupted initial provider")
+	}
+	t.Log("stopping TUN canceled uncached provider initialization and restored networking")
+	disconnectEntered, disconnectCanceled, disconnectRelease := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	disconnectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(disconnectEntered)
+		select {
+		case <-r.Context().Done():
+			close(disconnectCanceled)
+		case <-disconnectRelease:
+		}
+	}))
+	defer disconnectServer.Close()
+	defer close(disconnectRelease)
+	disconnectConfig := strings.Replace(workerConfig, "  local:\n", "  uncached: {type: http, url: '"+disconnectServer.URL+"', path: providers/disconnect-vm.yaml, interval: 3600, health-check: {enable: false}}\n  local:\n", 1)
+	disconnectTUN, err := tun.Compose([]byte(disconnectConfig), true, "NetFlowVM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workerDir, "config.yaml"), disconnectTUN, 0600); err != nil {
+		t.Fatal(err)
+	}
+	disconnectReload := make(chan error, 1)
+	go func() { disconnectReload <- worker.Reload() }()
+	select {
+	case <-disconnectEntered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("disconnect provider did not start")
+	}
 	if err := worker.Close(); err != nil {
 		t.Fatalf("close worker: %v", err)
 	}
+	select {
+	case <-disconnectCanceled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("worker disconnect did not cancel initial provider")
+	}
+	select {
+	case err := <-disconnectReload:
+		if err == nil {
+			t.Fatal("disconnected reload reported success")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("disconnected reload did not finish")
+	}
 	waitRestored("worker disconnect")
-	t.Log("worker disconnect restored IPv4/IPv6 routes and DNS")
+	t.Log("worker disconnect canceled initial provider and restored IPv4/IPv6 routes and DNS")
 
 	launchWorker := func() *coreipc.Client {
 		t.Helper()

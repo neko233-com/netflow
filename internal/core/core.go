@@ -12,6 +12,7 @@ import (
 
 	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
+	P "github.com/metacubex/mihomo/constant/provider"
 	mihomodns "github.com/metacubex/mihomo/dns"
 	"github.com/metacubex/mihomo/hub"
 	"github.com/metacubex/mihomo/hub/executor"
@@ -66,6 +67,62 @@ type Core struct {
 	pendingFakeIP     *mihomodns.FakeIPState
 	probeContext      context.Context
 	stopProbes        context.CancelFunc
+	applyStateMu      sync.Mutex
+	applying          *pendingApply
+	interruptCheck    func() bool
+}
+
+type applyProvider interface{ PauseUpdates() }
+type pendingApply struct {
+	interrupted bool
+	providers   []applyProvider
+}
+
+// SetInterruptCheck is configured before the worker starts serving requests.
+func (c *Core) SetInterruptCheck(check func() bool) { c.interruptCheck = check }
+
+// InterruptApply cancels network reads made by providers being initialized.
+// It does not wait for the core's configuration lock or tear down a TUN.
+func (c *Core) InterruptApply() {
+	c.applyStateMu.Lock()
+	op := c.applying
+	if op == nil {
+		c.applyStateMu.Unlock()
+		return
+	}
+	op.interrupted = true
+	providers := append([]applyProvider(nil), op.providers...)
+	c.applyStateMu.Unlock()
+	for _, p := range providers {
+		p.PauseUpdates()
+	}
+}
+
+func (c *Core) applyInterrupted(op *pendingApply) bool {
+	c.applyStateMu.Lock()
+	defer c.applyStateMu.Unlock()
+	return op.interrupted || (c.interruptCheck != nil && c.interruptCheck())
+}
+
+func (c *Core) registerApplyProviders(op *pendingApply, providers ...P.Provider) bool {
+	c.applyStateMu.Lock()
+	for _, provider := range providers {
+		if p, ok := provider.(applyProvider); ok {
+			op.providers = append(op.providers, p)
+		}
+	}
+	interrupted := op.interrupted || (c.interruptCheck != nil && c.interruptCheck())
+	if interrupted {
+		op.interrupted = true
+	}
+	paused := append([]applyProvider(nil), op.providers...)
+	c.applyStateMu.Unlock()
+	if interrupted {
+		for _, p := range paused {
+			p.PauseUpdates()
+		}
+	}
+	return interrupted
 }
 
 // SetTransformer installs an in-memory transformation; the original config
@@ -146,6 +203,9 @@ func (c *Core) Start(homeDir string) error {
 	C.SetConfig(filepath.Join(homeDir, configFileName))
 
 	if err := c.apply(); err != nil {
+		if errors.Is(err, context.Canceled) {
+			closeProviders()
+		}
 		releaseListeners()
 		return err
 	}
@@ -304,6 +364,20 @@ func (c *Core) ResolveIconHost(ctx context.Context, host string) ([]netip.Addr, 
 }
 
 func (c *Core) apply() error {
+	op := &pendingApply{}
+	c.applyStateMu.Lock()
+	c.applying = op
+	c.applyStateMu.Unlock()
+	defer func() {
+		c.applyStateMu.Lock()
+		if c.applying == op {
+			c.applying = nil
+		}
+		c.applyStateMu.Unlock()
+	}()
+	if c.applyInterrupted(op) {
+		return context.Canceled
+	}
 	defer func() { c.pendingFakeIP = nil }()
 	homeDir := C.Path.HomeDir()
 	path := C.Path.Config()
@@ -334,15 +408,23 @@ func (c *Core) apply() error {
 	if err != nil {
 		return fmt.Errorf("disable external controller: %w", err)
 	}
+	safeConfig, err := executor.ParseWithBytes(suppressed)
+	if err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+	var pending []P.Provider
+	for _, p := range safeConfig.Providers {
+		pending = append(pending, p)
+	}
+	for _, p := range safeConfig.RuleProviders {
+		pending = append(pending, p)
+	}
+	if c.registerApplyProviders(op, pending...) {
+		return context.Canceled
+	}
 	if c.pendingFakeIP == nil {
-		if err := hub.Parse(suppressed); err != nil {
-			return fmt.Errorf("apply config: %w", err)
-		}
+		hub.ApplyConfig(safeConfig)
 	} else {
-		safeConfig, err := executor.ParseWithBytes(suppressed)
-		if err != nil {
-			return fmt.Errorf("parse config: %w", err)
-		}
 		if safeConfig.DNS == nil {
 			return errors.New("Fake-IP 状态与 DNS 配置不兼容")
 		}
@@ -363,6 +445,9 @@ func (c *Core) apply() error {
 			}
 		}
 		hub.ApplyConfigWithRestoredFakeIP(safeConfig)
+	}
+	if c.applyInterrupted(op) {
+		return context.Canceled
 	}
 	actual := executor.GetGeneral()
 	if err := verifyTUNState(cfg.General.Tun.Enable, actual.Tun.Enable); err != nil {

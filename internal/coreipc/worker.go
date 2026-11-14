@@ -91,6 +91,7 @@ type Worker struct {
 	stage           fileStage
 	cacheConfigured bool
 	finalCacheBusy  atomic.Bool
+	interruptApply  atomic.Int32
 	pausedProviders []providerPauser
 	pauseToken      string
 	pauseTimer      *time.Timer
@@ -174,6 +175,7 @@ func (w *Worker) ResumeProviderUpdates(in Name, _ *Empty) error {
 
 func NewWorker() *Worker {
 	w := &Worker{kernel: core.New()}
+	w.kernel.SetInterruptCheck(func() bool { return w.interruptApply.Load() > 0 })
 	w.stopLogs = w.kernel.SubscribeLogs(func(level, payload string) {
 		if len(payload) > 4096 {
 			payload = payload[:4096]
@@ -230,6 +232,8 @@ func (w *Worker) Serve(c io.ReadWriteCloser) error {
 	case <-served:
 	}
 	_ = c.Close()
+	w.interruptApply.Add(1)
+	w.kernel.InterruptApply()
 	w.applyMu.Lock()
 	w.closed = true
 	err := w.kernel.Stop()
@@ -357,8 +361,11 @@ func (w *Worker) Stop(in ProviderCacheQuery, out *ProviderCaches) error {
 // before the client waits for its local cache/update lock. The stage remains
 // available for the normal Stop call to capture completed provider caches.
 func (w *Worker) InterruptForStop(_ Empty, _ *Empty) error {
+	w.interruptApply.Add(1)
+	w.kernel.InterruptApply()
 	w.applyMu.Lock()
 	defer w.applyMu.Unlock()
+	defer w.interruptApply.Add(-1)
 	if w.closed {
 		return errors.New("kernel transport closed")
 	}
