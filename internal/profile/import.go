@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/neko233-com/netflow/internal/safepath"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -194,8 +194,11 @@ func ImportHTTP(ctx context.Context, rawURL string, opt ImportOption, profilesDi
 	if err := os.MkdirAll(profilesDir, 0o700); err != nil {
 		return Item{}, err
 	}
-	path := filepath.Join(profilesDir, item.File)
-	if err := os.WriteFile(path, payload, 0o600); err != nil {
+	created, err := safepath.CreateExclusive(profilesDir, item.File, payload, false)
+	if err != nil {
+		return Item{}, err
+	}
+	if err := created.Close(); err != nil {
 		return Item{}, err
 	}
 	return item, nil

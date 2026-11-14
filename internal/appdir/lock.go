@@ -3,7 +3,8 @@ package appdir
 import (
 	"errors"
 	"os"
-	"path/filepath"
+
+	"github.com/neko233-com/netflow/internal/safepath"
 )
 
 var ErrAlreadyRunning = errors.New("此配置目录已有运行中的 NetFlow")
@@ -19,7 +20,7 @@ func Acquire(dir string) (*Lock, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(filepath.Join(dir, ".netflow.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	file, err := safepath.OpenLock(dir, ".netflow.lock")
 	if err != nil {
 		return nil, err
 	}

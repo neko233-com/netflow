@@ -4,11 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/neko233-com/netflow/internal/profile"
+	"github.com/neko233-com/netflow/internal/safepath"
 )
 
 // UpdateProfile replaces one remote subscription only after it has been
@@ -72,11 +71,8 @@ func (a *App) updateProfileData(uid, expectedURL string, body []byte, headers ht
 	if err = validateProfile(body); err != nil {
 		return err
 	}
-	file, err := profileFilePath(a.dir, f.Items[index].File)
-	if err != nil {
-		return err
-	}
-	oldFile, err := os.ReadFile(file)
+	rel := f.Items[index].File
+	oldFile, _, err := readProfileFile(a.dir, rel)
 	if err != nil {
 		return err
 	}
@@ -86,24 +82,26 @@ func (a *App) updateProfileData(uid, expectedURL string, body []byte, headers ht
 			return err
 		}
 	}
-	configPath := filepath.Join(a.dir, "config.yaml")
 	var oldConfig []byte
+	var nextConfig []byte
+	configUpdated := false
 	if active {
-		oldConfig, err = os.ReadFile(configPath)
+		oldConfig, err = safepath.ReadFile(a.dir, "config.yaml")
 		if err != nil {
 			return err
 		}
+		nextConfig = profile.EnsureMixedPort(body, 7897)
 	}
-	if err = os.WriteFile(file, body, 0600); err != nil {
+	if err = safepath.CompareAndWrite(a.dir, rel, oldFile, body); err != nil {
 		return err
 	}
 	rollback := func(cause error) error {
 		var failures []error
-		if e := os.WriteFile(file, oldFile, 0600); e != nil {
+		if e := safepath.CompareAndWrite(a.dir, rel, body, oldFile); e != nil {
 			failures = append(failures, e)
 		}
-		if active {
-			if e := os.WriteFile(configPath, oldConfig, 0600); e != nil {
+		if configUpdated {
+			if e := safepath.CompareAndWrite(a.dir, "config.yaml", nextConfig, oldConfig); e != nil {
 				failures = append(failures, e)
 			}
 			if a.core != nil && a.core.Status().Running {
@@ -118,9 +116,10 @@ func (a *App) updateProfileData(uid, expectedURL string, body []byte, headers ht
 		return cause
 	}
 	if active {
-		if err = os.WriteFile(configPath, profile.EnsureMixedPort(body, 7897), 0600); err != nil {
+		if err = safepath.CompareAndWrite(a.dir, "config.yaml", oldConfig, nextConfig); err != nil {
 			return rollback(err)
 		}
+		configUpdated = true
 		if a.core != nil && a.core.Status().Running {
 			if err = a.core.Reload(); err != nil {
 				return rollback(err)

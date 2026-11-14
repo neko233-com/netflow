@@ -3,14 +3,13 @@ package app
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/metacubex/mihomo/constant/features"
 	"github.com/metacubex/mihomo/hub/executor"
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/tun"
 	"github.com/neko233-com/netflow/internal/ui"
 )
@@ -103,7 +102,7 @@ func (a *App) applyKernelOptions(next kernelopts.Options) error {
 	if err := next.Validate(); err != nil {
 		return err
 	}
-	base, err := os.ReadFile(filepath.Join(a.dir, "config.yaml"))
+	base, err := safepath.ReadFile(a.dir, "config.yaml")
 	if err != nil {
 		return err
 	}

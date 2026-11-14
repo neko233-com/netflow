@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/neko233-com/netflow/internal/appdir"
+	"github.com/neko233-com/netflow/internal/safepath"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -129,7 +130,7 @@ func (s *windowsSystem) Owned() (bool, error) {
 			return false, err
 		}
 	}
-	data, err := os.ReadFile(path)
+	data, err := safepath.ReadFile(filepath.Dir(path), filepath.Base(path))
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -164,20 +165,7 @@ func saveBackup(path string, b proxyBackup) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), "proxy-backup-*.tmp")
-	if err != nil {
-		return err
-	}
-	name := f.Name()
-	defer os.Remove(name)
-	if _, err = f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(name, path)
+	return safepath.WriteFile(filepath.Dir(path), filepath.Base(path), data)
 }
 
 func (s *windowsSystem) Set(next Settings) error {
@@ -196,7 +184,7 @@ func (s *windowsSystem) Set(next Settings) error {
 		return err
 	}
 	defer k.Close()
-	data, err := os.ReadFile(path)
+	data, err := safepath.ReadFile(filepath.Dir(path), filepath.Base(path))
 	var backup proxyBackup
 	if err == nil {
 		if err = json.Unmarshal(data, &backup); err != nil {
@@ -296,7 +284,7 @@ func (s *windowsSystem) Set(next Settings) error {
 		}
 	}
 	s.notify()
-	return os.Remove(path)
+	return safepath.CompareAndRemove(filepath.Dir(path), filepath.Base(path), data)
 }
 
 // Restore returns the settings saved when this process enabled the proxy.

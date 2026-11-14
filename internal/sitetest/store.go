@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
+
+	"github.com/neko233-com/netflow/internal/safepath"
 )
 
 // Item is one saved test. Delay is not persisted; it is a session result.
@@ -24,14 +25,12 @@ type Store struct {
 // NewStore returns a store for dir.
 func NewStore(dir string) *Store { return &Store{dir: dir} }
 
-func (s *Store) path() string { return filepath.Join(s.dir, "tests.json") }
-
 // Load returns nil when the file is missing.
 func (s *Store) Load() ([]Item, error) {
 	if s == nil || s.dir == "" {
 		return nil, errors.New("test store has no directory")
 	}
-	b, err := os.ReadFile(s.path())
+	b, err := safepath.ReadFile(s.dir, "tests.json")
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -61,5 +60,5 @@ func (s *Store) Save(items []Item) error {
 		return err
 	}
 	b = append(b, '\n')
-	return os.WriteFile(s.path(), b, 0o600)
+	return safepath.WriteFile(s.dir, "tests.json", b)
 }

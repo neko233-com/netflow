@@ -11,7 +11,13 @@ import (
 )
 
 func TestEndpointHasProtectedUserOnlyDACL(t *testing.T) {
-	f, err := createPrivateEndpoint(t.TempDir(), "endpoint-test-")
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	f, _, err := createPrivateEndpoint(root, dir, "endpoint-test-")
 	if err != nil {
 		t.Fatal(err)
 	}

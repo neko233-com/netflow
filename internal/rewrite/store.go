@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/neko233-com/netflow/internal/safepath"
 )
 
 var ErrConflict = errors.New("rewrite revision changed; preview again")
@@ -22,7 +24,7 @@ func Open(dir string) (*Store, error) {
 		return nil, errors.New("empty rewrite directory")
 	}
 	s := &Store{path: filepath.Join(dir, "agent-rules.json")}
-	data, err := os.ReadFile(s.path)
+	data, err := safepath.ReadFile(dir, "agent-rules.json")
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
 	}
@@ -72,28 +74,7 @@ func (s *Store) Replace(next State, expected uint64) (State, error) {
 	if err = os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 		return State{}, err
 	}
-	f, err := os.CreateTemp(filepath.Dir(s.path), ".agent-rules-*.tmp")
-	if err != nil {
-		return State{}, err
-	}
-	name := f.Name()
-	defer os.Remove(name)
-	if err = f.Chmod(0600); err != nil {
-		f.Close()
-		return State{}, err
-	}
-	if _, err = f.Write(append(data, '\n')); err != nil {
-		f.Close()
-		return State{}, err
-	}
-	if err = f.Sync(); err != nil {
-		f.Close()
-		return State{}, err
-	}
-	if err = f.Close(); err != nil {
-		return State{}, err
-	}
-	if err = os.Rename(name, s.path); err != nil {
+	if err = safepath.WriteFile(filepath.Dir(s.path), filepath.Base(s.path), append(data, '\n')); err != nil {
 		return State{}, err
 	}
 	s.state = clone(next)

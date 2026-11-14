@@ -3,10 +3,9 @@ package app
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/neko233-com/netflow/internal/profile"
+	"github.com/neko233-com/netflow/internal/safepath"
 )
 
 type dnsOverride struct {
@@ -74,7 +73,7 @@ func (a *App) setProfileDNS(id string, enabled bool, text string) error {
 	if len(text) > 64<<10 {
 		return errors.New("DNS 覆写不能超过 64 KiB")
 	}
-	body, err := os.ReadFile(filepath.Join(a.dir, "config.yaml"))
+	body, err := safepath.ReadFile(a.dir, "config.yaml")
 	if err != nil {
 		return err
 	}

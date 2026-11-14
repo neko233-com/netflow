@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/neko233-com/netflow/internal/safepath"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -87,7 +88,7 @@ func Open(dir string) (*Store, error) {
 		return nil, errors.New("配置目录为空")
 	}
 	s := &Store{path: filepath.Join(dir, "kernel-options.json")}
-	data, err := os.ReadFile(s.path)
+	data, err := safepath.ReadFile(dir, "kernel-options.json")
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
 	}
@@ -121,25 +122,7 @@ func (s *Store) Replace(next Options) error {
 	if err = os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(s.path), ".kernel-options-*.tmp")
-	if err != nil {
-		return err
-	}
-	name := f.Name()
-	defer os.Remove(name)
-	if err = f.Chmod(0600); err == nil {
-		_, err = f.Write(data)
-	}
-	if err == nil {
-		err = f.Sync()
-	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	if err = os.Rename(name, s.path); err != nil {
+	if err = safepath.WriteFile(filepath.Dir(s.path), filepath.Base(s.path), data); err != nil {
 		return err
 	}
 	s.value = clone(next)

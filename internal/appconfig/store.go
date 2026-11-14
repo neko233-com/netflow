@@ -8,7 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+
+	"github.com/neko233-com/netflow/internal/safepath"
 )
 
 // Settings is what the app remembers between launches. Prefs is the
@@ -46,14 +47,12 @@ func (s *FileStore) Dir() string {
 	return s.dir
 }
 
-func (s *FileStore) path() string { return filepath.Join(s.dir, "settings.json") }
-
 // Load returns zero settings when settings.json does not exist yet.
 func (s *FileStore) Load() (Settings, error) {
 	if s == nil || s.dir == "" {
 		return Settings{}, errors.New("settings store has no directory")
 	}
-	b, err := os.ReadFile(s.path())
+	b, err := safepath.ReadFile(s.dir, "settings.json")
 	if errors.Is(err, os.ErrNotExist) {
 		return Settings{}, nil
 	}
@@ -83,23 +82,5 @@ func (s *FileStore) Save(in Settings) error {
 		return err
 	}
 	b = append(b, '\n')
-	f, err := os.CreateTemp(s.dir, ".settings-*.tmp")
-	if err != nil {
-		return err
-	}
-	name := f.Name()
-	defer os.Remove(name)
-	if err = f.Chmod(0600); err == nil {
-		_, err = f.Write(b)
-	}
-	if err == nil {
-		err = f.Sync()
-	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	return os.Rename(name, s.path())
+	return safepath.WriteFile(s.dir, "settings.json", b)
 }

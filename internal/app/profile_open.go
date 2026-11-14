@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/neko233-com/netflow/internal/safepath"
 )
 
 func openProfileHandle(dir, relative string) (*os.File, string, error) {
@@ -15,31 +17,9 @@ func openProfileHandle(dir, relative string) (*os.File, string, error) {
 	if err != nil || !filepath.IsLocal(rel) || rel == "." {
 		return nil, "", errors.New("订阅文件路径无效")
 	}
-	root, err := os.OpenRoot(dir)
+	f, err := safepath.OpenRead(dir, relative)
 	if err != nil {
 		return nil, "", err
-	}
-	defer root.Close()
-	info, err := root.Lstat("profiles")
-	if err != nil {
-		return nil, "", err
-	}
-	if !info.IsDir() {
-		return nil, "", errors.New("订阅目录不能是链接或重解析点")
-	}
-	profiles, err := root.OpenRoot("profiles")
-	if err != nil {
-		return nil, "", err
-	}
-	defer profiles.Close()
-	f, err := profiles.Open(rel)
-	if err != nil {
-		return nil, "", err
-	}
-	info, err = f.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		_ = f.Close()
-		return nil, "", errors.New("订阅文件不是普通文件")
 	}
 	return f, filepath.Join(dir, relative), nil
 }

@@ -16,7 +16,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/neko233-com/netflow/internal/safepath"
 )
 
 type request struct {
@@ -43,10 +46,15 @@ type AfterResponse struct {
 }
 
 type Bridge struct {
-	server   *http.Server
-	listener net.Listener
-	file     string
-	token    string
+	server    *http.Server
+	listener  net.Listener
+	file      string
+	token     string
+	root      *os.Root
+	name      string
+	info      os.FileInfo
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Start listens only on IPv4 loopback and advertises a random bearer token in
@@ -66,17 +74,30 @@ func Start(dir string, handle Handler) (*Bridge, error) {
 		return nil, err
 	}
 	token := hex.EncodeToString(secret[:])
-	parent := filepath.Join(dir, "agent")
-	if err = os.MkdirAll(parent, 0700); err != nil {
+	if err = os.MkdirAll(dir, 0700); err != nil {
 		listener.Close()
 		return nil, err
 	}
-	file, err := createPrivateEndpoint(parent, fmt.Sprintf("endpoint-%d-", os.Getpid()))
+	parent := filepath.Join(dir, "agent")
+	root, _, err := safepath.Parent(dir, filepath.Join("agent", "endpoint"), true)
 	if err != nil {
 		listener.Close()
 		return nil, err
 	}
-	fileName := file.Name()
+	file, name, err := createPrivateEndpoint(root, parent, fmt.Sprintf("endpoint-%d-", os.Getpid()))
+	if err != nil {
+		root.Close()
+		listener.Close()
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		root.Close()
+		listener.Close()
+		return nil, err
+	}
+	fileName := filepath.Join(parent, name)
 	e := endpoint{Address: listener.Addr().String(), Token: token, PID: os.Getpid()}
 	err = json.NewEncoder(file).Encode(e)
 	if closeErr := file.Close(); err == nil {
@@ -84,10 +105,13 @@ func Start(dir string, handle Handler) (*Bridge, error) {
 	}
 	if err != nil {
 		listener.Close()
-		os.Remove(fileName)
+		if current, e := root.Lstat(name); e == nil && os.SameFile(info, current) {
+			_ = root.Remove(name)
+		}
+		root.Close()
 		return nil, err
 	}
-	b := &Bridge{listener: listener, file: fileName, token: token}
+	b := &Bridge{listener: listener, file: fileName, token: token, root: root, name: name, info: info}
 	b.server = &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != e.Address || r.Header.Get("Origin") != "" {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -154,13 +178,28 @@ func (b *Bridge) Close() error {
 	if b == nil {
 		return nil
 	}
-	err := b.server.Close()
-	data, readErr := os.ReadFile(b.file)
-	var e endpoint
-	if readErr == nil && json.Unmarshal(data, &e) == nil && e.Token == b.token {
-		_ = os.Remove(b.file)
-	}
-	return err
+	b.closeOnce.Do(func() {
+		err := b.server.Close()
+		var data []byte
+		current, statErr := b.root.Lstat(b.name)
+		if statErr == nil && current.Mode().IsRegular() && os.SameFile(b.info, current) {
+			if f, openErr := b.root.Open(b.name); openErr == nil {
+				opened, e := f.Stat()
+				if e == nil && os.SameFile(b.info, opened) {
+					data, _ = io.ReadAll(io.LimitReader(f, 4097))
+				}
+				_ = f.Close()
+			}
+		}
+		var e endpoint
+		if len(data) <= 4096 && json.Unmarshal(data, &e) == nil && e.Token == b.token {
+			if latest, e := b.root.Lstat(b.name); e == nil && latest.Mode().IsRegular() && os.SameFile(b.info, latest) {
+				_ = b.root.Remove(b.name)
+			}
+		}
+		b.closeErr = errors.Join(err, b.root.Close())
+	})
+	return b.closeErr
 }
 
 // Client discovers a live instance and never uses environment HTTP proxies.
@@ -177,8 +216,18 @@ func (c Client) Call(ctx context.Context, method string, args any, out any) erro
 	}
 	ctx, cancelCall := context.WithTimeout(ctx, timeout)
 	defer cancelCall()
-	entries, err := os.ReadDir(filepath.Join(c.Dir, "agent"))
+	root, _, err := safepath.Parent(c.Dir, filepath.Join("agent", "endpoint"), false)
 	if err != nil {
+		return errors.New("no running NetFlow agent bridge found")
+	}
+	defer root.Close()
+	dir, err := root.Open(".")
+	if err != nil {
+		return errors.New("no running NetFlow agent bridge found")
+	}
+	entries, readErr := dir.ReadDir(-1)
+	closeErr := dir.Close()
+	if readErr != nil || closeErr != nil {
 		return errors.New("no running NetFlow agent bridge found")
 	}
 	var active []endpoint
@@ -190,9 +239,22 @@ func (c Client) Call(ctx context.Context, method string, args any, out any) erro
 		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "endpoint-") || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		file := filepath.Join(c.Dir, "agent", entry.Name())
-		data, e := os.ReadFile(file)
-		if e != nil || len(data) > 4096 {
+		info, e := root.Lstat(entry.Name())
+		if e != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		f, e := root.Open(entry.Name())
+		if e != nil {
+			continue
+		}
+		opened, e := f.Stat()
+		if e != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+			_ = f.Close()
+			continue
+		}
+		data, e := io.ReadAll(io.LimitReader(f, 4097))
+		closeErr := f.Close()
+		if e != nil || closeErr != nil || len(data) > 4096 {
 			continue
 		}
 		var ep endpoint

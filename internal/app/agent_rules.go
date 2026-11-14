@@ -22,6 +22,7 @@ import (
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/tun"
 	"github.com/neko233-com/netflow/internal/validation"
 )
@@ -279,7 +280,7 @@ func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options
 	hashes[catalogPath] = catalogHash
 	if a.kernelOptions != nil {
 		path := filepath.Join(a.dir, "kernel-options.json")
-		if data, err := os.ReadFile(path); err == nil {
+		if data, err := safepath.ReadFile(a.dir, "kernel-options.json"); err == nil {
 			hashes[path] = sha256.Sum256(data)
 		} else if errors.Is(err, os.ErrNotExist) {
 			hashes[path] = [32]byte{}
@@ -293,7 +294,7 @@ func (a *App) previewSources(catalog profile.File, catalogHash [32]byte, options
 		if rel, ok := relativeProfiles[id]; ok {
 			base, path, err = readProfileFile(a.dir, rel)
 		} else {
-			base, err = os.ReadFile(path)
+			base, err = safepath.ReadFile(a.dir, "config.yaml")
 		}
 		if err != nil {
 			return nil, nil, nil, err

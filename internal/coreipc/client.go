@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/rpc"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/rules"
+	"github.com/neko233-com/netflow/internal/safepath"
 )
 
 // Client is an engine over a private authenticated connection. It never opens
@@ -103,26 +103,16 @@ func (c *Client) compose(dir string) ([]byte, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, "config.yaml")
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	file, err := safepath.CreateExclusive(dir, "config.yaml", []byte(core.DefaultConfig), false)
 	if err == nil {
-		_, err = io.WriteString(file, core.DefaultConfig)
-		closeErr := file.Close()
-		if err == nil {
-			err = closeErr
-		}
+		err = file.Close()
 	} else if errors.Is(err, os.ErrExist) {
 		err = nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, MaxConfigBytes+1))
+	data, err := safepath.ReadFile(dir, "config.yaml")
 	if err != nil {
 		return nil, err
 	}

@@ -2,9 +2,10 @@ package tun
 
 import (
 	"fmt"
-	"os"
+	"path/filepath"
 
 	"github.com/metacubex/mihomo/constant/features"
+	"github.com/neko233-com/netflow/internal/safepath"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -99,7 +100,8 @@ func ensureFakeIP(cfg map[string]any) {
 
 // ApplyFile rewrites a mihomo YAML file with Use. It does not start the kernel.
 func ApplyFile(path string, enable bool) error {
-	data, err := os.ReadFile(path)
+	dir, name := filepath.Dir(path), filepath.Base(path)
+	data, err := safepath.ReadFile(dir, name)
 	if err != nil {
 		return err
 	}
@@ -114,7 +116,7 @@ func ApplyFile(path string, enable bool) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, out, 0o644)
+	return safepath.CompareAndWrite(dir, name, data, out)
 }
 
 func mapAny(v any) map[string]any {

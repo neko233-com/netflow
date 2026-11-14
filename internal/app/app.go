@@ -25,6 +25,7 @@ import (
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/secretstore"
 	"github.com/neko233-com/netflow/internal/service"
 	"github.com/neko233-com/netflow/internal/sitetest"
@@ -780,7 +781,7 @@ func (a *App) installCurrentProfile() error {
 		return err
 	}
 	body = profile.EnsureMixedPort(body, 7897)
-	return os.WriteFile(filepath.Join(a.dir, "config.yaml"), body, 0o600)
+	return safepath.WriteFile(a.dir, "config.yaml", body)
 }
 
 func (a *App) loadGroups() {
@@ -796,7 +797,7 @@ func (a *App) loadGroupsWithSelection(restoreSelection bool) error {
 	if a.core != nil && a.core.Status().Running {
 		body, err = a.core.EffectiveConfig()
 	} else {
-		body, err = os.ReadFile(filepath.Join(a.dir, "config.yaml"))
+		body, err = safepath.ReadFile(a.dir, "config.yaml")
 	}
 	if err != nil {
 		a.model.Notice = err.Error()
@@ -1081,12 +1082,12 @@ func (a *App) UseProfile(uid string) error {
 	if err := a.validateEffectiveProfile(body, uid); err != nil {
 		return err
 	}
-	path := filepath.Join(a.dir, "config.yaml")
-	old, readErr := os.ReadFile(path)
+	old, readErr := safepath.ReadFile(a.dir, "config.yaml")
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return readErr
 	}
-	if err := os.WriteFile(path, profile.EnsureMixedPort(body, 7897), 0600); err != nil {
+	nextConfig := profile.EnsureMixedPort(body, 7897)
+	if err := safepath.CompareAndWrite(a.dir, "config.yaml", old, nextConfig); err != nil {
 		return err
 	}
 	previousProfile := ""
@@ -1100,9 +1101,9 @@ func (a *App) UseProfile(uid string) error {
 		}
 		var restoreErr error
 		if readErr == nil {
-			restoreErr = os.WriteFile(path, old, 0600)
+			restoreErr = safepath.CompareAndWrite(a.dir, "config.yaml", nextConfig, old)
 		} else {
-			restoreErr = os.Remove(path)
+			restoreErr = safepath.CompareAndRemove(a.dir, "config.yaml", nextConfig)
 			if errors.Is(restoreErr, os.ErrNotExist) {
 				restoreErr = nil
 			}
@@ -1295,17 +1296,17 @@ func (a *App) SetMode(mode string) error {
 	if a.dir == "" {
 		return nil
 	}
-	path := filepath.Join(a.dir, "config.yaml")
-	data, err := os.ReadFile(path)
+	data, err := safepath.ReadFile(a.dir, "config.yaml")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, profile.SetMode(data, mode), 0o600); err != nil {
+	nextConfig := profile.SetMode(data, mode)
+	if err := safepath.CompareAndWrite(a.dir, "config.yaml", data, nextConfig); err != nil {
 		return err
 	}
 	if a.core != nil && a.core.Status().Running {
 		if err := a.core.Reload(); err != nil {
-			restoreErr := os.WriteFile(path, data, 0600)
+			restoreErr := safepath.CompareAndWrite(a.dir, "config.yaml", nextConfig, data)
 			if restoreErr == nil {
 				restoreErr = a.core.Reload()
 			}
@@ -1408,6 +1409,16 @@ func (a *App) DeleteProfile(uid string) error {
 		}
 		if catalog.Current == uid {
 			return errors.New("请先切换到其他订阅，再删除当前订阅")
+		}
+		found := false
+		for _, item := range catalog.Items {
+			if item.UID == uid {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errors.New("订阅不存在")
 		}
 		old = a.rewrites.Snapshot()
 		next := a.rewrites.Snapshot()

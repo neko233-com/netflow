@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/neko233-com/netflow/internal/safepath"
 )
 
 // CatalogItem is one subscription in profiles.json. It is not ImportHTTP's
@@ -74,8 +76,6 @@ type Store struct {
 // NewStore returns a store for dir.
 func NewStore(dir string) *Store { return &Store{dir: dir} }
 
-func (s *Store) path() string { return filepath.Join(s.dir, "profiles.json") }
-
 // Load returns an empty file when profiles.json is missing.
 func (s *Store) Load() (File, error) {
 	f, _, err := s.LoadSnapshot()
@@ -89,7 +89,7 @@ func (s *Store) LoadSnapshot() (File, [32]byte, error) {
 	if s == nil || s.dir == "" {
 		return File{}, empty, errors.New("profile store has no directory")
 	}
-	b, err := os.ReadFile(s.path())
+	b, err := safepath.ReadFile(s.dir, "profiles.json")
 	if errors.Is(err, os.ErrNotExist) {
 		return File{}, empty, nil
 	}
@@ -120,25 +120,7 @@ func (s *Store) Save(f File) error {
 		return err
 	}
 	b = append(b, '\n')
-	file, err := os.CreateTemp(s.dir, ".profiles-*.tmp")
-	if err != nil {
-		return err
-	}
-	name := file.Name()
-	defer os.Remove(name)
-	if err = file.Chmod(0600); err == nil {
-		_, err = file.Write(b)
-	}
-	if err == nil {
-		err = file.Sync()
-	}
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	return os.Rename(name, s.path())
+	return safepath.WriteFile(s.dir, "profiles.json", b)
 }
 
 func (s *Store) UpdateMetadata(uid, name, description string, options *CatalogOption) error {
@@ -220,18 +202,22 @@ func (s *Store) Delete(uid string) error {
 		return errors.New("订阅不存在")
 	}
 	rel := f.Items[idx].File
-	managed := filepath.Join(s.dir, "profiles")
-	abs := filepath.Join(s.dir, rel)
-	inside, err := filepath.Rel(managed, abs)
-	if rel == "" || err != nil || inside == "." || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) || filepath.IsAbs(inside) {
-		return errors.New("订阅文件路径无效")
+	if err := validateManagedProfilePath(rel); err != nil {
+		return err
+	}
+	removal, err := safepath.PrepareRemoval(s.dir, rel)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if removal != nil {
+		defer removal.Close()
 	}
 	f.Items = append(f.Items[:idx], f.Items[idx+1:]...)
 	if err := s.Save(f); err != nil {
 		return err
 	}
-	if err := os.Remove(abs); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	if removal != nil {
+		return removal.Remove()
 	}
 	return nil
 }
@@ -247,16 +233,32 @@ func (s *Store) DiscardFirstImport(uid string) error {
 		return errors.New("订阅目录已变化，无法自动回滚导入")
 	}
 	rel := f.Items[0].File
-	abs := filepath.Join(s.dir, rel)
-	inside, err := filepath.Rel(filepath.Join(s.dir, "profiles"), abs)
-	if rel == "" || err != nil || inside == "." || inside == ".." || filepath.IsAbs(inside) || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
-		return errors.New("订阅文件路径无效")
+	if err := validateManagedProfilePath(rel); err != nil {
+		return err
+	}
+	removal, err := safepath.PrepareRemoval(s.dir, rel)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if removal != nil {
+		defer removal.Close()
 	}
 	if err = s.Save(File{}); err != nil {
 		return err
 	}
-	if err = os.Remove(abs); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	if removal != nil {
+		return removal.Remove()
+	}
+	return nil
+}
+
+func validateManagedProfilePath(relative string) error {
+	if !filepath.IsLocal(relative) {
+		return errors.New("订阅文件路径无效")
+	}
+	inside, err := filepath.Rel("profiles", relative)
+	if err != nil || inside == "." || !filepath.IsLocal(inside) {
+		return errors.New("订阅文件路径无效")
 	}
 	return nil
 }
@@ -333,10 +335,11 @@ func (s *Store) ImportRemoteWithHeaders(raw string, fetch func(string) ([]byte, 
 		return CatalogItem{}, err
 	}
 	name := hostOf(raw)
-	uid, rel, err := s.createProfileFile(f.Items, body)
+	uid, rel, created, err := s.createProfileFile(f.Items, body)
 	if err != nil {
 		return CatalogItem{}, err
 	}
+	defer created.Close()
 	item := CatalogItem{
 		UID:     uid,
 		Name:    name,
@@ -352,8 +355,7 @@ func (s *Store) ImportRemoteWithHeaders(raw string, fetch func(string) ([]byte, 
 		f.Current = uid
 	}
 	if err := s.Save(f); err != nil {
-		_ = os.Remove(filepath.Join(s.dir, rel))
-		return CatalogItem{}, err
+		return CatalogItem{}, errors.Join(err, created.Remove())
 	}
 	return item, nil
 }
@@ -374,26 +376,25 @@ func (s *Store) ImportLocal(filename string, body []byte) (CatalogItem, error) {
 	if name == "" {
 		name = "New Profile"
 	}
-	uid, rel, err := s.createProfileFile(f.Items, body)
+	uid, rel, created, err := s.createProfileFile(f.Items, body)
 	if err != nil {
 		return CatalogItem{}, err
 	}
+	defer created.Close()
 	item := CatalogItem{UID: uid, Name: name, Type: "local", File: rel, Updated: time.Now().UTC().Truncate(time.Second)}
 	f.Items = append(f.Items, item)
 	if f.Current == "" {
 		f.Current = uid
 	}
 	if err := s.Save(f); err != nil {
-		_ = os.Remove(filepath.Join(s.dir, rel))
-		return CatalogItem{}, err
+		return CatalogItem{}, errors.Join(err, created.Remove())
 	}
 	return item, nil
 }
 
-func (s *Store) createProfileFile(items []CatalogItem, body []byte) (string, string, error) {
-	dir := filepath.Join(s.dir, "profiles")
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", "", err
+func (s *Store) createProfileFile(items []CatalogItem, body []byte) (string, string, *safepath.Created, error) {
+	if err := os.MkdirAll(s.dir, 0700); err != nil {
+		return "", "", nil, err
 	}
 	taken := make(map[string]bool, len(items))
 	for _, item := range items {
@@ -405,25 +406,14 @@ func (s *Store) createProfileFile(items []CatalogItem, body []byte) (string, str
 			continue
 		}
 		rel := filepath.Join("profiles", id+".yaml")
-		path := filepath.Join(s.dir, rel)
-		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		created, err := safepath.CreateExclusive(s.dir, rel, body, true)
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}
 		if err != nil {
-			return "", "", err
+			return "", "", nil, err
 		}
-		if _, err = file.Write(body); err == nil {
-			err = file.Sync()
-		}
-		if closeErr := file.Close(); err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			_ = os.Remove(path)
-			return "", "", err
-		}
-		return id, rel, nil
+		return id, rel, created, nil
 	}
 }
 

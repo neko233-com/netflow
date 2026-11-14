@@ -150,6 +150,36 @@ func vmVisibleWindows(pid uint32) int {
 	return count
 }
 
+func vmAgentJunctionSafety(t *testing.T) {
+	t.Helper()
+	base := t.TempDir()
+	config, outside := filepath.Join(base, "config"), filepath.Join(base, "outside")
+	if err := os.Mkdir(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(outside, 0700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(config, "agent")
+	c, done := context.WithTimeout(context.Background(), 15*time.Second)
+	out, err := vmCommand(c, "cmd.exe", "/c", "mklink", "/J", link, outside).CombinedOutput()
+	done()
+	if err != nil {
+		t.Fatalf("create Agent junction: %s %v", out, err)
+	}
+	defer os.Remove(link)
+	if bridge, err := agent.Start(config, func(context.Context, string, json.RawMessage) (any, error) { return nil, nil }); err == nil {
+		_ = bridge.Close()
+		t.Fatal("Agent started through a junction")
+	}
+	if err := (agent.Client{Dir: config}).Call(context.Background(), "status", nil, nil); err == nil {
+		t.Fatal("Agent discovery followed a junction")
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Fatal("Agent created files outside configuration directory")
+	}
+}
+
 func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -207,6 +237,16 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatalf("headless endpoint unavailable: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "agent", entries[0].Name()))
+	endpointFile, openErr := os.Open(filepath.Join(dir, "agent", entries[0].Name()))
+	if openErr != nil {
+		t.Fatal(openErr)
+	}
+	sd, aclErr := windows.GetSecurityInfo(windows.Handle(endpointFile.Fd()), windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	_ = endpointFile.Close()
+	user, userErr := windows.GetCurrentProcessToken().GetTokenUser()
+	if aclErr != nil || userErr != nil || !strings.Contains(sd.String(), "D:P") || !strings.Contains(sd.String(), user.User.Sid.String()) || strings.Count(sd.String(), "(A;") != 2 {
+		t.Fatal("headless Agent endpoint lacks its protected user-only ACL")
+	}
 	var endpoint struct {
 		PID uint32 `json:"pid"`
 	}
@@ -288,6 +328,49 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if out, err = call("apply", proposal.ProposalID); err != nil {
 		t.Fatalf("headless apply failed: %s %v", out, err)
 	}
+	// Simulate a maliciously redirected profile path while the installed
+	// headless Agent is running. Deletion must leave both the catalog and the
+	// file outside the configuration directory untouched.
+	outside := t.TempDir()
+	external := filepath.Join(outside, "outside.yaml")
+	if err := os.WriteFile(external, []byte("outside-data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "profiles", "unsafe-link")
+	c, done = context.WithTimeout(context.Background(), 15*time.Second)
+	linkOutput, linkErr := vmCommand(c, "cmd.exe", "/c", "mklink", "/J", link, outside).CombinedOutput()
+	done()
+	if linkErr != nil {
+		t.Fatalf("create profile junction: %s %v", linkOutput, linkErr)
+	}
+	defer os.Remove(link)
+	store := profile.NewStore(dir)
+	original, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	modified := original
+	modified.Items = append(append([]profile.CatalogItem(nil), original.Items...), profile.CatalogItem{UID: "unsafe-fixture", Name: "unsafe-fixture", Type: "local", File: filepath.Join("profiles", "unsafe-link", "outside.yaml")})
+	if err := store.Save(modified); err != nil {
+		t.Fatal(err)
+	}
+	if payload, err := call("delete-profile", "unsafe-fixture"); err == nil {
+		t.Fatalf("Agent deleted junction target: %s", payload)
+	}
+	if data, err := os.ReadFile(external); err != nil || string(data) != "outside-data" {
+		t.Fatal("Agent changed file outside profile directory")
+	}
+	after, err := store.Load()
+	if err != nil || len(after.Items) != len(modified.Items) {
+		t.Fatal("rejected profile deletion changed catalog")
+	}
+	if err := store.Save(original); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("installed Agent rejected profile deletion through a junction and preserved the external file")
 	if out, err = call("shutdown"); err != nil {
 		t.Fatalf("headless shutdown failed: %s %v", out, err)
 	}
@@ -385,6 +468,7 @@ func vmHeadlessParentExit(t *testing.T, agentExe, dir string) {
 // single-disk QEMU guest; it must never run against a workstation's routes.
 func TestWindowsVMEndToEnd(t *testing.T) {
 	requireDisposableVM(t)
+	vmAgentJunctionSafety(t)
 	var expected map[string]string
 	if err := json.Unmarshal([]byte(os.Getenv("NETFLOW_VM_EXPECTED")), &expected); err != nil || len(expected) != 3 {
 		t.Fatal("invalid expected binary hashes")

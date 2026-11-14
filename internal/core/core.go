@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/metacubex/mihomo/component/resolver"
-	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
 	mihomodns "github.com/metacubex/mihomo/dns"
 	"github.com/metacubex/mihomo/hub"
@@ -18,6 +17,7 @@ import (
 	"github.com/metacubex/mihomo/listener"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/tunnel"
+	"github.com/neko233-com/netflow/internal/safepath"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -254,10 +254,7 @@ func (c *Core) apply() error {
 	if err := writeDefaultConfig(path); err != nil {
 		return err
 	}
-	if err := config.Init(homeDir); err != nil {
-		return fmt.Errorf("init config dir: %w", err)
-	}
-	data, err := os.ReadFile(path)
+	data, err := safepath.ReadFile(homeDir, configFileName)
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
@@ -370,18 +367,14 @@ func suppressExternalController(data []byte) ([]byte, error) {
 }
 
 func writeDefaultConfig(path string) error {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	created, err := safepath.CreateExclusive(filepath.Dir(path), filepath.Base(path), []byte(DefaultConfig), false)
 	if errors.Is(err, os.ErrExist) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("create config: %w", err)
 	}
-	defer f.Close()
-	if _, err := io.WriteString(f, DefaultConfig); err != nil {
-		return fmt.Errorf("write config: %w", err)
-	}
-	return nil
+	return created.Close()
 }
 
 func releaseListeners() {
