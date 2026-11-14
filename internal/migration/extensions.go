@@ -28,6 +28,40 @@ func (s *Source) extensionData(id, kind string) []byte {
 	return nil
 }
 
+func (s *Source) selectedRuleData(uid string) ([]byte, error) {
+	i, ok := s.itemByID[uid]
+	if !ok || (s.index.Items[i].Type != "remote" && s.index.Items[i].Type != "local") {
+		return nil, errors.New("Verge 存档中的订阅不存在")
+	}
+	id := s.index.Items[i].Option.Rules
+	if id == "" {
+		id = "Rules"
+	}
+	return s.extensionData(id, "rules"), nil
+}
+
+// ReadArchivedRuleSequence reads only the rule sequence selected by the
+// original profile (or Verge's default Rules entry). It does not apply it.
+func ReadArchivedRuleSequence(root, relative, uid string) ([]byte, string, [32]byte, error) {
+	var empty [32]byte
+	if _, err := ArchivePath(root, relative); err != nil {
+		return nil, "", empty, err
+	}
+	data, err := readManaged(root, "verge-imports", relative, maxTotal)
+	if err != nil {
+		return nil, "", empty, err
+	}
+	source, err := readArchiveSelected(data, uid, false, false, false, true)
+	if err != nil {
+		return nil, "", empty, err
+	}
+	rules, err := source.selectedRuleData(uid)
+	if err != nil {
+		return nil, "", empty, err
+	}
+	return rules, filepath.Join(root, relative), sha256.Sum256(data), nil
+}
+
 func (s *Source) extensions(uid string) (profile.VergeExtensions, error) {
 	i, ok := s.itemByID[uid]
 	if !ok {
@@ -95,9 +129,9 @@ func readArchiveExtensions(archive []byte, uid string) (*Source, error) {
 }
 
 func readArchiveExtensionsWithScript(archive []byte, uid string, includeScript bool) (*Source, error) {
-	return readArchiveSelected(archive, uid, true, includeScript, false)
+	return readArchiveSelected(archive, uid, true, includeScript, false, false)
 }
-func readArchiveSelected(archive []byte, uid string, includeData, includeScript, includeGlobalScript bool) (*Source, error) {
+func readArchiveSelected(archive []byte, uid string, includeData, includeScript, includeGlobalScript, includeRules bool) (*Source, error) {
 	zr, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
 	if err != nil {
 		return nil, err
@@ -186,6 +220,13 @@ func readArchiveSelected(archive []byte, uid string, includeData, includeScript,
 	if includeScript {
 		wanted = append(wanted, item.Option.Script)
 	}
+	if includeRules {
+		id := item.Option.Rules
+		if id == "" {
+			id = "Rules"
+		}
+		wanted = append(wanted, id)
+	}
 	if includeGlobalScript {
 		wanted = append(wanted, "Script")
 	}
@@ -257,7 +298,7 @@ func readArchivedScriptSnapshot(root, relative, uid string, includeData bool, se
 	if err != nil {
 		return result, empty, err
 	}
-	source, err := readArchiveSelected(data, uid, includeData, selection.Profile, selection.Global)
+	source, err := readArchiveSelected(data, uid, includeData, selection.Profile, selection.Global, false)
 	if err != nil {
 		return result, empty, err
 	}

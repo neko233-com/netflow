@@ -3,14 +3,52 @@ package migration
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/neko233-com/netflow/internal/appdir"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
 )
+
+func TestReadArchivedRuleSequenceSupportsSelectedAndDefaultRules(t *testing.T) {
+	for _, defaultRules := range []bool{false, true} {
+		t.Run(fmt.Sprintf("default-%v", defaultRules), func(t *testing.T) {
+			source := fixture(t)
+			if defaultRules {
+				path := filepath.Join(source, "profiles.yaml")
+				body, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body = []byte(strings.ReplaceAll(strings.ReplaceAll(string(body), "rules: r1, ", ""), "uid: r1, type: rules", "uid: Rules, type: rules"))
+				if err := os.WriteFile(path, body, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s, err := ReadVerge(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := t.TempDir()
+			if _, err := s.ImportVerge(target); err != nil {
+				t.Fatal(err)
+			}
+			catalog, err := profile.NewStore(target).Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := catalog.Items[0]
+			data, archive, digest, err := ReadArchivedRuleSequence(target, item.Option.VergeArchive, item.Option.VergeUID)
+			if err != nil || !strings.Contains(string(data), "DOMAIN,example.test,DIRECT") || archive == "" || digest == ([32]byte{}) {
+				t.Fatal("selected archived rule sequence missing", err)
+			}
+		})
+	}
+}
 
 func fixture(t *testing.T) string {
 	t.Helper()

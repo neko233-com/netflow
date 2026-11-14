@@ -1,11 +1,31 @@
 package profile
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
 )
+
+func TestComposeVergeRulesUsesVergeSequenceOrder(t *testing.T) {
+	base := []byte("rules: ['DOMAIN,drop.test,DIRECT', 'MATCH,DIRECT']\n")
+	ext := VergeExtensions{Rules: []byte("prepend: ['DOMAIN,first.test,DIRECT']\nappend: ['DOMAIN,last.test,DIRECT']\ndelete: ['DOMAIN,drop.test,DIRECT']\n")}
+	output, err := ComposeVergeExtensions(base, ext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Rules []string `yaml:"rules"`
+	}
+	if err := yaml.Unmarshal(output, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"DOMAIN,first.test,DIRECT", "MATCH,DIRECT", "DOMAIN,last.test,DIRECT"}
+	if !reflect.DeepEqual(parsed.Rules, want) {
+		t.Fatalf("unexpected rule sequence: %v", parsed.Rules)
+	}
+}
 
 func TestComposeVergeExtensionsSequencesAndMerges(t *testing.T) {
 	base := []byte("proxies:\n  - {name: old, type: socks5, server: 127.0.0.1, port: 1}\n  - {name: keep, type: socks5, server: 127.0.0.1, port: 2}\nproxy-groups:\n  - {name: Select, type: select, proxies: [old, keep, DIRECT]}\n  - {name: Gone, type: select, proxies: [old]}\ndns:\n  enable: true\n  nameserver: [9.9.9.9]\n  nameserver-policy: {old.example: [9.9.9.9]}\nhosts: {old.example: 192.0.2.1}\nprofile: {store-selected: true}\nrules: ['MATCH,DIRECT']\n")

@@ -11,16 +11,16 @@ import (
 // VergeExtensions contains data-only profile enhancements. Scripts are never
 // executed by this composition path.
 type VergeExtensions struct {
-	Proxies, Groups, GlobalMerge, ProfileMerge []byte
+	Rules, Proxies, Groups, GlobalMerge, ProfileMerge []byte
 }
 
 // ComposeVergeExtensions applies proxy and group sequences, followed by the
 // global and subscription merges. The original subscription is not modified.
 func ComposeVergeExtensions(base []byte, ext VergeExtensions) ([]byte, error) {
-	if len(ext.Proxies)+len(ext.Groups)+len(ext.GlobalMerge)+len(ext.ProfileMerge) == 0 {
+	if len(ext.Rules)+len(ext.Proxies)+len(ext.Groups)+len(ext.GlobalMerge)+len(ext.ProfileMerge) == 0 {
 		return base, nil
 	}
-	for _, data := range [][]byte{ext.Proxies, ext.Groups, ext.GlobalMerge, ext.ProfileMerge} {
+	for _, data := range [][]byte{ext.Rules, ext.Proxies, ext.Groups, ext.GlobalMerge, ext.ProfileMerge} {
 		if len(data) > 8<<20 {
 			return nil, errors.New("Verge 扩展文件超过大小限制")
 		}
@@ -44,7 +44,7 @@ func ComposeVergeExtensions(base []byte, ext VergeExtensions) ([]byte, error) {
 	for _, step := range []struct {
 		field string
 		data  []byte
-	}{{"proxies", ext.Proxies}, {"proxy-groups", ext.Groups}} {
+	}{{"rules", ext.Rules}, {"proxies", ext.Proxies}, {"proxy-groups", ext.Groups}} {
 		if len(step.data) > 0 {
 			if err := applyVergeSequence(root, step.field, step.data); err != nil {
 				return nil, fmt.Errorf("Verge %s 扩展无效: %w", step.field, err)
