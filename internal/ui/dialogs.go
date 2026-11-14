@@ -548,8 +548,19 @@ func (m *Model) hotkeyBody(c *mygoui.Context, pal Palette) {
 	}
 }
 
+func backupButton(c *mygoui.Context, pal Palette, label, id string, disabled bool) bool {
+	b := mygoui.ButtonBase(c.Key(id)).Height(28).Padding(0, 10).Radius(6).Label(id).Disabled(disabled)
+	if disabled {
+		b.Background(pal.TextMuted.Alpha(0.18)).TextColor(pal.TextMuted)
+	} else {
+		b.Background(mygoui.Transparent).TextColor(pal.Text).Border(1, pal.Primary)
+	}
+	b.Children(func() { mygoui.Text(c, label).FontSize(13) })
+	return b.Clicked()
+}
+
 func (m *Model) backupBody(c *mygoui.Context, pal Palette) {
-	mygoui.Text(c, "自动备份尚未实现。关闭程序后可使用 Agent 的 backup-export 和 backup-restore 命令进行本地备份与恢复。").FontSize(12).TextColor(pal.Warning)
+	mygoui.Text(c, "自动备份尚未实现。恢复会写入新目录；备份包含敏感信息且未加密。").FontSize(12).TextColor(pal.Warning)
 	mygoui.Text(c, "自动备份").FontSize(16).Bold()
 	backupOff := false
 	mygoui.Row(c).AlignItems(mygoui.Center).Children(func() {
@@ -566,7 +577,63 @@ func (m *Model) backupBody(c *mygoui.Context, pal Palette) {
 		mygoui.Switch(c, &changeOff).Disabled(true).Label("backup-change-disabled")
 	})
 	mygoui.Text(c, "手动").FontSize(16).Bold()
-	mygoui.Text(c, "本地备份目前通过命令行操作；备份包含订阅凭据，请妥善保管。").FontSize(13)
+	mygoui.Text(c, "请选择尚不存在的备份文件。运行时备份排除缓存、日志和待处理的 GeoData 更新；若配置发生变化，需重试。").FontSize(12).TextColor(pal.TextMuted)
+	if backupButton(c, pal, "创建本地备份", "backup-create", m.BackupBusy) {
+		if m.Hooks.BrowseBackup == nil || m.Hooks.CreateBackupAsync == nil {
+			m.Notice = "本地备份不可用"
+			return
+		}
+		path, err := m.Hooks.BrowseBackup()
+		if err != nil {
+			m.Notice = "选择备份位置失败: " + err.Error()
+			return
+		}
+		if path != "" {
+			m.BackupBusy = true
+			m.Notice = "正在创建本地备份…"
+			if err := m.Hooks.CreateBackupAsync(path, func(err error) {
+				m.BackupBusy = false
+				if err != nil {
+					m.Notice = "备份失败: " + err.Error()
+				} else {
+					m.Notice = "本地备份已创建"
+				}
+			}); err != nil {
+				m.BackupBusy = false
+				m.Notice = "备份失败: " + err.Error()
+			}
+		}
+	}
+	if backupButton(c, pal, "恢复到新目录", "backup-restore", m.BackupBusy) {
+		if m.Hooks.BrowseRestore == nil || m.Hooks.RestoreBackupAsync == nil {
+			m.Notice = "本地恢复不可用"
+			return
+		}
+		archive, destination, err := m.Hooks.BrowseRestore()
+		if err != nil {
+			m.Notice = "选择恢复位置失败: " + err.Error()
+			return
+		}
+		if archive != "" && destination != "" {
+			m.BackupBusy = true
+			m.Notice = "正在验证并恢复备份…"
+			if err := m.Hooks.RestoreBackupAsync(archive, destination, func(err error) {
+				m.BackupBusy = false
+				if err != nil {
+					m.Notice = "恢复失败，新目录可能不完整: " + err.Error()
+				} else {
+					m.RestorePath = destination
+					m.Notice = "已恢复到新目录；复制目录后可使用 NETFLOW_CONFIG_DIR 启动"
+				}
+			}); err != nil {
+				m.BackupBusy = false
+				m.Notice = "恢复失败: " + err.Error()
+			}
+		}
+	}
+	if m.RestorePath != "" && filledButton(c, pal, "复制恢复目录", "backup-copy-restore", false) {
+		m.copy(m.RestorePath)
+	}
 	if filledButton(c, pal, "WebDAV 状态", "webdav-open", false) {
 		m.Dialogs.WebDAV = true
 	}

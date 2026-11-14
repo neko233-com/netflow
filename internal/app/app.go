@@ -97,6 +97,10 @@ type App struct {
 	providerWarning     string
 	providerJobs        map[string]providerJobRecord
 	profileJobs         map[string]profileJobRecord
+	backupJobs          map[string]backupJobRecord
+	backupBusy          bool
+	backupCancel        func()
+	backupDone          chan struct{}
 	webDAVProtected     string
 	webDAVProtectionErr error
 	localCoreFactory    func() coreEngine

@@ -71,6 +71,24 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "profiles", nil, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_backup_create", Description: "Create an unencrypted local backup while NetFlow is running. It contains subscription credentials, excludes volatile caches and logs, and fails if configuration changes during capture. Poll netflow_backup_job_status."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args BackupArgs) (*mcp.CallToolResult, BackupJob, error) {
+			var out BackupJob
+			err := client.Call(ctx, "backup-create", args, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_backup_job_status", Description: "Read a running local backup job. Completed jobs are kept for up to ten minutes, subject to capacity.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args BackupJobArgs) (*mcp.CallToolResult, BackupJob, error) {
+			var out BackupJob
+			err := client.Call(ctx, "backup-job-status", args, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_restore_backup", Description: "Validate a local NetFlow backup and restore it into a new directory outside the active configuration. It never overwrites an existing destination. Poll netflow_backup_job_status."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args RestoreArgs) (*mcp.CallToolResult, BackupJob, error) {
+			var out BackupJob
+			err := client.Call(ctx, "restore-create", args, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_import_profile", Description: "Start an asynchronous subscription import. The URL may contain credentials and is not returned in job results. Poll netflow_profile_job_status and inspect profiles before retrying a failed import."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, args ProfileImportArgs) (*mcp.CallToolResult, ProfileJob, error) {
 			var out ProfileJob

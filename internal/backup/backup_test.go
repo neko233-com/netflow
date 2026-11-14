@@ -2,7 +2,11 @@ package backup
 
 import (
 	"archive/zip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +47,22 @@ func TestOfflineSnapshotRoundTrip(t *testing.T) {
 		t.Fatal("backup allowed inside source")
 	}
 	target := filepath.Join(base, "restore")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	canceledTarget := filepath.Join(base, "canceled-restore")
+	if _, err := RestoreContext(ctx, archive, canceledTarget); err == nil {
+		t.Fatal("canceled restore succeeded")
+	}
+	if _, err := os.Stat(canceledTarget); !os.IsNotExist(err) {
+		t.Fatal("canceled restore created a destination")
+	}
+	insideTarget := filepath.Join(source, "restore-inside")
+	if _, err := RestoreOutside(context.Background(), archive, insideTarget, source); err == nil {
+		t.Fatal("restore was allowed inside the active configuration")
+	}
+	if _, err := os.Stat(insideTarget); !os.IsNotExist(err) {
+		t.Fatal("rejected restore created a destination")
+	}
 	if _, err := Restore(archive, target); err != nil {
 		t.Fatal(err)
 	}
@@ -116,8 +136,36 @@ func TestRestoreRejectsCorruptionAndUnsafePathsBeforeCreatingDirectory(t *testin
 	}
 }
 
+func TestRestoreRejectsOversizedZipDirectoryBeforeExtraction(t *testing.T) {
+	base := t.TempDir()
+	archive := filepath.Join(base, "too-many.zip")
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	for i := 0; i < maxFiles+2; i++ {
+		if _, err := zw.Create(fmt.Sprintf("files/%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(base, "target")
+	if _, err := Restore(archive, target); err == nil {
+		t.Fatal("oversized ZIP directory was accepted")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatal("invalid archive created a destination")
+	}
+}
+
 func TestPathIndexRejectsCrossPlatformCollisions(t *testing.T) {
-	for _, names := range [][]string{{"Profiles/a", "profiles/b"}, {"a/b", "a"}, {"A", "a"}} {
+	for _, names := range [][]string{{"Profiles/a", "profiles/b"}, {"a/b", "a"}, {"A", "a"}, {"K.yaml", "K.yaml"}} {
 		var index pathIndex
 		if err := index.add(names[0], true); err != nil {
 			t.Fatal(err)
@@ -125,6 +173,67 @@ func TestPathIndexRejectsCrossPlatformCollisions(t *testing.T) {
 		if err := index.add(names[1], true); err == nil {
 			t.Fatalf("accepted collision %v", names)
 		}
+	}
+}
+
+func TestRunningSnapshotExcludesVolatileFilesAndChecksContent(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "config")
+	put(t, dir, "profiles/p.yaml", "aaaa")
+	put(t, dir, "cache.db", "cache")
+	put(t, dir, "cache.db-wal", "wal")
+	put(t, dir, "logs/current.log", "logs")
+	put(t, dir, ".netflow-geodata-pending/manifest.json", "pending")
+	put(t, dir, "profiles/.netflow-tmp-fixture", "temporary")
+	archive := filepath.Join(base, "running.zip")
+	manifest, err := ExportRunning(context.Background(), dir, archive)
+	if err != nil || len(manifest.Files) != 1 || manifest.Files[0].Path != "profiles/p.yaml" {
+		t.Fatalf("running snapshot: %+v %v", manifest, err)
+	}
+	if !strings.Contains(manifest.Warning, "excluded") {
+		t.Fatal("omitted runtime data was not reported")
+	}
+	target := filepath.Join(base, "restored")
+	if restored, err := Restore(archive, target); err != nil {
+		t.Fatal(err)
+	} else if restored.Warning != runningWarning {
+		t.Fatal("running backup omissions were not reported at restore")
+	}
+	if data, err := os.ReadFile(filepath.Join(target, "profiles", "p.yaml")); err != nil || string(data) != "aaaa" {
+		t.Fatal("running snapshot did not restore profile")
+	}
+	if _, err := os.Stat(filepath.Join(target, "cache.db")); !os.IsNotExist(err) {
+		t.Fatal("runtime cache was restored")
+	}
+	sources, err := scanSources(context.Background(), dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	digest := sha256.Sum256([]byte("aaaa"))
+	entries := []Entry{{Path: "profiles/p.yaml", Size: 4, SHA256: hex.EncodeToString(digest[:])}}
+	file := filepath.Join(dir, "profiles", "p.yaml")
+	if err := os.WriteFile(file, []byte("bbbb"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(file, sources[0].info.ModTime(), sources[0].info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySourceHashes(context.Background(), root, sources, entries); err == nil {
+		t.Fatal("same-size change with restored timestamp was accepted")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	canceled := filepath.Join(base, "canceled.zip")
+	if _, err := ExportRunning(ctx, dir, canceled); err == nil {
+		t.Fatal("canceled snapshot succeeded")
+	}
+	if _, err := os.Stat(canceled); !os.IsNotExist(err) {
+		t.Fatal("canceled snapshot left an archive")
 	}
 }
 

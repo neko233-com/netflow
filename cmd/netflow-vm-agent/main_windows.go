@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -143,6 +144,13 @@ func verifyMedia(root string, m manifest) error {
 
 type cappedBuffer struct{ bytes.Buffer }
 
+// Logs can contain signed download URLs; never send them to the host bridge.
+var loggedURL = regexp.MustCompile(`(?i)https?://[^\s"\\<>]+`)
+
+func redactOutput(s string) string {
+	return loggedURL.ReplaceAllString(s, "[URL redacted]")
+}
+
 func (b *cappedBuffer) Write(p []byte) (int, error) {
 	n := len(p)
 	if remain := 256*1024 - b.Len(); remain > 0 {
@@ -167,9 +175,9 @@ func execute(m manifest, media string) result {
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	err := cmd.Run()
-	out.Output = output.String()
+	out.Output = redactOutput(output.String())
 	if err != nil {
-		out.Error = err.Error()
+		out.Error = redactOutput(err.Error())
 		return out
 	}
 	out.OK = true

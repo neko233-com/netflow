@@ -24,7 +24,7 @@ func Open(dir string) (*Store, error) {
 		return nil, errors.New("empty rewrite directory")
 	}
 	s := &Store{path: filepath.Join(dir, "agent-rules.json")}
-	data, err := safepath.ReadFile(dir, "agent-rules.json")
+	data, err := safepath.ReadFileLimit(dir, "agent-rules.json", 4<<20)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
 	}

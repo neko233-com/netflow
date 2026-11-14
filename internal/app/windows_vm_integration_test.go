@@ -315,6 +315,54 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 		t.Fatal("failed profile job exposed sensitive URL or did not fail")
 	}
 	t.Log("installed headless Agent imported, updated and deleted an inactive subscription without exposing its URL")
+	backupRoot := t.TempDir()
+	liveArchive := filepath.Join(backupRoot, "live.zip")
+	payload, err = call("backup-create", liveArchive)
+	var backupJob agent.BackupJob
+	if err != nil || json.Unmarshal(payload, &backupJob) != nil || strings.Contains(string(payload), liveArchive) {
+		t.Fatalf("live backup request failed: %s %v", payload, err)
+	}
+	until := time.Now().Add(45 * time.Second)
+	for backupJob.State == "pending" && time.Now().Before(until) {
+		payload, err = call("backup-job-status", backupJob.JobID)
+		if err != nil || json.Unmarshal(payload, &backupJob) != nil {
+			t.Fatalf("live backup job query failed: %s %v", payload, err)
+		}
+		if backupJob.State == "pending" {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	if backupJob.State != "succeeded" {
+		t.Fatalf("live backup did not complete: %+v", backupJob)
+	}
+	restored := filepath.Join(backupRoot, "restored")
+	payload, err = call("restore-create", liveArchive, restored)
+	var restoreJob agent.BackupJob
+	if err != nil || json.Unmarshal(payload, &restoreJob) != nil {
+		t.Fatalf("live restore request failed: %s %v", payload, err)
+	}
+	until = time.Now().Add(45 * time.Second)
+	for restoreJob.State == "pending" && time.Now().Before(until) {
+		payload, err = call("backup-job-status", restoreJob.JobID)
+		if err != nil || json.Unmarshal(payload, &restoreJob) != nil {
+			t.Fatalf("live restore job query failed: %s %v", payload, err)
+		}
+		if restoreJob.State == "pending" {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	if restoreJob.State != "succeeded" || restoreJob.Operation != "restore" {
+		t.Fatalf("live restore did not complete: %+v", restoreJob)
+	}
+	originalCatalog, e1 := vmHash(filepath.Join(dir, "profiles.json"))
+	restoredCatalog, e2 := vmHash(filepath.Join(restored, "profiles.json"))
+	if e1 != nil || e2 != nil || originalCatalog != restoredCatalog {
+		t.Fatal("live backup lost the profile catalog")
+	}
+	if _, err := os.Stat(filepath.Join(restored, "agent")); !os.IsNotExist(err) {
+		t.Fatal("live backup included the Agent endpoint")
+	}
+	t.Log("installed headless Agent created and restored a live backup without runtime tokens")
 	input := `{"scope":"global","operation":"set","layer":{"prepend":["DOMAIN,headless.example,DIRECT"]}}`
 	c, done := context.WithTimeout(context.Background(), 30*time.Second)
 	preview := vmCommand(c, agentExe, "--config-dir", dir, "preview")
@@ -585,6 +633,10 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		}
 	}
 	t.Log("installed CLI previewed and imported a Clash Verge profile")
+	// Keep this isolated test independent of external GeoIP download availability.
+	if err := os.WriteFile(filepath.Join(migrationTarget, "Country.mmdb"), vmGeoFixture, 0600); err != nil {
+		t.Fatal(err)
+	}
 	backupRoot := t.TempDir()
 	backupArchive := filepath.Join(backupRoot, "snapshot.zip")
 	backupTarget := filepath.Join(backupRoot, "restored")

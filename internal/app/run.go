@@ -52,6 +52,7 @@ func (a *App) Run() error {
 	var quitting bool
 	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { quitting = true })
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		a.stopBackup()
 		a.releaseHotkeys()
 		if a.profileAutoStop != nil {
 			close(a.profileAutoStop)
@@ -105,6 +106,16 @@ func (a *App) ready(quitting *bool) {
 	a.model.Hooks.UpdateProfileAsync = a.updateProfileAsync
 	a.model.Hooks.UpdateProfileViaProxyAsync = a.updateProfileViaProxyAsync
 	a.model.Hooks.BrowseProfiles = a.browseProfiles
+	a.model.Hooks.BrowseBackup = a.browseBackup
+	a.model.Hooks.CreateBackupAsync = func(path string, done func(error)) error {
+		_, err := a.beginBackupJob(path, time.Now(), done)
+		return err
+	}
+	a.model.Hooks.BrowseRestore = a.browseRestore
+	a.model.Hooks.RestoreBackupAsync = func(archive, destination string, done func(error)) error {
+		_, err := a.beginRestoreJob(archive, destination, time.Now(), done)
+		return err
+	}
 	a.model.Hooks.CreateProfileAsync = a.createProfileAsync
 	a.probeSlots = make(chan struct{}, 4)
 	a.probeStop = make(chan struct{})

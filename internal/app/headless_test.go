@@ -41,6 +41,68 @@ func TestHeadlessDispatcherSerializesAndStops(t *testing.T) {
 	}
 }
 
+func TestHeadlessAgentCreatesRunningBackup(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "config")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	config := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := New(Options{Dirs: appdir.Fixed(dir), Proxy: sysproxy.NewMemory(), TUN: tun.NewMemory(), Core: core.New()})
+	ctx, cancel := context.WithCancel(context.Background())
+	ready, finished := make(chan bool, 1), make(chan error, 1)
+	go func() { finished <- a.RunHeadless(ctx, HeadlessOptions{Ready: func(tun bool) { ready <- tun }}) }()
+	defer func() { cancel(); <-finished }()
+	select {
+	case <-ready:
+	case <-time.After(20 * time.Second):
+		t.Fatal("headless startup timed out")
+	}
+	client := agent.Client{Dir: dir, Timeout: 20 * time.Second}
+	archive := filepath.Join(base, "backup.zip")
+	var job agent.BackupJob
+	if err := client.Call(context.Background(), "backup-create", agent.BackupArgs{Path: archive}, &job); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for job.State == "pending" && time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+		if err := client.Call(context.Background(), "backup-job-status", agent.BackupJobArgs{JobID: job.JobID}, &job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if job.State != "succeeded" {
+		t.Fatalf("live backup failed: %+v", job)
+	}
+	target := filepath.Join(base, "restored")
+	var restore agent.BackupJob
+	if err := client.Call(context.Background(), "restore-create", agent.RestoreArgs{Archive: archive, Destination: filepath.Join(dir, "inside")}, &restore); err == nil {
+		t.Fatal("restore was allowed inside the active configuration")
+	}
+	if err := client.Call(context.Background(), "restore-create", agent.RestoreArgs{Archive: archive, Destination: target}, &restore); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for restore.State == "pending" && time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+		if err := client.Call(context.Background(), "backup-job-status", agent.BackupJobArgs{JobID: restore.JobID}, &restore); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if restore.State != "succeeded" || restore.Operation != "restore" {
+		t.Fatalf("restore job failed: %+v", restore)
+	}
+	if data, err := os.ReadFile(filepath.Join(target, "config.yaml")); err != nil || string(data) != config {
+		t.Fatalf("restored config: %s %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "agent")); !os.IsNotExist(err) {
+		t.Fatal("runtime Agent token was backed up")
+	}
+}
+
 func TestHeadlessAgentRewriteAndGracefulShutdown(t *testing.T) {
 	dir := t.TempDir()
 	config := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\nipv6: false\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"

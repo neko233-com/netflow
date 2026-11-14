@@ -117,6 +117,7 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 		// Prevent new callbacks, then wait for an active mutation to finish
 		// before closing services and the kernel that owns TUN and routes.
 		dispatcher.close()
+		a.stopBackup()
 		if a.profileAutoStop != nil {
 			close(a.profileAutoStop)
 		}

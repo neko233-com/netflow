@@ -39,6 +39,27 @@ type ProfileJob struct {
 type ProfileJobArgs struct {
 	JobID string `json:"job_id" jsonschema:"profile job identifier"`
 }
+
+type BackupArgs struct {
+	Path string `json:"path" jsonschema:"absolute new ZIP path outside the configuration directory"`
+}
+
+type BackupJob struct {
+	JobID     string    `json:"job_id"`
+	Operation string    `json:"operation"`
+	State     string    `json:"state"`
+	Error     string    `json:"error,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type RestoreArgs struct {
+	Archive     string `json:"archive" jsonschema:"absolute path to an existing NetFlow ZIP backup"`
+	Destination string `json:"destination" jsonschema:"absolute path to a new directory outside the running configuration"`
+}
+
+type BackupJobArgs struct {
+	JobID string `json:"job_id" jsonschema:"backup job identifier"`
+}
 type Status struct {
 	Running              bool          `json:"running"`
 	Headless             bool          `json:"headless"`

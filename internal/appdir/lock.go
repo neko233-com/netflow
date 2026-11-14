@@ -24,7 +24,20 @@ func Acquire(dir string) (*Lock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = tryLock(file); err != nil {
+	return lockFile(file)
+}
+
+// AcquireRoot locks an already pinned directory without resolving its path again.
+func AcquireRoot(root *os.Root) (*Lock, error) {
+	file, err := safepath.OpenLockAt(root, ".netflow.lock")
+	if err != nil {
+		return nil, err
+	}
+	return lockFile(file)
+}
+
+func lockFile(file *os.File) (*Lock, error) {
+	if err := tryLock(file); err != nil {
 		_ = file.Close()
 		return nil, err
 	}

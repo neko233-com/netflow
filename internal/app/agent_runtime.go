@@ -171,6 +171,21 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		if callErr = decodeStrict(args, &input); callErr == nil {
 			value, callErr = a.getProfileJob(input.JobID, time.Now())
 		}
+	case "backup-create":
+		var input agent.BackupArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.beginBackupJob(input.Path, time.Now(), nil)
+		}
+	case "backup-job-status":
+		var input agent.BackupJobArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.getBackupJob(input.JobID, time.Now())
+		}
+	case "restore-create":
+		var input agent.RestoreArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.beginRestoreJob(input.Archive, input.Destination, time.Now(), nil)
+		}
 	case "delete-profile":
 		var input agent.ProfileArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {

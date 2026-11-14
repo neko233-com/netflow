@@ -247,6 +247,7 @@ def main():
             names = {item["name"] for item in response["result"]["tools"]}
             expected = {"netflow_status", "netflow_diagnostics", "netflow_shutdown_headless", "netflow_set_tun", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
                         "netflow_profiles", "netflow_import_profile", "netflow_update_profile", "netflow_profile_job_status", "netflow_delete_profile",
+                        "netflow_backup_create", "netflow_backup_job_status", "netflow_restore_backup",
                         "netflow_providers", "netflow_update_provider", "netflow_provider_job_status",
                         "netflow_select_proxy", "netflow_set_mode", "netflow_use_profile", "netflow_close_connection",
                         "netflow_migration_preview", "netflow_migration_import", "netflow_migration_export"}

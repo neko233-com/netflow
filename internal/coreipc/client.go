@@ -112,7 +112,7 @@ func (c *Client) compose(dir string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := safepath.ReadFile(dir, "config.yaml")
+	data, err := safepath.ReadFileLimit(dir, "config.yaml", MaxConfigBytes)
 	if err != nil {
 		return nil, err
 	}

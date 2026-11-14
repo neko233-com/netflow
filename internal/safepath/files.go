@@ -98,16 +98,25 @@ func OpenRead(base, relative string) (*os.File, error) {
 }
 
 func ReadFile(base, relative string) ([]byte, error) {
+	return ReadFileLimit(base, relative, MaxFileBytes)
+}
+
+// ReadFileLimit applies a smaller caller-specific bound while preserving the
+// same directory and final-file checks as ReadFile.
+func ReadFileLimit(base, relative string, limit int64) ([]byte, error) {
+	if limit <= 0 || limit > MaxFileBytes {
+		return nil, errors.New("invalid managed file size limit")
+	}
 	f, err := OpenRead(base, relative)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > MaxFileBytes {
+	if int64(len(data)) > limit {
 		return nil, errors.New("managed file exceeds size limit")
 	}
 	return data, nil
@@ -120,6 +129,15 @@ func OpenLock(base, relative string) (*os.File, error) {
 		return nil, err
 	}
 	defer root.Close()
+	return OpenLockAt(root, name)
+}
+
+// OpenLockAt operates inside an already pinned directory; it does not take
+// ownership of root.
+func OpenLockAt(root *os.Root, name string) (*os.File, error) {
+	if root == nil || !filepath.IsLocal(name) || filepath.Base(name) != name {
+		return nil, errors.New("invalid lock path")
+	}
 	before, err := root.Lstat(name)
 	if errors.Is(err, os.ErrNotExist) {
 		before, err = nil, nil

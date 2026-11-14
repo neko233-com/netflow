@@ -88,7 +88,7 @@ func Open(dir string) (*Store, error) {
 		return nil, errors.New("配置目录为空")
 	}
 	s := &Store{path: filepath.Join(dir, "kernel-options.json")}
-	data, err := safepath.ReadFile(dir, "kernel-options.json")
+	data, err := safepath.ReadFileLimit(dir, "kernel-options.json", 65536)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
 	}

@@ -61,3 +61,16 @@ func TestLegacyAutostartCommandMatchesOnlyOwnedPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestRedactOutput(t *testing.T) {
+	input := `failure HTTPS://user:pass@example.test/path?token=secret and "https://other.test/file?sig=abc" diagnostic`
+	want := `failure [URL redacted] and "[URL redacted]" diagnostic`
+	if got := redactOutput(input); got != want {
+		t.Fatalf("redactOutput() = %q, want %q", got, want)
+	}
+	input = `escaped https://example.test/a?token=secret\" after`
+	want = `escaped [URL redacted]\" after`
+	if got := redactOutput(input); got != want {
+		t.Fatalf("redactOutput() = %q, want %q", got, want)
+	}
+}

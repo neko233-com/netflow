@@ -12,6 +12,9 @@ func TestManagedAtomicWritesAndConflictDetection(t *testing.T) {
 	if err := WriteFile(dir, "settings.json", []byte("old")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := ReadFileLimit(dir, "settings.json", 2); err == nil {
+		t.Fatal("caller size limit ignored")
+	}
 	if err := CompareAndWrite(dir, "settings.json", []byte("wrong"), []byte("new")); !errors.Is(err, ErrChanged) {
 		t.Fatalf("conflict accepted: %v", err)
 	}

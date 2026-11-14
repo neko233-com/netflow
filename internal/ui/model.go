@@ -45,6 +45,10 @@ type Hooks struct {
 	UpdateProfileAsync         func(uid string, done func(error))
 	UpdateProfileViaProxyAsync func(uid string, done func(error))
 	BrowseProfiles             func() ([]string, error)
+	BrowseBackup               func() (string, error)
+	CreateBackupAsync          func(string, func(error)) error
+	BrowseRestore              func() (string, string, error)
+	RestoreBackupAsync         func(string, string, func(error)) error
 	SaveProfileMetadata        func(form ProfileForm) error
 	SetProfileDNS              func(id string, enabled bool, text string) error
 	LoadEffectiveConfig        func() (string, error)
@@ -117,6 +121,8 @@ type Model struct {
 	DeleteUID          string
 	Prefs              Prefs
 	WebDAVSecretStored bool
+	BackupBusy         bool
+	RestorePath        string
 	Notice             string
 	Busy               string
 	DNSAsk             bool

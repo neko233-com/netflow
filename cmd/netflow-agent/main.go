@@ -24,7 +24,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags := flag.NewFlagSet("netflow-agent", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, update-geo, tun on|off, profiles, import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-export PATH, backup-restore PATH")
+		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, update-geo, tun on|off, profiles, import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, preview, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-export PATH, backup-restore PATH")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -107,7 +107,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	case "help":
 		flags.Usage()
 		return nil
-	case "diagnostics", "shutdown", "update-geo", "groups", "profiles", "import-profile", "update-profile", "delete-profile", "profile-job-status", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
+	case "diagnostics", "shutdown", "update-geo", "groups", "profiles", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
 		method := flags.Arg(0)
 		stdin := input
 		var input any
@@ -150,6 +150,21 @@ func run(args []string, input io.Reader, output io.Writer) error {
 				return errors.New("profile-job-status requires a job ID")
 			}
 			input = agent.ProfileJobArgs{JobID: flags.Arg(1)}
+		case "backup-create":
+			if flags.NArg() != 2 || !filepath.IsAbs(flags.Arg(1)) {
+				return errors.New("backup-create requires an absolute destination path")
+			}
+			input = agent.BackupArgs{Path: flags.Arg(1)}
+		case "backup-job-status":
+			if flags.NArg() != 2 || flags.Arg(1) == "" {
+				return errors.New("backup-job-status requires a job ID")
+			}
+			input = agent.BackupJobArgs{JobID: flags.Arg(1)}
+		case "restore-create":
+			if flags.NArg() != 3 || !filepath.IsAbs(flags.Arg(1)) || !filepath.IsAbs(flags.Arg(2)) {
+				return errors.New("restore-create requires absolute archive and new directory paths")
+			}
+			input = agent.RestoreArgs{Archive: flags.Arg(1), Destination: flags.Arg(2)}
 		case "import-profile":
 			if flags.NArg() != 1 {
 				return errors.New("import-profile reads one JSON object from stdin")
