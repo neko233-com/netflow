@@ -87,7 +87,7 @@ func (s *Source) extensions(uid string) (profile.VergeExtensions, error) {
 }
 
 func hasExtensions(ext profile.VergeExtensions) bool {
-	return len(ext.Proxies)+len(ext.Groups)+len(ext.GlobalMerge)+len(ext.ProfileMerge) > 0
+	return len(ext.Rules)+len(ext.Proxies)+len(ext.Groups)+len(ext.GlobalMerge)+len(ext.ProfileMerge) > 0
 }
 
 // ArchivePath only accepts the managed archive belonging to this data root.
@@ -137,8 +137,8 @@ func ComposeArchivedWithRules(root, relative, uid string, body []byte, includeRu
 
 // Only the index and referenced extensions are decompressed during a reload;
 // the potentially large original subscription archive remains untouched.
-func readArchiveExtensionsWithScript(archive []byte, uid string, includeScript bool) (*Source, error) {
-	return readArchiveSelected(archive, uid, true, includeScript, false, false)
+func readArchiveExtensionsWithScript(archive []byte, uid string, includeScript, includeRules bool) (*Source, error) {
+	return readArchiveSelected(archive, uid, true, includeScript, false, includeRules)
 }
 func readArchiveSelected(archive []byte, uid string, includeData, includeScript, includeGlobalScript, includeRules bool) (*Source, error) {
 	zr, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))

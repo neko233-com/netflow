@@ -201,7 +201,7 @@ func ExportVerge(target, destination string) (ExportResult, error) {
 				}
 				seenArchive[p.Option.VergeArchive] = archive
 			}
-			origin, err = readArchiveExtensionsWithScript(archive, p.Option.VergeUID, true)
+			origin, err = readArchiveExtensionsWithScript(archive, p.Option.VergeUID, true, p.Option.VergeRulesBeforeScripts)
 			if err != nil {
 				return ExportResult{}, err
 			}
@@ -306,6 +306,28 @@ func ExportVerge(target, destination string) (ExportResult, error) {
 			Append  []string `yaml:"append"`
 			Delete  []string `yaml:"delete"`
 		}{append(append([]string{}, layer.Prepend...), global.Prepend...), append(append([]string{}, layer.Append...), global.Append...), append(append([]string{}, layer.Remove...), global.Remove...)}
+		if origin != nil && p.Option.VergeRulesBeforeScripts {
+			originalRules, e := origin.selectedRuleData(p.Option.VergeUID)
+			if e != nil {
+				return ExportResult{}, e
+			}
+			if len(originalRules) > 0 {
+				var archived struct {
+					Prepend []string `yaml:"prepend"`
+					Append  []string `yaml:"append"`
+					Delete  []string `yaml:"delete"`
+				}
+				if e := yaml.Unmarshal(originalRules, &archived); e != nil {
+					return ExportResult{}, errors.New("原始 Verge 规则扩展无效")
+				}
+				if len(rules.Prepend)+len(rules.Append)+len(rules.Delete) > 0 {
+					result.Warnings = append(result.Warnings, "Agent 规则与 Verge 原始规则合并到脚本前，迁出后的执行顺序可能不同")
+				}
+				rules.Prepend = append(rules.Prepend, archived.Prepend...)
+				rules.Append = append(archived.Append, rules.Append...)
+				rules.Delete = append(archived.Delete, rules.Delete...)
+			}
+		}
 		if len(rules.Prepend)+len(rules.Append)+len(rules.Delete) > 0 {
 			rid, err := randomID()
 			if err != nil {

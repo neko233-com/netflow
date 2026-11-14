@@ -477,7 +477,7 @@ func (a *App) vergeScriptBaseline(ctx context.Context, d vergeScriptDraft) ([]by
 	var err error
 	if d.item.Option.VergeScriptApproval != nil {
 		var resolved scriptapproval.Resolved
-		resolved, err = scriptapproval.ResolveSnapshot(ctx, a.dir, *d.item.Option.VergeScriptApproval, d.base, d.item.Name, d.item.Option.VergeArchive, d.item.Option.VergeUID)
+		resolved, err = scriptapproval.ResolveSnapshotWithRules(ctx, a.dir, *d.item.Option.VergeScriptApproval, d.base, d.item.Name, d.item.Option.VergeArchive, d.item.Option.VergeUID, d.item.Option.VergeRulesBeforeScripts)
 		if err == nil {
 			managed = resolved.Managed
 			baseline, err = profile.RestoreVergeManagedFields(ctx, resolved.Body, managed)
@@ -491,7 +491,7 @@ func (a *App) vergeScriptBaseline(ctx context.Context, d vergeScriptDraft) ([]by
 	} else {
 		var archivePath string
 		var archiveHash [32]byte
-		managed, archivePath, archiveHash, err = migration.ComposeArchived(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, d.base)
+		managed, archivePath, archiveHash, err = migration.ComposeArchivedWithRules(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, d.base, d.item.Option.VergeRulesBeforeScripts)
 		if err == nil {
 			d.hashes[archivePath] = archiveHash
 		}
@@ -506,7 +506,7 @@ func (a *App) vergeScriptBaseline(ctx context.Context, d vergeScriptDraft) ([]by
 	if err != nil && d.item.Option.VergeScriptApproval != nil {
 		var path string
 		var hash [32]byte
-		managed, path, hash, err = migration.ComposeArchived(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, d.base)
+		managed, path, hash, err = migration.ComposeArchivedWithRules(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, d.base, d.item.Option.VergeRulesBeforeScripts)
 		if err == nil {
 			d.hashes[path] = hash
 			if d.target == d.active && d.status.Running {
@@ -537,7 +537,7 @@ func (a *App) vergeScriptBaseline(ctx context.Context, d vergeScriptDraft) ([]by
 
 func (a *App) vergeScriptPreviewInput(d vergeScriptDraft, baseline, managed []byte, selection migration.ScriptSelection, clock time.Time, protect bool) scriptpreview.PrepareInput {
 	return scriptpreview.PrepareInput{
-		Root: a.dir, Archive: d.item.Option.VergeArchive, UID: d.item.Option.VergeUID, ProfileName: d.item.Name, Base: d.base, Baseline: baseline, Selection: selection, Clock: clock,
+		Root: a.dir, Archive: d.item.Option.VergeArchive, UID: d.item.Option.VergeUID, ProfileName: d.item.Name, Base: d.base, Baseline: baseline, Selection: selection, Clock: clock, RulesBeforeScripts: d.item.Option.VergeRulesBeforeScripts,
 		Finalize: func(ctx context.Context, body []byte) ([]byte, error) {
 			if protect {
 				var err error

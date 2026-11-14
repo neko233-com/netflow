@@ -77,7 +77,7 @@ func (a *App) prepareVergeScriptCommit(ctx context.Context, proposal vergeScript
 	var sources map[string][32]byte
 	var err error
 	if approval != nil {
-		resolved, resolveErr := scriptapproval.ResolveSnapshot(ctx, a.dir, *approval, candidateBase, candidateName, d.item.Option.VergeArchive, d.item.Option.VergeUID)
+		resolved, resolveErr := scriptapproval.ResolveSnapshotWithRules(ctx, a.dir, *approval, candidateBase, candidateName, d.item.Option.VergeArchive, d.item.Option.VergeUID, d.item.Option.VergeRulesBeforeScripts)
 		if resolveErr != nil || !bytes.Equal(resolved.Body, p.Candidate.Body) {
 			return empty, scriptpreview.ErrSourcesChanged
 		}

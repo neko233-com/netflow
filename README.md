@@ -199,7 +199,7 @@ $source = "$env:APPDATA\io.github.clash-verge-rev.clash-verge-rev"
 & $agent migrate-export "$env:USERPROFILE\Desktop\netflow-verge-backup.zip"
 ```
 
-导入会合并订阅，保留已有订阅、节点选择、流量信息、下载选项及可转换的规则；已有当前订阅不会被替换。新迁入订阅会应用关联的节点和代理组增删，以及全局和订阅级数据合并扩展；原始扩展保存在 NetFlow 配置目录的私有存档中。Verge 脚本只保存，不会自动执行；规则追加顺序和依赖脚本的配置可能与 Verge 不同。旧版本已经迁入的订阅不会自动启用数据扩展，可在新的配置目录重新迁入。迁出时会尝试恢复关联的原始扩展；未关联的全局扩展、临时连接规则和部分配置无法完整迁出。迁出备份可能包含脚本和订阅凭据，目标 Verge 可能执行其中的脚本。系统代理、TUN 和开机自启不会自动启用。对应 MCP 工具是 `netflow_migration_preview`、`netflow_migration_import` 和 `netflow_migration_export`，迁入和迁出同样要求先关闭 NetFlow。迁出不会覆盖已有文件。
+导入会合并订阅，保留已有订阅、节点选择、流量信息、下载选项及可转换的规则；已有当前订阅不会被替换。新迁入订阅会在脚本之前应用关联或默认的 Verge 规则序列，以及节点和代理组增删；全局和订阅级数据合并分别在对应脚本之前应用。原始扩展保存在 NetFlow 配置目录的私有存档中。Verge 脚本只保存，不会自动执行。旧版本已经迁入的订阅保留原有规则顺序，也不会自动启用数据扩展，可在新的配置目录重新迁入。迁出时会尝试恢复关联的原始扩展；Agent 规则与原始规则合并后执行顺序可能不同，未关联的全局扩展、临时连接规则和部分配置无法完整迁出。迁出备份可能包含脚本和订阅凭据，目标 Verge 可能执行其中的脚本。系统代理、TUN 和开机自启不会自动启用。对应 MCP 工具是 `netflow_migration_preview`、`netflow_migration_import` 和 `netflow_migration_export`，迁入和迁出同样要求先关闭 NetFlow。迁出不会覆盖已有文件。
 
 新迁入的 Verge DNS 设置按字段覆盖订阅中的 DNS，保留未设置的原字段，并应用非空 hosts；编辑 DNS 内容后，该订阅改用 NetFlow 的整段 DNS 覆写，已迁入的 hosts 仍保留。旧版本已经迁入的订阅不会自动改变 DNS 行为，可在新的配置目录重新迁入以使用新的合并方式。
 

@@ -757,7 +757,7 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	if err != nil || len(proposal.RulesAfter) == 0 || proposal.RulesAfter[0] != "DOMAIN,agent.test,DIRECT" {
 		t.Fatal("Agent rule did not override script", err)
 	}
-	resolved, err := scriptapproval.ResolveSnapshot(context.Background(), dir, approval, commitDraft.base, commitDraft.item.Name, commitDraft.item.Option.VergeArchive, commitDraft.item.Option.VergeUID)
+	resolved, err := scriptapproval.ResolveSnapshotWithRules(context.Background(), dir, approval, commitDraft.base, commitDraft.item.Name, commitDraft.item.Option.VergeArchive, commitDraft.item.Option.VergeUID, commitDraft.item.Option.VergeRulesBeforeScripts)
 	if err != nil {
 		t.Fatal(err)
 	}

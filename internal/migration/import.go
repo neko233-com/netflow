@@ -140,15 +140,6 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 	if err != nil {
 		return ImportResult{}, err
 	}
-	rulesStore, err := rewrite.Open(target)
-	if err != nil {
-		return ImportResult{}, err
-	}
-	oldRules := rulesStore.Snapshot()
-	newRules := rulesStore.Snapshot()
-	if newRules.Profiles == nil {
-		newRules.Profiles = map[string]rewrite.Layer{}
-	}
 	if err = safeTargetDir(target, "profiles"); err != nil {
 		return ImportResult{}, err
 	}
@@ -222,7 +213,6 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 	mapped := map[string]string{}
 	var result ImportResult
 	result.Warnings = append(result.Warnings, s.Preview().Warnings...)
-	rulesChanged := false
 	for _, v := range s.index.Items {
 		if v.Type != "remote" && v.Type != "local" {
 			continue
@@ -254,6 +244,11 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 		if e != nil {
 			return ImportResult{}, e
 		}
+		ext.Rules, e = s.selectedRuleData(v.UID)
+		if e != nil {
+			return ImportResult{}, e
+		}
+		item.Option.VergeRulesBeforeScripts = true
 		item.Option.VergeExtensions = hasExtensions(ext)
 		if item.Name == "" {
 			item.Name = "迁入订阅"
@@ -299,16 +294,6 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 			item.Option.DNSVergeMerge = true
 			item.Option.DNSVergeHosts = string(s.dnsHosts)
 		}
-		if v.Option.Rules != "" {
-			layer, e := s.ruleLayer(v.Option.Rules)
-			if e != nil {
-				return ImportResult{}, e
-			}
-			if len(layer.Prepend)+len(layer.Append)+len(layer.Remove) > 0 {
-				newRules.Profiles[id] = layer
-				rulesChanged = true
-			}
-		}
 		catalog.Items = append(catalog.Items, item)
 		result.Imported++
 	}
@@ -327,19 +312,7 @@ func (s *Source) ImportVerge(target string) (ImportResult, error) {
 		}
 	}
 	result.ActiveProfile = catalog.Current
-	var saved rewrite.State
-	if rulesChanged {
-		saved, err = rulesStore.Replace(newRules, oldRules.Revision)
-		if err != nil {
-			return ImportResult{}, err
-		}
-	}
 	if err = catalogStore.Save(catalog); err != nil {
-		if rulesChanged {
-			if _, restore := rulesStore.Replace(oldRules, saved.Revision); restore != nil {
-				return ImportResult{}, errors.Join(err, fmt.Errorf("恢复规则失败: %w", restore))
-			}
-		}
 		return ImportResult{}, err
 	}
 	committed = true

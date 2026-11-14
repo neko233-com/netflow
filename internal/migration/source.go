@@ -338,6 +338,10 @@ func ReadVerge(source string) (*Source, error) {
 		if err != nil {
 			return nil, err
 		}
+		ext.Rules, err = s.selectedRuleData(item.UID)
+		if err != nil {
+			return nil, err
+		}
 		if hasExtensions(ext) {
 			body, err = profile.ComposeVergeExtensions(body, ext)
 			if err != nil {
@@ -382,16 +386,11 @@ func (s *Source) Preview() Preview {
 		if s.dnsFlags[item.UID] && len(s.dns) == 0 && len(s.dnsHosts) == 0 {
 			unsupported["有订阅启用 DNS 覆写，但源配置缺少 DNS 内容"] = true
 		}
-		if item.Option.Rules != "" {
-			if layer, err := s.ruleLayer(item.Option.Rules); err == nil && len(layer.Append) > 0 {
-				unsupported["追加规则在 NetFlow 中位于 MATCH 前，顺序可能与 Verge 不同"] = true
-			}
-		}
 	}
 	for msg := range s.providerWarnings {
 		unsupported[msg] = true
 	}
-	for _, msg := range []string{"脚本扩展会保留，但不会自动执行", "部分数据扩展引用不存在或类型不匹配，未应用", "追加规则在 NetFlow 中位于 MATCH 前，顺序可能与 Verge 不同", "有订阅启用 DNS 覆写，但源配置缺少 DNS 内容", "文件型规则或代理集合的外部文件未迁入，可能需要重新下载或修正路径", "HTTP 集合缓存未迁入，将在使用时重新下载"} {
+	for _, msg := range []string{"脚本扩展会保留，但不会自动执行", "部分数据扩展引用不存在或类型不匹配，未应用", "有订阅启用 DNS 覆写，但源配置缺少 DNS 内容", "文件型规则或代理集合的外部文件未迁入，可能需要重新下载或修正路径", "HTTP 集合缓存未迁入，将在使用时重新下载"} {
 		if unsupported[msg] {
 			out.Warnings = append(out.Warnings, msg)
 		}

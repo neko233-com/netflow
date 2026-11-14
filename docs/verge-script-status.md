@@ -14,4 +14,4 @@
 
 在订阅卡片右键菜单中选择“预览 Verge 脚本”，可勾选脚本、分页查看并单独应用；全不选可关闭脚本。已启用脚本的远程订阅可选择“按已启用脚本预览订阅更新”。CLI 的 `verge-script-preview` 从标准输入读取 `{"profile_id":"订阅ID","global":true,"profile":true}`，返回的 ID 可用于 `verge-script-apply ID`；`verge-script-update-preview PROFILE` 下载并预览订阅更新，`verge-script-rollback-preview PROFILE` 预览上一份设置。`verge-script-preview-rules` 和 `verge-script-preview-config` 分别按规则和 UTF-8 字节分页，后者必须使用上一页的 `next_offset`。MCP 提供 `netflow_preview_verge_script`、`netflow_preview_verge_subscription_update`、`netflow_apply_verge_script`、`netflow_preview_verge_script_rollback`、规则和配置分页及取消工具。全局脚本按所选订阅单独批准，并非对所有订阅一次性生效。
 
-迁入规则存储为 NetFlow 订阅规则并在脚本后应用，与原 Verge 的部分脚本观察顺序不同；Agent 的连接、订阅和全局规则也在脚本后应用。自动订阅更新、更多脚本 API、并发关闭和崩溃恢复仍需扩大兼容与真实环境验证，不能声称与 Verge 完全等价。
+新迁入的 Verge 规则序列在全局和订阅脚本之前应用，包括默认 `Rules` 序列；追加规则按原顺序位于已有规则之后，因此可能排在 `MATCH` 之后。Agent 的连接、订阅和全局规则在脚本后应用。为避免改变已批准的脚本或用户规则，旧版本迁入的订阅保留原有顺序。自动订阅更新、更多脚本 API、并发关闭和崩溃恢复仍需扩大兼容与真实环境验证，不能声称与 Verge 完全等价。

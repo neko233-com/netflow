@@ -195,7 +195,7 @@ func (a *App) prepareVergeScriptUpdate(ctx context.Context, d vergeScriptDraft, 
 	}
 	next := d
 	next.base = profile.EnsureMixedPort(downloaded, 7897)
-	managed, archivePath, archiveHash, err := migration.ComposeArchived(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, next.base)
+	managed, archivePath, archiveHash, err := migration.ComposeArchivedWithRules(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, next.base, d.item.Option.VergeRulesBeforeScripts)
 	if err != nil {
 		return empty, scriptpreview.ErrCandidate
 	}

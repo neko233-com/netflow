@@ -23,7 +23,7 @@ func (a *App) prepareVergeScriptDisable(ctx context.Context, d vergeScriptDraft)
 	if d.item.Option.VergeScriptApproval == nil {
 		return empty, errors.New("scripts are already disabled")
 	}
-	_, ext, archiveErr := migration.ReadArchivedCompositionSelected(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, migration.ScriptSelection{})
+	_, ext, archiveErr := migration.ReadArchivedCompositionSelectedWithRules(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, migration.ScriptSelection{}, d.item.Option.VergeRulesBeforeScripts)
 	if archiveErr == nil {
 		_, archiveErr = profile.ComposeVergeExtensions(d.base, ext)
 	}
@@ -46,7 +46,7 @@ func (a *App) prepareVergeScriptDisable(ctx context.Context, d vergeScriptDraft)
 			*d.baselineUnknown = true
 		}
 	}
-	candidate := scriptpreview.Candidate{Body: append([]byte(nil), d.base...), BaseSHA256: sha256.Sum256(d.base), ProfileNameSHA256: sha256.Sum256([]byte(d.item.Name)), OutputSHA256: sha256.Sum256(d.base), ArchiveRelative: d.item.Option.VergeArchive, VergeUID: d.item.Option.VergeUID, Clock: d.clock, DataOnlyWithoutArchive: true}
+	candidate := scriptpreview.Candidate{Body: append([]byte(nil), d.base...), BaseSHA256: sha256.Sum256(d.base), ProfileNameSHA256: sha256.Sum256([]byte(d.item.Name)), OutputSHA256: sha256.Sum256(d.base), ArchiveRelative: d.item.Option.VergeArchive, VergeUID: d.item.Option.VergeUID, Clock: d.clock, RulesBeforeScripts: d.item.Option.VergeRulesBeforeScripts, DataOnlyWithoutArchive: true}
 	return scriptpreview.PrepareCandidate(ctx, a.vergeScriptPreviewInput(d, baseline, nil, migration.ScriptSelection{}, d.clock, false), candidate)
 }
 
@@ -85,7 +85,7 @@ func (a *App) prepareVergeScriptRollback(ctx context.Context, d vergeScriptDraft
 		approval := *previous.Approval
 		selection = migration.ScriptSelection{Global: approval.Global, Profile: approval.Profile}
 		clock = approval.Clock
-		resolved, err := scriptapproval.ResolveSnapshot(ctx, a.dir, approval, next.base, next.item.Name, d.item.Option.VergeArchive, d.item.Option.VergeUID)
+		resolved, err := scriptapproval.ResolveSnapshotWithRules(ctx, a.dir, approval, next.base, next.item.Name, d.item.Option.VergeArchive, d.item.Option.VergeUID, d.item.Option.VergeRulesBeforeScripts)
 		if err != nil {
 			return empty, scriptpreview.ErrSourcesChanged
 		}
@@ -98,7 +98,7 @@ func (a *App) prepareVergeScriptRollback(ctx context.Context, d vergeScriptDraft
 		}
 	} else {
 		var ext profile.VergeExtensions
-		snapshot, ext, err = migration.ReadArchivedCompositionSelected(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, selection)
+		snapshot, ext, err = migration.ReadArchivedCompositionSelectedWithRules(a.dir, d.item.Option.VergeArchive, d.item.Option.VergeUID, selection, d.item.Option.VergeRulesBeforeScripts)
 		if err != nil {
 			return empty, scriptpreview.ErrCandidate
 		}
@@ -114,7 +114,7 @@ func (a *App) prepareVergeScriptRollback(ctx context.Context, d vergeScriptDraft
 		}
 		d.hashes[snapshot.ArchivePath] = snapshot.ArchiveSHA256
 	}
-	candidate := scriptpreview.Candidate{Body: append([]byte(nil), body...), BaseSHA256: sha256.Sum256(next.base), ArchiveSHA256: snapshot.ArchiveSHA256, ArchivePath: snapshot.ArchivePath, ArchiveRelative: d.item.Option.VergeArchive, VergeUID: d.item.Option.VergeUID, ProfileNameSHA256: sha256.Sum256([]byte(next.item.Name)), OutputSHA256: sha256.Sum256(body), Clock: clock, Selection: selection}
+	candidate := scriptpreview.Candidate{Body: append([]byte(nil), body...), BaseSHA256: sha256.Sum256(next.base), ArchiveSHA256: snapshot.ArchiveSHA256, ArchivePath: snapshot.ArchivePath, ArchiveRelative: d.item.Option.VergeArchive, VergeUID: d.item.Option.VergeUID, ProfileNameSHA256: sha256.Sum256([]byte(next.item.Name)), OutputSHA256: sha256.Sum256(body), Clock: clock, Selection: selection, RulesBeforeScripts: d.item.Option.VergeRulesBeforeScripts}
 	if selection.Global {
 		if snapshot.Global == nil {
 			return empty, scriptpreview.ErrSourcesChanged

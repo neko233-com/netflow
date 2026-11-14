@@ -1682,7 +1682,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		_, _ = io.WriteString(w, vmSubscription)
 	}))
 	defer subscriptionServer.Close()
-	vergeProfiles := fmt.Sprintf("current: p1\nitems:\n  - {uid: p1, type: remote, name: Test, url: %q, file: p1.yaml, option: {proxies: p2, groups: g1, merge: m1, script: s1}}\n  - {uid: p2, type: proxies, file: p2.yaml}\n  - {uid: g1, type: groups, file: g1.yaml}\n  - {uid: m1, type: merge, file: m1.yaml}\n  - {uid: Merge, type: merge, file: Merge.yaml}\n  - {uid: Script, type: script, file: global.js}\n  - {uid: s1, type: script, file: local.js}\n", subscriptionServer.URL+"?token=synthetic-secret")
+	vergeProfiles := fmt.Sprintf("current: p1\nitems:\n  - {uid: p1, type: remote, name: Test, url: %q, file: p1.yaml, option: {rules: r1, proxies: p2, groups: g1, merge: m1, script: s1}}\n  - {uid: r1, type: rules, file: r1.yaml}\n  - {uid: p2, type: proxies, file: p2.yaml}\n  - {uid: g1, type: groups, file: g1.yaml}\n  - {uid: m1, type: merge, file: m1.yaml}\n  - {uid: Merge, type: merge, file: Merge.yaml}\n  - {uid: Script, type: script, file: global.js}\n  - {uid: s1, type: script, file: local.js}\n", subscriptionServer.URL+"?token=synthetic-secret")
 	if err := os.WriteFile(filepath.Join(verge, "profiles.yaml"), []byte(vergeProfiles), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -1698,11 +1698,12 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, contents := range map[string]string{
+		"r1.yaml":    "prepend: ['DOMAIN,verge-before.netflow-test.example,DIRECT']\nappend: ['DOMAIN,verge-after.netflow-test.example,DIRECT']\n",
 		"p2.yaml":    "prepend: [{name: new, type: socks5, server: 127.0.0.1, port: 2}]\ndelete: [old]\n",
 		"g1.yaml":    "append: [{name: Extra, type: select, proxies: [DIRECT]}, {name: FromSet, type: select, use: [imported, remote, bad]}]\n",
 		"m1.yaml":    "profile: {store-selected: true}\nproxy-providers:\n  imported: {type: file, path: ./sets/nodes.yaml, health-check: {enable: false}}\n  remote: {type: http, url: 'http://10.233.42.1:18765/v1/provider.yaml', path: ./sets/remote.yaml, interval: 3600, health-check: {enable: false}}\n  bad: {type: http, url: 'http://10.233.42.1:18765/v1/missing?token=synthetic-secret', path: ./sets/bad.yaml, interval: 3600, health-check: {enable: false}}\nrule-providers:\n  blocked: {type: file, behavior: domain, format: yaml, path: ./sets/rules.yaml}\n",
 		"Merge.yaml": "profile: {store-fake-ip: false}\n",
-		"global.js":  `function main(c){c.rules.unshift("DOMAIN,global-script.netflow-test.example,DIRECT");return c}`,
+		"global.js":  `function main(c){if(c.rules[0]!=="DOMAIN,verge-before.netflow-test.example,DIRECT")throw Error("missing migrated rule");c.rules[0]="DOMAIN,global-script.netflow-test.example,DIRECT";return c}`,
 		"local.js":   `function main(c){c.rules.unshift("DOMAIN,local-script.netflow-test.example,DIRECT");c.tun={enable:false};c["external-controller"]="0.0.0.0:9090";return c}`,
 	} {
 		if err := os.WriteFile(filepath.Join(verge, "profiles", name), []byte(contents), 0600); err != nil {
@@ -1899,7 +1900,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		if err != nil || json.Unmarshal(out, &script) != nil || script.PreviewID == "" || script.Operation != "enable" {
 			t.Fatalf("TUN script preview failed: %s %v", out, err)
 		}
-		if len(script.RulesAfter.Rules) < 2 || !strings.Contains(strings.Join(script.RulesAfter.Rules, "\n"), "local-script.netflow-test.example") {
+		if len(script.RulesAfter.Rules) < 2 || !strings.Contains(strings.Join(script.RulesAfter.Rules, "\n"), "local-script.netflow-test.example") || strings.Contains(strings.Join(script.RulesAfter.Rules, "\n"), "verge-before.netflow-test.example") {
 			t.Fatal("script rule missing from preview")
 		}
 		out, err = callMigration("verge-script-apply", script.PreviewID)
@@ -2170,7 +2171,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 				}
 				body, readErr := os.ReadFile(filepath.Join(migrationTarget, "config.yaml"))
 				if readErr == nil && item.Option.VergeExtensions {
-					body, _, _, readErr = migration.ComposeArchived(migrationTarget, item.Option.VergeArchive, item.Option.VergeUID, body)
+					body, _, _, readErr = migration.ComposeArchivedWithRules(migrationTarget, item.Option.VergeArchive, item.Option.VergeUID, body, item.Option.VergeRulesBeforeScripts)
 				}
 				if readErr == nil {
 					body, readErr = profile.RemapVergeProviders(body, item.Option.VergeProviderPaths)

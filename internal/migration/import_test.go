@@ -131,8 +131,16 @@ func TestImportVergeDirectoryPreservesProfilesRulesAndDNS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules.Snapshot().Profiles[item.UID].Prepend) != 1 {
-		t.Fatal("rules not imported")
+	if len(rules.Snapshot().Profiles[item.UID].Prepend) != 0 || !item.Option.VergeRulesBeforeScripts {
+		t.Fatal("Verge rules were mixed into the Agent rewrite layer")
+	}
+	base, err := os.ReadFile(filepath.Join(target, item.File))
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed, _, _, err := ComposeArchivedWithRules(target, item.Option.VergeArchive, item.Option.VergeUID, base, item.Option.VergeRulesBeforeScripts)
+	if err != nil || !strings.Contains(string(composed), "DOMAIN,example.test,DIRECT") {
+		t.Fatal("Verge rule sequence not imported", err)
 	}
 	if _, err := os.Stat(filepath.Join(target, item.Option.VergeArchive)); err != nil {
 		t.Fatal("original extension archive missing")
@@ -140,6 +148,53 @@ func TestImportVergeDirectoryPreservesProfilesRulesAndDNS(t *testing.T) {
 	if err := s.ValidateTarget(filepath.Join(source, "nested")); err == nil {
 		t.Fatal("accepted target within Verge source")
 	}
+}
+
+func TestImportKeepsAgentRulesAndExportRetainsVergeSequence(t *testing.T) {
+	s, err := ReadVerge(fixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	store, err := rewrite.Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := store.Snapshot()
+	state.Global.Prepend = []string{"DOMAIN,agent.test,DIRECT"}
+	if _, err := store.Replace(state, state.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportVerge(target); err != nil {
+		t.Fatal(err)
+	}
+	store, err = rewrite.Open(target)
+	if err != nil || len(store.Snapshot().Global.Prepend) != 1 || store.Snapshot().Global.Prepend[0] != "DOMAIN,agent.test,DIRECT" {
+		t.Fatal("import changed existing Agent rules", err)
+	}
+	destination := filepath.Join(t.TempDir(), "verge.zip")
+	result, err := ExportVerge(target, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(result.Warnings, "\n"), "Agent 规则与 Verge 原始规则") {
+		t.Fatal("missing ordering warning")
+	}
+	exported, err := ReadVerge(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range exported.index.Items {
+		if item.Type != "remote" && item.Type != "local" {
+			continue
+		}
+		data, err := exported.selectedRuleData(item.UID)
+		if err != nil || !strings.Contains(string(data), "DOMAIN,agent.test,DIRECT") || !strings.Contains(string(data), "DOMAIN,example.test,DIRECT") {
+			t.Fatal("export lost a rule layer", err)
+		}
+		return
+	}
+	t.Fatal("exported profile missing")
 }
 
 func TestImportVergeRejectsArchiveTraversalAndRollsBackInvalidProfile(t *testing.T) {

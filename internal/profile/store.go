@@ -42,28 +42,29 @@ type SelectedNode struct {
 
 // CatalogOption is the remote form and the extension slots stored in the index.
 type CatalogOption struct {
-	UpdateInterval      int                  `json:"update_interval,omitempty"`
-	UseSystemProxy      bool                 `json:"use_system_proxy,omitempty"`
-	UseClashProxy       bool                 `json:"use_clash_proxy,omitempty"`
-	AcceptInvalid       bool                 `json:"allow_insecure,omitempty"`
-	AllowAutoUpdate     bool                 `json:"allow_auto_update,omitempty"`
-	Rules               string               `json:"rules,omitempty"`
-	Proxies             string               `json:"proxies,omitempty"`
-	Groups              string               `json:"groups,omitempty"`
-	Merge               string               `json:"merge,omitempty"`
-	Script              string               `json:"script,omitempty"`
-	UserAgent           string               `json:"user_agent,omitempty"`
-	TimeoutSeconds      int                  `json:"timeout,omitempty"`
-	DNSEnabled          bool                 `json:"dns_override_enabled,omitempty"`
-	DNSOverride         string               `json:"dns_override,omitempty"`
-	DNSVergeMerge       bool                 `json:"dns_verge_merge,omitempty"`
-	DNSVergeHosts       string               `json:"dns_verge_hosts,omitempty"`
-	VergeArchive        string               `json:"verge_archive,omitempty"`
-	VergeUID            string               `json:"verge_uid,omitempty"`
-	VergeExtensions     bool                 `json:"verge_extensions,omitempty"`
-	VergeScriptApproval *scriptmeta.Approval `json:"verge_script_approval,omitempty"`
-	VergeScriptPrevious *scriptmeta.Previous `json:"verge_script_previous,omitempty"`
-	VergeProviderPaths  map[string]string    `json:"verge_provider_paths,omitempty"`
+	UpdateInterval          int                  `json:"update_interval,omitempty"`
+	UseSystemProxy          bool                 `json:"use_system_proxy,omitempty"`
+	UseClashProxy           bool                 `json:"use_clash_proxy,omitempty"`
+	AcceptInvalid           bool                 `json:"allow_insecure,omitempty"`
+	AllowAutoUpdate         bool                 `json:"allow_auto_update,omitempty"`
+	Rules                   string               `json:"rules,omitempty"`
+	Proxies                 string               `json:"proxies,omitempty"`
+	Groups                  string               `json:"groups,omitempty"`
+	Merge                   string               `json:"merge,omitempty"`
+	Script                  string               `json:"script,omitempty"`
+	UserAgent               string               `json:"user_agent,omitempty"`
+	TimeoutSeconds          int                  `json:"timeout,omitempty"`
+	DNSEnabled              bool                 `json:"dns_override_enabled,omitempty"`
+	DNSOverride             string               `json:"dns_override,omitempty"`
+	DNSVergeMerge           bool                 `json:"dns_verge_merge,omitempty"`
+	DNSVergeHosts           string               `json:"dns_verge_hosts,omitempty"`
+	VergeArchive            string               `json:"verge_archive,omitempty"`
+	VergeUID                string               `json:"verge_uid,omitempty"`
+	VergeExtensions         bool                 `json:"verge_extensions,omitempty"`
+	VergeRulesBeforeScripts bool                 `json:"verge_rules_before_scripts,omitempty"`
+	VergeScriptApproval     *scriptmeta.Approval `json:"verge_script_approval,omitempty"`
+	VergeScriptPrevious     *scriptmeta.Previous `json:"verge_script_previous,omitempty"`
+	VergeProviderPaths      map[string]string    `json:"verge_provider_paths,omitempty"`
 }
 
 // MetadataPatch changes only specified fields. Download options apply only to
