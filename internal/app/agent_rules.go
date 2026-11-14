@@ -55,6 +55,9 @@ func (a *App) agentStatus() (agent.Status, error) {
 	if a.rewrites.CheckCurrent() != nil && out.RewriteWarning == "" {
 		out.RewriteWarning = "Rule file changed or is unreadable; inspect it and restart NetFlow."
 	}
+	if a.kernelOptions != nil && a.kernelOptions.CheckCurrent() != nil {
+		out.KernelOptionsWarning = "Kernel options file changed or is unreadable; inspect it and restart NetFlow."
+	}
 	if source, ok := a.core.(interface{ CacheWarning() string }); ok {
 		out.ProviderCacheWarning = source.CacheWarning()
 	}
@@ -99,6 +102,11 @@ func (a *App) prepareAgentPreview(change agent.Change) (previewDraft, error) {
 	}
 	if err := a.rewrites.CheckCurrent(); err != nil {
 		return previewDraft{}, err
+	}
+	if a.kernelOptions != nil {
+		if err := a.kernelOptions.CheckCurrent(); err != nil {
+			return previewDraft{}, err
+		}
 	}
 	status := a.core.Status()
 	if !status.Running {
@@ -222,6 +230,11 @@ func (a *App) verifyDraftSources(draft previewDraft, checked validation.Result) 
 func (a *App) finishAgentPreview(draft previewDraft, checked validation.Result) (agent.Preview, error) {
 	if err := a.rewrites.CheckCurrent(); err != nil {
 		return agent.Preview{}, err
+	}
+	if a.kernelOptions != nil {
+		if err := a.kernelOptions.CheckCurrent(); err != nil {
+			return agent.Preview{}, err
+		}
 	}
 	status := a.core.Status()
 	if !status.Running || a.tunBusy || a.core.ProfileID() != draft.active || a.rewrites.Snapshot().Revision != draft.revision || status.TUN != draft.status.TUN || status.Mode != draft.status.Mode || a.settings.TUN != draft.tunSetting {
@@ -416,6 +429,11 @@ func (a *App) agentApply(id string) (agent.ApplyResult, error) {
 	}
 	if (a.kernelOptions == nil) != (p.options == nil) || (p.options != nil && !reflect.DeepEqual(a.kernelOptions.Snapshot(), *p.options)) {
 		return agent.ApplyResult{}, errors.New("kernel options changed; preview again")
+	}
+	if a.kernelOptions != nil {
+		if err := a.kernelOptions.CheckCurrent(); err != nil {
+			return agent.ApplyResult{}, err
+		}
 	}
 	if err := a.checkAgentSources(p.sources); err != nil {
 		return agent.ApplyResult{}, err

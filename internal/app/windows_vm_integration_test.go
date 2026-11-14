@@ -301,6 +301,35 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if !status.TUN || !status.Headless {
 		t.Fatalf("headless TUN did not start: %+v", status)
 	}
+	var options agent.KernelOptionsResult
+	if output, err := call("kernel-option", "log-level", "warning"); err != nil || json.Unmarshal(output, &options) != nil || options.Overrides.LogLevel == nil || *options.Overrides.LogLevel != "warning" {
+		t.Fatalf("headless CLI could not set kernel option: %s %v", output, err)
+	}
+	options = agent.KernelOptionsResult{}
+	if output, err := call("kernel-option", "log-level", "inherit"); err != nil || json.Unmarshal(output, &options) != nil || options.Overrides.LogLevel != nil {
+		t.Fatalf("headless CLI could not restore inherited option: %s %v", output, err)
+	}
+	if output, err := call("kernel-option", "mixed-port", "0"); err == nil {
+		t.Fatalf("headless CLI accepted an invalid port: %s", output)
+	}
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	busyPort := strconv.Itoa(occupied.Addr().(*net.TCPAddr).Port)
+	if output, err := call("kernel-option", "mixed-port", busyPort); err == nil {
+		_ = occupied.Close()
+		t.Fatalf("headless CLI accepted an occupied port: %s", output)
+	}
+	_ = occupied.Close()
+	options = agent.KernelOptionsResult{}
+	if output, err := call("kernel-options"); err != nil || json.Unmarshal(output, &options) != nil || options.Overrides.MixedPort != nil {
+		t.Fatalf("headless CLI did not roll back the occupied port: %s %v", output, err)
+	}
+	if output, err := call("status"); err != nil || json.Unmarshal(output, &status) != nil || !status.TUN {
+		t.Fatalf("TUN did not survive option rollback: %s %v", output, err)
+	}
+	t.Log("installed headless CLI changed and inherited kernel settings while TUN was active")
 	entries, err := os.ReadDir(filepath.Join(dir, "agent"))
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("headless endpoint unavailable: %v", err)

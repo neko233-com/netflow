@@ -1,11 +1,49 @@
 package kernelopts
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
 )
+
+func TestStorePreservesExternalOptions(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := true
+	if err := s.Replace(Options{IPv6: &v}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "kernel-options.json")
+	external := []byte("{\"allow_lan\":true,\"future_field\":17}\n")
+	if err := os.WriteFile(path, external, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CheckCurrent(); !errors.Is(err, ErrConflict) {
+		t.Fatalf("check: %v", err)
+	}
+	if err := s.Replace(Options{}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("replace: %v", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(external) {
+		t.Fatalf("external data lost: %q %v", got, err)
+	}
+	if s.Snapshot().IPv6 == nil || !*s.Snapshot().IPv6 {
+		t.Fatal("in-memory value changed on conflict")
+	}
+	if err := os.WriteFile(path, []byte("{} {}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("trailing JSON accepted")
+	}
+}
 
 func TestTUNStackOverridePreservesAnchorsAndOtherFields(t *testing.T) {
 	base := []byte("common: &base\n  enable: false\n  stack: mixed\n  mtu: 1400\ntun: *base\nother: *base\n")

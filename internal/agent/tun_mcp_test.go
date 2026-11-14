@@ -12,6 +12,16 @@ import (
 func TestMCPRequestsTUN(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := Start(dir, func(_ context.Context, method string, args json.RawMessage) (any, error) {
+		if method == "kernel-options" {
+			return KernelOptionsResult{}, nil
+		}
+		if method == "kernel-option" {
+			var in KernelOptionArgs
+			if json.Unmarshal(args, &in) != nil || in.Name != "ipv6" || in.BoolValue == nil || !*in.BoolValue {
+				t.Error("incorrect kernel option request")
+			}
+			return KernelOptionsResult{}, nil
+		}
 		if method == "diagnostics" {
 			return Diagnostics{SchemaVersion: 1, ProfileCount: 2}, nil
 		}
@@ -57,6 +67,15 @@ func TestMCPRequestsTUN(t *testing.T) {
 	defer cs.Close()
 	if got := cs.InitializeResult().ServerInfo.Version; got != netflow.Version() {
 		t.Fatalf("MCP version %q does not match the application version %q", got, netflow.Version())
+	}
+	for _, call := range []*mcp.CallToolParams{
+		{Name: "netflow_kernel_options", Arguments: map[string]any{}},
+		{Name: "netflow_set_kernel_option", Arguments: map[string]any{"name": "ipv6", "bool_value": true}},
+	} {
+		result, err := cs.CallTool(ctx, call)
+		if err != nil || result.IsError {
+			t.Fatalf("kernel option tool failed: %v %+v", err, result)
+		}
 	}
 	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "netflow_set_tun", Arguments: map[string]any{"enabled": false}})
 	if err != nil || result.IsError {

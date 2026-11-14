@@ -29,6 +29,18 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "diagnostics", nil, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_kernel_options", Description: "Read explicit kernel overrides; omitted settings inherit the active subscription.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, KernelOptionsResult, error) {
+			var out KernelOptionsResult
+			err := client.Call(ctx, "kernel-options", nil, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_set_kernel_option", Description: "Change one kernel override, or explicitly inherit it from the subscription. Validates and reloads the core; failure attempts rollback. May interrupt connections and affect routing or listening ports."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in KernelOptionArgs) (*mcp.CallToolResult, KernelOptionsResult, error) {
+			var out KernelOptionsResult
+			err := client.Call(ctx, "kernel-option", in, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_shutdown_headless", Description: "Stop a headless NetFlow instance and restore its TUN routes. GUI instances reject this request."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, ActionResult, error) {
 			var out ActionResult

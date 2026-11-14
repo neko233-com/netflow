@@ -134,6 +134,22 @@ func TestHeadlessAgentRewriteAndGracefulShutdown(t *testing.T) {
 	if err := client.Call(context.Background(), "show", nil, nil); err == nil {
 		t.Fatal("headless instance claimed to have a window")
 	}
+	var options agent.KernelOptionsResult
+	if err := client.Call(context.Background(), "kernel-options", nil, &options); err != nil || options.Overrides.IPv6 != nil {
+		t.Fatalf("headless inherited options: %+v %v", options, err)
+	}
+	enabled := true
+	if err := client.Call(context.Background(), "kernel-option", agent.KernelOptionArgs{Name: "ipv6", BoolValue: &enabled}, &options); err != nil || options.Overrides.IPv6 == nil || !*options.Overrides.IPv6 {
+		t.Fatalf("headless option update: %+v %v", options, err)
+	}
+	options = agent.KernelOptionsResult{}
+	if err := client.Call(context.Background(), "kernel-option", agent.KernelOptionArgs{Name: "ipv6", Inherit: true}, &options); err != nil || options.Overrides.IPv6 != nil {
+		t.Fatalf("headless option inheritance: %+v %v", options, err)
+	}
+	invalidPort := 0
+	if err := client.Call(context.Background(), "kernel-option", agent.KernelOptionArgs{Name: "mixed-port", PortValue: &invalidPort}, &options); err == nil {
+		t.Fatal("headless Agent accepted disabled mixed port")
+	}
 	change := agent.Change{Scope: "global", Operation: "set", Layer: rewrite.Layer{Prepend: []string{"DOMAIN,headless.example,REJECT"}}}
 	var proposal agent.Preview
 	if err := client.Call(context.Background(), "preview", change, &proposal); err != nil {

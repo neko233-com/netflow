@@ -120,3 +120,56 @@ func TestKernelOptionsApplyPersistAndRollbackOccupiedPort(t *testing.T) {
 		t.Fatalf("system proxy port guard: %v", err)
 	}
 }
+
+func TestAgentKernelOptionsPreserveConflictsAndRejectTUNTransition(t *testing.T) {
+	dir := t.TempDir()
+	base := []byte(fmt.Sprintf("mixed-port: %d\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n", freePort(t)))
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), base, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := New(Options{Dirs: appdir.Fixed(dir), Store: appconfig.NewMemory(dir), Proxy: sysproxy.NewMemory(), TUN: tun.NewMemory(), Core: core.New()})
+	if err := a.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	defer a.core.Stop()
+	v := true
+	a.tunBusy = true
+	if _, err := a.agentSetKernelOption(agent.KernelOptionArgs{Name: "ipv6", BoolValue: &v}); err == nil {
+		t.Fatal("option changed during TUN transition")
+	}
+	a.tunBusy = false
+	if _, err := a.agentSetKernelOption(agent.KernelOptionArgs{Name: "ipv6", BoolValue: &v, Inherit: true}); err == nil {
+		t.Fatal("ambiguous option accepted")
+	}
+	if _, err := a.agentSetKernelOption(agent.KernelOptionArgs{Name: "ipv6", BoolValue: &v}); err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := a.agentPreview(agent.Change{Scope: "global", Operation: "clear"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "kernel-options.json")
+	external := []byte("{\"log_level\":\"debug\",\"future_field\":true}\n")
+	if err := os.WriteFile(path, external, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.agentKernelOptions(); err == nil {
+		t.Fatal("external options change was hidden")
+	}
+	if _, err := a.agentSetKernelOption(agent.KernelOptionArgs{Name: "ipv6", Inherit: true}); err == nil {
+		t.Fatal("external options change was overwritten")
+	}
+	if _, err := a.agentPreview(agent.Change{Scope: "global", Operation: "clear"}); err == nil {
+		t.Fatal("preview accepted externally modified options")
+	}
+	if _, err := a.agentApply(proposal.ProposalID); err == nil {
+		t.Fatal("apply accepted externally modified options")
+	}
+	status, err := a.agentStatus()
+	if err != nil || status.KernelOptionsWarning == "" {
+		t.Fatalf("missing options conflict status: %+v %v", status, err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(external) {
+		t.Fatalf("external options lost: %q %v", got, err)
+	}
+}

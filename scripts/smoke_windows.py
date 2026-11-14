@@ -245,7 +245,7 @@ def main():
             mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n"); mcp.stdin.flush()
             response = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
             names = {item["name"] for item in response["result"]["tools"]}
-            expected = {"netflow_status", "netflow_diagnostics", "netflow_shutdown_headless", "netflow_set_tun", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
+            expected = {"netflow_status", "netflow_diagnostics", "netflow_kernel_options", "netflow_set_kernel_option", "netflow_shutdown_headless", "netflow_set_tun", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
                         "netflow_profiles", "netflow_import_profile", "netflow_update_profile", "netflow_profile_job_status", "netflow_delete_profile",
                         "netflow_backup_create", "netflow_backup_job_status", "netflow_restore_backup", "netflow_backup_schedule", "netflow_backup_schedule_set", "netflow_webdav_config", "netflow_webdav_save", "netflow_webdav_clear", "netflow_webdav_list", "netflow_webdav_upload", "netflow_webdav_restore",
                         "netflow_providers", "netflow_update_provider", "netflow_provider_job_status",
@@ -253,6 +253,15 @@ def main():
                         "netflow_migration_preview", "netflow_migration_import", "netflow_migration_export"}
             if names != expected:
                 raise RuntimeError(f"unexpected MCP tools: {names}")
+            response = rpc({"jsonrpc":"2.0", "id":7, "method":"tools/call", "params":{"name":"netflow_kernel_options", "arguments":{}}})
+            if response.get("result", {}).get("isError") or "error" in response or "overrides" not in response.get("result", {}).get("structuredContent", {}):
+                raise RuntimeError(f"MCP kernel options failed: {response}")
+            response = rpc({"jsonrpc":"2.0", "id":8, "method":"tools/call", "params":{"name":"netflow_set_kernel_option", "arguments":{"name":"log-level", "string_value":"warning"}}})
+            if "error" in response or response.get("result", {}).get("isError") or response.get("result", {}).get("structuredContent", {}).get("overrides", {}).get("log_level") != "warning":
+                raise RuntimeError(f"MCP kernel option update failed: {response}")
+            response = rpc({"jsonrpc":"2.0", "id":9, "method":"tools/call", "params":{"name":"netflow_set_kernel_option", "arguments":{"name":"log-level", "inherit":True}}})
+            if "error" in response or response.get("result", {}).get("isError") or "overrides" not in response.get("result", {}).get("structuredContent", {}) or "log_level" in response.get("result", {}).get("structuredContent", {}).get("overrides", {}):
+                raise RuntimeError(f"MCP kernel option inheritance failed: {response}")
             response = rpc({"jsonrpc":"2.0", "id":3, "method":"tools/call", "params":{"name":"netflow_status", "arguments":{}}})
             if response.get("result", {}).get("isError") or "error" in response:
                 raise RuntimeError(f"MCP status failed: {response}")

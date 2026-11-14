@@ -99,6 +99,9 @@ func (a *App) applyKernelOptions(next kernelopts.Options) error {
 	if a.core == nil || !a.core.Status().Running {
 		return errors.New("内核未运行，无法应用设置")
 	}
+	if a.tunBusy {
+		return errors.New("虚拟网卡正在切换，请稍后重试")
+	}
 	if err := next.Validate(); err != nil {
 		return err
 	}

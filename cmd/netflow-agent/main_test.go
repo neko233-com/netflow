@@ -72,6 +72,39 @@ func TestImportProfileCLIReadsCredentialsFromStdin(t *testing.T) {
 	}
 }
 
+func TestKernelOptionCLI(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		if method == "kernel-options" {
+			return agent.KernelOptionsResult{}, nil
+		}
+		var in agent.KernelOptionArgs
+		if method != "kernel-option" || json.Unmarshal(raw, &in) != nil || in.Name != "ipv6" || in.BoolValue == nil || !*in.BoolValue {
+			return nil, errors.New("unexpected request")
+		}
+		return agent.KernelOptionsResult{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	var output bytes.Buffer
+	if err := run([]string{"--config-dir", dir, "kernel-options"}, strings.NewReader(""), &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config-dir", dir, "kernel-option", "ipv6", "true"}, strings.NewReader(""), &output); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"ipv6", "yes"}, {"unknown", "inherit"}, {"http-port", "many"}} {
+		if _, err := parseKernelOption(args[0], args[1]); err == nil {
+			t.Fatalf("invalid option accepted: %v", args)
+		}
+	}
+	if value, err := parseKernelOption("tun-stack", "inherit"); err != nil || !value.Inherit {
+		t.Fatal("inheritance was not parsed")
+	}
+}
+
 func TestWebDAVCLIReadsCredentialsFromStdinWithoutEcho(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {

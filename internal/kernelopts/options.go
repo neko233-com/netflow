@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -81,7 +82,10 @@ type Store struct {
 	mu    sync.RWMutex
 	path  string
 	value Options
+	raw   []byte
 }
+
+var ErrConflict = errors.New("kernel options file changed outside NetFlow; inspect it and restart")
 
 func Open(dir string) (*Store, error) {
 	if dir == "" {
@@ -103,9 +107,33 @@ func Open(dir string) (*Store, error) {
 	if err = dec.Decode(&s.value); err != nil {
 		return nil, fmt.Errorf("读取内核选项: %w", err)
 	}
+	var extra any
+	if err = dec.Decode(&extra); err != io.EOF {
+		return nil, errors.New("读取内核选项: unexpected trailing JSON")
+	}
+	s.raw = data
 	return s, s.value.Validate()
 }
 func (s *Store) Snapshot() Options { s.mu.RLock(); defer s.mu.RUnlock(); return clone(s.value) }
+
+func (s *Store) CheckCurrent() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, err := safepath.ReadFileLimit(filepath.Dir(s.path), filepath.Base(s.path), 65536)
+	if errors.Is(err, os.ErrNotExist) {
+		if s.raw == nil {
+			return nil
+		}
+		return ErrConflict
+	}
+	if err != nil {
+		return err
+	}
+	if s.raw == nil || !bytes.Equal(data, s.raw) {
+		return ErrConflict
+	}
+	return nil
+}
 
 // Replace persists before publishing the new snapshot; on failure neither changes.
 func (s *Store) Replace(next Options) error {
@@ -122,10 +150,14 @@ func (s *Store) Replace(next Options) error {
 	if err = os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 		return err
 	}
-	if err = safepath.WriteFile(filepath.Dir(s.path), filepath.Base(s.path), data); err != nil {
+	if err = safepath.CompareAndWrite(filepath.Dir(s.path), filepath.Base(s.path), s.raw, data); err != nil {
+		if errors.Is(err, safepath.ErrChanged) {
+			return ErrConflict
+		}
 		return err
 	}
 	s.value = clone(next)
+	s.raw = data
 	return nil
 }
 

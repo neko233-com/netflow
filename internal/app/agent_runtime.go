@@ -110,6 +110,13 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		value, callErr = a.agentStatus()
 	case "diagnostics":
 		value = a.diagnostics()
+	case "kernel-options":
+		value, callErr = a.agentKernelOptions()
+	case "kernel-option":
+		var input agent.KernelOptionArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentSetKernelOption(input)
+		}
 	case "shutdown":
 		if !a.headless || a.headlessCancel == nil {
 			callErr = errors.New("shutdown is available only for a headless instance")

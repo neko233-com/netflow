@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/neko233-com/netflow/internal/conn"
+	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/rewrite"
 )
 
@@ -11,6 +12,20 @@ type Profile struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Active bool   `json:"active"`
+}
+
+// KernelOptionsResult contains explicit overrides; omitted fields inherit the
+// active subscription and do not necessarily reflect its effective values.
+type KernelOptionsResult struct {
+	Overrides kernelopts.Options `json:"overrides"`
+}
+
+type KernelOptionArgs struct {
+	Name        string  `json:"name" jsonschema:"allow-lan, ipv6, unified-delay, log-level, tun-stack, mixed-port, socks-port, or http-port"`
+	Inherit     bool    `json:"inherit,omitempty" jsonschema:"remove this override and inherit the subscription value"`
+	BoolValue   *bool   `json:"bool_value,omitempty" jsonschema:"value for boolean options"`
+	StringValue *string `json:"string_value,omitempty" jsonschema:"value for log-level or tun-stack"`
+	PortValue   *int    `json:"port_value,omitempty" jsonschema:"listener port; 0 disables socks-port or http-port"`
 }
 
 type ProfileList struct {
@@ -123,6 +138,7 @@ type Status struct {
 	GeoRestart           bool          `json:"geo_restart_required"`
 	ProviderCacheWarning string        `json:"provider_cache_warning,omitempty"`
 	RewriteWarning       string        `json:"rewrite_warning,omitempty"`
+	KernelOptionsWarning string        `json:"kernel_options_warning,omitempty"`
 	TUNStacks            []string      `json:"tun_stacks"`
 	Mode                 string        `json:"mode"`
 	ActiveProfile        string        `json:"active_profile,omitempty"`

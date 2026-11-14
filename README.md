@@ -102,6 +102,14 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 
 CLI 还提供 `version`、`diagnostics`、`groups`、`rules [偏移 [数量]]`、`select <组> <节点>`、`mode <rule|global|direct>`、`use-profile <订阅 ID>` 和 `close-connection <连接 ID>`。`version` 无需运行桌面程序；其余操作有对应的 `netflow_` MCP 工具。设置页、CLI 和 MCP 的诊断摘要仅包含版本、平台、运行状态及计数，不包含订阅地址、配置目录、错误原文、令牌或连接详情。切换节点、模式、订阅及关闭连接会直接改变运行状态；关闭不存在的连接会返回 `closed: false`。规则覆写仍需要先预览再应用。
 
+GUI 和无界面模式都可通过 `kernel-options` 查看显式内核覆写，并通过 `kernel-option <名称> <值>` 修改：`allow-lan`、`ipv6`、`unified-delay` 接受 `true` 或 `false`；`log-level`、`tun-stack` 接受对应内核值；`mixed-port`、`socks-port`、`http-port` 接受端口数字。值为 `inherit` 时删除对应覆写并跟随订阅；未列出的字段也表示继承，而非当前生效值。对应 MCP 工具为 `netflow_kernel_options` 和 `netflow_set_kernel_option`，后者使用 `name`、相应的 `bool_value` / `string_value` / `port_value`，或 `inherit: true`。修改前校验，失败时尝试恢复原设置；修改可能重载内核、中断连接或改变监听范围。虚拟网卡切换中会拒绝修改；若选项文件被外部修改，会保留该文件并要求检查后重启。
+
+```powershell
+& $agent kernel-options
+& $agent kernel-option log-level warning
+& $agent kernel-option log-level inherit
+```
+
 GUI 或无界面实例运行时，`profiles` 可列出订阅；`import-profile` 从标准输入读取 JSON，避免把订阅地址放入命令参数。例如：
 
 ```powershell
