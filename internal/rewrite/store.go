@@ -1,6 +1,7 @@
 package rewrite
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,12 +12,17 @@ import (
 	"github.com/neko233-com/netflow/internal/safepath"
 )
 
-var ErrConflict = errors.New("rewrite revision changed; preview again")
+var ErrConflict = errors.New("rewrite state changed")
+
+func externalConflict() error {
+	return fmt.Errorf("%w: rules file changed outside NetFlow; inspect it and restart", ErrConflict)
+}
 
 type Store struct {
 	mu    sync.RWMutex
 	path  string
 	state State
+	raw   []byte // exact on-disk contents; nil means the file was absent
 }
 
 func Open(dir string) (*Store, error) {
@@ -40,6 +46,7 @@ func Open(dir string) (*Store, error) {
 	if err := s.state.Validate(); err != nil {
 		return nil, err
 	}
+	s.raw = data
 	return s, nil
 }
 
@@ -52,13 +59,34 @@ func clone(s State) State {
 
 func (s *Store) Snapshot() State { s.mu.RLock(); defer s.mu.RUnlock(); return clone(s.state) }
 
+// CheckCurrent rejects an external modification instead of silently presenting
+// stale in-memory rules as the current disk state. Restarting reopens the file.
+func (s *Store) CheckCurrent() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, err := safepath.ReadFileLimit(filepath.Dir(s.path), filepath.Base(s.path), 4<<20)
+	if errors.Is(err, os.ErrNotExist) {
+		if s.raw == nil {
+			return nil
+		}
+		return externalConflict()
+	}
+	if err != nil {
+		return err
+	}
+	if s.raw == nil || !bytes.Equal(data, s.raw) {
+		return externalConflict()
+	}
+	return nil
+}
+
 // Replace atomically persists an optimistic revision; failed writes keep the
 // in-memory state unchanged. The returned state has the new revision.
 func (s *Store) Replace(next State, expected uint64) (State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.state.Revision != expected {
-		return State{}, ErrConflict
+		return State{}, fmt.Errorf("%w: preview again", ErrConflict)
 	}
 	if err := next.Validate(); err != nil {
 		return State{}, err
@@ -74,9 +102,14 @@ func (s *Store) Replace(next State, expected uint64) (State, error) {
 	if err = os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 		return State{}, err
 	}
-	if err = safepath.WriteFile(filepath.Dir(s.path), filepath.Base(s.path), append(data, '\n')); err != nil {
+	data = append(data, '\n')
+	if err = safepath.CompareAndWrite(filepath.Dir(s.path), filepath.Base(s.path), s.raw, data); err != nil {
+		if errors.Is(err, safepath.ErrChanged) {
+			return State{}, externalConflict()
+		}
 		return State{}, err
 	}
 	s.state = clone(next)
+	s.raw = data
 	return clone(s.state), nil
 }

@@ -51,6 +51,10 @@ func (a *App) agentStatus() (agent.Status, error) {
 	st := a.core.Status()
 	connections, _, _ := a.core.Connections()
 	out := agent.Status{Running: st.Running, Headless: a.headless, TUN: st.TUN, TUNPending: a.tunBusy, TUNError: a.tunLastError, GeoPending: a.geoBusy, GeoError: a.geoLastError, GeoRestart: a.geoRestart, TUNStacks: tun.SupportedStacks(), Mode: st.Mode, ActiveProfile: a.core.ProfileID(), Revision: a.rewrites.Snapshot().Revision, Connections: connections, Overrides: a.rewrites.Snapshot()}
+	out.RewriteWarning = a.rewriteWarning
+	if a.rewrites.CheckCurrent() != nil && out.RewriteWarning == "" {
+		out.RewriteWarning = "Rule file changed or is unreadable; inspect it and restart NetFlow."
+	}
 	if source, ok := a.core.(interface{ CacheWarning() string }); ok {
 		out.ProviderCacheWarning = source.CacheWarning()
 	}
@@ -92,6 +96,9 @@ func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
 func (a *App) prepareAgentPreview(change agent.Change) (previewDraft, error) {
 	if a.rewrites == nil || a.core == nil || a.profiles == nil {
 		return previewDraft{}, errors.New("agent service is not ready")
+	}
+	if err := a.rewrites.CheckCurrent(); err != nil {
+		return previewDraft{}, err
 	}
 	status := a.core.Status()
 	if !status.Running {
@@ -213,6 +220,9 @@ func (a *App) verifyDraftSources(draft previewDraft, checked validation.Result) 
 }
 
 func (a *App) finishAgentPreview(draft previewDraft, checked validation.Result) (agent.Preview, error) {
+	if err := a.rewrites.CheckCurrent(); err != nil {
+		return agent.Preview{}, err
+	}
 	status := a.core.Status()
 	if !status.Running || a.tunBusy || a.core.ProfileID() != draft.active || a.rewrites.Snapshot().Revision != draft.revision || status.TUN != draft.status.TUN || status.Mode != draft.status.Mode || a.settings.TUN != draft.tunSetting {
 		return agent.Preview{}, errors.New("configuration or network state changed; preview again")

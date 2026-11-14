@@ -73,6 +73,33 @@ func TestAgentApplyValidatesPersistsAndRollsBack(t *testing.T) {
 	if _, err = a.agentApply(stale.ProposalID); err == nil {
 		t.Fatal("stale proposal accepted")
 	}
+	// A different program can change the managed rules file even while this
+	// process holds the configuration lock. Never overwrite that edit.
+	conflicting, err := a.agentPreview(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rulesPath := filepath.Join(dir, "agent-rules.json")
+	previousDisk, err := os.ReadFile(rulesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	external := []byte("{\"revision\":99,\"global\":{},\"future_field\":true}\n")
+	if err := os.WriteFile(rulesPath, external, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.agentPreview(change); !errors.Is(err, rewrite.ErrConflict) {
+		t.Fatalf("preview accepted external edit: %v", err)
+	}
+	if _, err := a.agentApply(conflicting.ProposalID); !errors.Is(err, rewrite.ErrConflict) {
+		t.Fatalf("apply accepted external edit: %v", err)
+	}
+	if got, err := os.ReadFile(rulesPath); err != nil || string(got) != string(external) {
+		t.Fatalf("external edit lost: %q %v", got, err)
+	}
+	if err := os.WriteFile(rulesPath, previousDisk, 0600); err != nil {
+		t.Fatal(err)
+	}
 	onDisk, _ := os.ReadFile(path)
 	if string(onDisk) != string(base) {
 		t.Fatal("base config changed")
@@ -146,5 +173,51 @@ func TestAgentApplyValidatesPersistsAndRollsBack(t *testing.T) {
 	rules = a.core.Rules()
 	if len(rules) < 2 || rules[0].Payload != "example.test" {
 		t.Fatalf("profile override leaked: %+v", rules)
+	}
+}
+
+func TestExpiredRuntimeRuleRemovedWhenStateFileConflicts(t *testing.T) {
+	dir := t.TempDir()
+	base := []byte(fmt.Sprintf("mixed-port: %d\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\nipv6: false\ndns:\n  enable: false\ntun:\n  enable: false\nrules:\n  - MATCH,DIRECT\n", freePort(t)))
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), base, 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := New(Options{Dirs: appdir.Fixed(dir), Store: appconfig.NewMemory(dir), Proxy: sysproxy.NewMemory(), TUN: tun.NewMemory(), Core: core.New()})
+	if err := a.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	defer a.core.Stop()
+	expires := time.Now().Add(2 * time.Second)
+	state := a.rewrites.Snapshot()
+	state.Connections = []rewrite.Connection{{ID: "test", ProfileID: a.core.ProfileID(), Rule: "DOMAIN,temporary.test,REJECT", ExpiresAt: expires}}
+	if _, err := a.rewrites.Replace(state, state.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.core.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if rules := a.core.Rules(); len(rules) < 2 || rules[0].Payload != "temporary.test" {
+		t.Fatalf("temporary rule absent: %+v", rules)
+	}
+	path := filepath.Join(dir, "agent-rules.json")
+	external := []byte("{\"revision\":99,\"global\":{},\"future_field\":true}\n")
+	if err := os.WriteFile(path, external, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if delay := time.Until(expires.Add(50 * time.Millisecond)); delay > 0 {
+		time.Sleep(delay)
+	}
+	if err := a.expireRules(time.Now()); !errors.Is(err, rewrite.ErrConflict) {
+		t.Fatalf("expected conflict: %v", err)
+	}
+	if rules := a.core.Rules(); len(rules) != 1 || rules[0].Payload == "temporary.test" {
+		t.Fatalf("expired rule still active: %+v", rules)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(external) {
+		t.Fatalf("external edit lost: %q %v", got, err)
+	}
+	status, err := a.agentStatus()
+	if err != nil || status.RewriteWarning == "" {
+		t.Fatalf("missing agent warning: %+v %v", status, err)
 	}
 }

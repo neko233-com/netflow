@@ -122,6 +122,7 @@ type Status struct {
 	GeoError             string        `json:"geo_error,omitempty"`
 	GeoRestart           bool          `json:"geo_restart_required"`
 	ProviderCacheWarning string        `json:"provider_cache_warning,omitempty"`
+	RewriteWarning       string        `json:"rewrite_warning,omitempty"`
 	TUNStacks            []string      `json:"tun_stacks"`
 	Mode                 string        `json:"mode"`
 	ActiveProfile        string        `json:"active_profile,omitempty"`

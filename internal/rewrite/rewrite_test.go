@@ -2,6 +2,8 @@ package rewrite
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -21,6 +23,55 @@ func TestComposePriorityAndExpiry(t *testing.T) {
 	}
 	if string(base) != "mixed-port: 1234\nrules:\n  - DOMAIN,remove.test,DIRECT\n  - DOMAIN,base.test,DIRECT\n  - MATCH,DIRECT\n" {
 		t.Fatal("base was modified")
+	}
+}
+
+func TestStorePreservesExternalChanges(t *testing.T) {
+	for _, initial := range []bool{false, true} {
+		t.Run(map[bool]string{false: "created", true: "modified-or-deleted"}[initial], func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if initial {
+				if _, err := s.Replace(State{Global: Layer{Prepend: []string{"DOMAIN,old.test,DIRECT"}}}, 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			original := s.Snapshot()
+			path := filepath.Join(dir, "agent-rules.json")
+			external := []byte("{\"revision\":77,\"global\":{},\"future_field\":true}\n")
+			if err := os.WriteFile(path, external, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.CheckCurrent(); !errors.Is(err, ErrConflict) {
+				t.Fatalf("check external change: %v", err)
+			}
+			if _, err := s.Replace(State{}, original.Revision); !errors.Is(err, ErrConflict) {
+				t.Fatalf("replace external change: %v", err)
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != string(external) {
+				t.Fatalf("external file changed: %q %v", got, err)
+			}
+			if !reflect.DeepEqual(s.Snapshot(), original) {
+				t.Fatal("in-memory state changed on conflict")
+			}
+			if initial {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.CheckCurrent(); !errors.Is(err, ErrConflict) {
+					t.Fatalf("check deletion: %v", err)
+				}
+				if _, err := s.Replace(State{}, original.Revision); !errors.Is(err, ErrConflict) {
+					t.Fatalf("replace deleted file: %v", err)
+				}
+				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("deleted file was recreated: %v", err)
+				}
+			}
+		})
 	}
 }
 

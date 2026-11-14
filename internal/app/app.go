@@ -64,17 +64,19 @@ type App struct {
 	svc       service.Manager
 	core      coreEngine
 
-	settings        appconfig.Settings
-	model           *ui.Model
-	dir             string
-	profiles        *profile.Store
-	sites           *sitetest.Store
-	started         time.Time
-	rewrites        *rewrite.Store
-	kernelOptions   *kernelopts.Store
-	agentBridge     *agent.Bridge
-	agentProposals  map[string]agentProposal
-	agentExpiryStop chan struct{}
+	settings                appconfig.Settings
+	model                   *ui.Model
+	dir                     string
+	profiles                *profile.Store
+	sites                   *sitetest.Store
+	started                 time.Time
+	rewrites                *rewrite.Store
+	kernelOptions           *kernelopts.Store
+	agentBridge             *agent.Bridge
+	agentProposals          map[string]agentProposal
+	agentExpiryStop         chan struct{}
+	expiryFallbackSignature string
+	rewriteWarning          string
 
 	win  *mygo.Window
 	tray *mygo.Tray

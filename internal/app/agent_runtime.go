@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/neko233-com/netflow/internal/agent"
@@ -407,11 +408,16 @@ func (a *App) expiryLoop(stop <-chan struct{}) {
 				continue
 			}
 			a.runOnMain(func() {
-				if err := a.expireRules(time.Now()); err != nil && a.model != nil {
-					a.model.Notice = "Agent 临时规则清理失败: " + err.Error()
-					if a.win != nil {
-						a.win.Invalidate()
+				if err := a.expireRules(time.Now()); err != nil {
+					a.rewriteWarning = "Temporary rule cleanup failed; inspect the rules file and application logs."
+					if a.model != nil {
+						a.model.Notice = "Agent 临时规则清理失败: " + err.Error()
+						if a.win != nil {
+							a.win.Invalidate()
+						}
 					}
+				} else {
+					a.rewriteWarning = ""
 				}
 			})
 		}
@@ -432,8 +438,25 @@ func (a *App) expireRules(now time.Time) error {
 	}
 	saved, err := a.rewrites.Replace(next, old.Revision)
 	if err != nil {
+		// Do not let a conflicting or unwritable state file keep an expired
+		// matcher active indefinitely. Compose omits expired rules even when
+		// the in-memory state still contains them. Avoid reloading every tick.
+		var expired []string
+		for _, c := range old.Connections {
+			if !c.ExpiresAt.After(now) {
+				expired = append(expired, c.ID+"/"+c.ExpiresAt.UTC().Format(time.RFC3339Nano))
+			}
+		}
+		signature := strings.Join(expired, "\x00")
+		if a.core != nil && a.core.Status().Running && signature != a.expiryFallbackSignature {
+			if reloadErr := a.core.Reload(); reloadErr != nil {
+				return errors.Join(err, fmt.Errorf("remove expired runtime rules: %w", reloadErr))
+			}
+			a.expiryFallbackSignature = signature
+		}
 		return err
 	}
+	a.expiryFallbackSignature = ""
 	if a.core != nil && a.core.Status().Running {
 		if err = a.core.Reload(); err != nil {
 			_, restoreErr := a.rewrites.Replace(old, saved.Revision)

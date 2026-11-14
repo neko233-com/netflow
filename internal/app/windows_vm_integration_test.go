@@ -668,6 +668,38 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if out, err = call("apply", proposal.ProposalID); err != nil {
 		t.Fatalf("headless apply failed: %s %v", out, err)
 	}
+	// A pending proposal must never overwrite an outside edit to the rule file.
+	c, done = context.WithTimeout(context.Background(), 30*time.Second)
+	preview = vmCommand(c, agentExe, "--config-dir", dir, "preview")
+	preview.Stdin = strings.NewReader(input)
+	out, err = preview.CombinedOutput()
+	done()
+	if err != nil || json.Unmarshal(out, &proposal) != nil || proposal.ProposalID == "" {
+		t.Fatalf("headless conflict preview failed: %s %v", out, err)
+	}
+	rulesFile := filepath.Join(dir, "agent-rules.json")
+	oldRules, err := os.ReadFile(rulesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modifiedRules := []byte("{\"revision\":99,\"global\":{},\"future_field\":true}\n")
+	if err := os.WriteFile(rulesFile, modifiedRules, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := call("apply", proposal.ProposalID); err == nil {
+		t.Fatalf("headless Agent overwrote an external rules edit: %s", out)
+	}
+	if data, err := os.ReadFile(rulesFile); err != nil || string(data) != string(modifiedRules) {
+		t.Fatal("headless Agent changed external rules edit")
+	}
+	var conflictStatus agent.Status
+	if out, err := call("status"); err != nil || json.Unmarshal(out, &conflictStatus) != nil || conflictStatus.RewriteWarning == "" {
+		t.Fatal("headless Agent omitted rules conflict warning")
+	}
+	if err := os.WriteFile(rulesFile, oldRules, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("installed headless Agent preserved external rules edits and reported the conflict")
 	// Simulate a maliciously redirected profile path while the installed
 	// headless Agent is running. Deletion must leave both the catalog and the
 	// file outside the configuration directory untouched.
