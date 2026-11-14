@@ -64,6 +64,11 @@ try {
     New-Item -ItemType Directory -Force -Path $context, $payload | Out-Null
     if ((docker version --format '{{.Server.Os}}') -ne 'linux') { throw 'A Linux Docker engine with nested KVM is required' }
     Ensure-NetFlowKVM
+    $env:GOOS='windows'; $env:GOARCH='amd64'
+    # Fail before packaging if the dedicated, integration-tagged test cannot build.
+    go test -p 1 '-tags=integration,with_gvisor,no_tailscale' '-ldflags=-s -w -H=windowsgui' -c -o (Join-Path $payload 'netflow-app.test.exe') ./internal/app
+    if ($LASTEXITCODE -ne 0) { throw 'Could not build Windows integration test' }
+    Remove-Item Env:GOOS,Env:GOARCH
     $version = (Get-Content -Raw mygo.json | ConvertFrom-Json).version
     $msi = Join-Path $repo "build/releases/$version/NetFlow-$version-windows-amd64.msi"
     if (-not (Test-Path -LiteralPath $msi -PathType Leaf)) {
@@ -92,14 +97,10 @@ try {
     foreach ($name in @('Dockerfile', '.dockerignore', 'entry.sh', 'download-media.sh', 'bridge.py', 'test_monitor.py', 'install.bat')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot "windows-vm/$name") -Destination (Join-Path $context $name) -Force
     }
-    $env:GOOS='windows'; $env:GOARCH='amd64'
     # Older runs included a separate unsigned bootstrapper. The verifier now
     # runs from the same optical-media test executable as the integration test.
     $obsoleteAgent = Join-Path $payload 'netflow-vm-agent.exe'
     if (Test-Path -LiteralPath $obsoleteAgent -PathType Leaf) { Remove-Item -LiteralPath $obsoleteAgent }
-    go test -p 1 '-tags=integration,with_gvisor,no_tailscale' '-ldflags=-s -w -H=windowsgui' -c -o (Join-Path $payload 'netflow-app.test.exe') ./internal/app
-    if ($LASTEXITCODE -ne 0) { throw 'Could not build Windows integration test' }
-    Remove-Item Env:GOOS,Env:GOARCH
     $source = Join-Path $repo "build/release-artifacts-$version/windows-amd64"
     Copy-Item -LiteralPath $msi -Destination (Join-Path $payload 'NetFlow.msi') -Force
     $hashes = [ordered]@{}
