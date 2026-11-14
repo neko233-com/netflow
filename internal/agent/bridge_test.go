@@ -53,6 +53,32 @@ func TestBridgeRequiresTokenAndRejectsBrowserOrigin(t *testing.T) {
 	}
 }
 
+func TestClientHandlesLargeResponsesAndReportsLimit(t *testing.T) {
+	large := strings.Repeat("x", 5<<20)
+	oversized := strings.Repeat("x", maxBridgeResponseBytes)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request request
+		if json.NewDecoder(r.Body).Decode(&request) != nil {
+			t.Error("bad request")
+			return
+		}
+		if request.Method == "big" {
+			_, _ = w.Write([]byte(`{"result":"` + oversized + `"}`))
+		} else {
+			_, _ = w.Write([]byte(`{"result":"` + large + `"}`))
+		}
+	}))
+	defer server.Close()
+	ep := endpoint{Address: strings.TrimPrefix(server.URL, "http://"), Token: "test"}
+	var got string
+	if err := (Client{}).call(context.Background(), ep, "small", nil, &got); err != nil || len(got) != len(large) {
+		t.Fatalf("large valid response: %d %v", len(got), err)
+	}
+	if err := (Client{}).call(context.Background(), ep, "big", nil, nil); err == nil || !strings.Contains(err.Error(), "32 MiB") {
+		t.Fatalf("oversized response: %v", err)
+	}
+}
+
 func TestClientIgnoresStaleAndRejectsAmbiguousInstances(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "agent"), 0700); err != nil {

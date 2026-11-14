@@ -111,6 +111,16 @@ func TestRollbackCLIUsesPreview(t *testing.T) {
 		if method == "rewrite-history" {
 			return agent.RewriteHistory{}, nil
 		}
+		if method == "preview-rules" {
+			var in agent.PreviewRulesArgs
+			if json.Unmarshal(raw, &in) != nil || in.ProposalID != "proposal" || in.Stage != "after" || in.Offset != 2 || in.Limit != 3 {
+				return nil, errors.New("incorrect preview page request")
+			}
+			return agent.PreviewRulesResult{Total: 3, Offset: 2, NextOffset: 3, Rules: []string{"MATCH,DIRECT"}}, nil
+		}
+		if method == "cancel-preview" {
+			return agent.ActionResult{OK: true}, nil
+		}
 		if method == "clear-rewrite-history" {
 			return agent.ClearRewriteHistoryResult{Revision: 2}, nil
 		}
@@ -130,6 +140,15 @@ func TestRollbackCLIUsesPreview(t *testing.T) {
 	}
 	if err := run([]string{"--config-dir", dir, "clear-rewrite-history"}, strings.NewReader(""), &output); err != nil {
 		t.Fatal(err)
+	}
+	if err := run([]string{"--config-dir", dir, "preview-rules", "proposal", "after", "2", "3"}, strings.NewReader(""), &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config-dir", dir, "cancel-preview", "proposal"}, strings.NewReader(""), &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"--config-dir", dir, "preview-rules", "proposal", "after", "-1"}, strings.NewReader(""), &output); err == nil {
+		t.Fatal("negative offset accepted")
 	}
 	if err := run([]string{"--config-dir", dir, "rollback-preview"}, strings.NewReader(`{"revision":0,"scope":"global"}`), &output); err != nil || !strings.Contains(output.String(), "proposal") {
 		t.Fatalf("rollback preview failed: %v", err)

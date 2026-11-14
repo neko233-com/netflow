@@ -98,6 +98,8 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 
 预览在独立进程中离线校验配置和本地规则、代理集合，不会为校验下载或修复 GeoData；配置引用缺失或损坏的 GeoData 时会返回错误，缺少 HTTP 集合缓存时会提示其下载内容未被验证。提案最多有效两分钟，配置、已校验的集合文件、GeoData、订阅、路由模式或 TUN 状态变化后须重新预览，TUN 切换期间不能预览或应用。应用失败时尝试恢复旧规则。连接层根据源 IP、目标域名或 IP、端口及网络匹配**后续连接**，可能同时影响其他符合条件的连接；已建立的连接不能被重新路由，可显式选择关闭原连接。规则只在规则模式下控制路由。Agent 状态包含连接元数据，务必只授予可信程序访问权限。
 
+预览默认只返回变更前后的前 100 条规则，每页还受编码后 256 KiB 上限约束；`rules_before_total`、`rules_after_total` 和对应 `truncated` 字段说明是否有更多内容。用 `preview-rules <proposal_id> before|after [偏移 [数量]]` 或 MCP `netflow_preview_rules` 分页，按返回的 `next_offset` 继续，直到等于 `total`；单次最多请求 500 条。GUI 展示首批结果、总数与警告，可复制提案 ID，通过 CLI/MCP 查看其余内容。用 `cancel-preview <proposal_id>` 或 MCP `netflow_cancel_preview` 可丢弃不再需要的提案。最多保留 32 个待处理提案，所保留的规则文字合计最多 64 MiB；单条规则编码后超过 256 KiB 会被拒绝。Agent 单次响应最多 32 MiB，超过时返回错误。
+
 可以主动回滚指定范围：GUI 的全局或订阅规则编辑器可选择历史版本、预览并应用，离线校验在后台执行；修改输入或关闭编辑器会取消尚未完成的校验。CLI 先运行 `rewrite-history` 查看历史版本，再把例如 `'{"revision":1,"scope":"global"}'` 通过标准输入传给 `rollback-preview`，检查返回的规则和警告后用 `apply <proposal_id>` 应用。订阅范围还需 `profile_id`，连接范围还需 `connection_id`；对应 MCP 工具是 `netflow_rewrite_history`、`netflow_preview_rollback` 和 `netflow_apply_rewrite`。只恢复选择的范围，其余规则保留；订阅必须仍然存在，恢复连接匹配器时原连接必须仍活动且匹配内容未变，并且不会延长原来的到期时间。历史中没有该连接匹配器时，回滚会清除当前匹配器。
 
 规则文件最多保存 8 个历史快照，历史与当前规则共限 4 MiB，空间不足时更早的快照会提前淘汰。快照可能包含曾应用失败的中间状态，应检查预览而非假定它此前生效。历史持久化并包含在备份中，可能保留过期连接的域名或 IP 等匹配信息；可用 `clear-rewrite-history` 或 MCP `netflow_clear_rewrite_history` 清除当前规则文件中的历史并使待应用提案失效。已有备份不受影响。

@@ -251,14 +251,32 @@ type RollbackArgs struct {
 }
 
 type Preview struct {
-	ProposalID    string    `json:"proposal_id"`
-	Revision      uint64    `json:"revision"`
-	ActiveProfile string    `json:"active_profile,omitempty"`
-	TargetProfile string    `json:"target_profile,omitempty"`
-	RulesBefore   []string  `json:"rules_before"`
-	RulesAfter    []string  `json:"rules_after"`
-	Warnings      []string  `json:"warnings,omitempty"`
-	ExpiresAt     time.Time `json:"expires_at"`
+	ProposalID           string    `json:"proposal_id"`
+	Revision             uint64    `json:"revision"`
+	ActiveProfile        string    `json:"active_profile,omitempty"`
+	TargetProfile        string    `json:"target_profile,omitempty"`
+	RulesBefore          []string  `json:"rules_before"`
+	RulesAfter           []string  `json:"rules_after"`
+	RulesBeforeTotal     int       `json:"rules_before_total"`
+	RulesAfterTotal      int       `json:"rules_after_total"`
+	RulesBeforeTruncated bool      `json:"rules_before_truncated,omitempty"`
+	RulesAfterTruncated  bool      `json:"rules_after_truncated,omitempty"`
+	Warnings             []string  `json:"warnings,omitempty"`
+	ExpiresAt            time.Time `json:"expires_at"`
+}
+
+type PreviewRulesArgs struct {
+	ProposalID string `json:"proposal_id" jsonschema:"unexpired proposal id"`
+	Stage      string `json:"stage" jsonschema:"before or after"`
+	Offset     int    `json:"offset,omitempty" jsonschema:"zero-based rule offset"`
+	Limit      int    `json:"limit,omitempty" jsonschema:"maximum rules to return, 1 to 500, default 100"`
+}
+
+type PreviewRulesResult struct {
+	Total      int      `json:"total"`
+	Offset     int      `json:"offset"`
+	NextOffset int      `json:"next_offset"`
+	Rules      []string `json:"rules"`
 }
 
 type ApplyArgs struct {

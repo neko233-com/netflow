@@ -84,6 +84,8 @@ func TestRuleEditorHistoryAndAsyncPreviewLifecycle(t *testing.T) {
 	var pending func(agent.Preview, error)
 	var rollback agent.RollbackArgs
 	var discarded []string
+	copied := ""
+	m.Hooks.Copy = func(value string) error { copied = value; return nil }
 	canceled := 0
 	m.Hooks.PreviewRewriteAsync = func(_ agent.Change, done func(agent.Preview, error)) func() {
 		pending = done
@@ -126,11 +128,23 @@ func TestRuleEditorHistoryAndAsyncPreviewLifecycle(t *testing.T) {
 	if rollback.Revision == nil || *rollback.Revision != 0 || rollback.Scope != "profile" || rollback.ProfileID != "chosen" {
 		t.Fatalf("wrong rollback scope: %+v", rollback)
 	}
-	pending(agent.Preview{ProposalID: "rollback", RulesAfter: []string{"MATCH,DIRECT"}, Warnings: []string{"inspect"}}, nil)
-	if m.RuleEditor.Busy || m.RuleEditor.ProposalID != "rollback" || !strings.Contains(m.RuleEditor.Preview, "inspect") {
+	pending(agent.Preview{ProposalID: "rollback", RulesAfter: []string{"MATCH,DIRECT"}, RulesAfterTotal: 200, RulesAfterTruncated: true, Warnings: []string{"inspect"}}, nil)
+	if m.RuleEditor.Busy || m.RuleEditor.ProposalID != "rollback" || !strings.Contains(m.RuleEditor.Preview, "inspect") || !strings.Contains(m.RuleEditor.Preview, "rollback") || !strings.Contains(m.RuleEditor.Preview, "199") {
 		t.Fatal("rollback result was not displayed")
 	}
+	if dir := os.Getenv("CLASHGO_SCREENSHOT_DIR"); dir != "" {
+		compact := mygoui.NewTester(m.View, WindowMinWidth, WindowMinHeight)
+		if err := writePNG(filepath.Join(dir, "rewrite-paged-compact.png"), compact.Image()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	tt = mygoui.NewTester(m.View, WindowWidth, WindowHeight)
+	if !tt.HasText("inspect") {
+		t.Fatal("preview warning not visible")
+	}
+	if err := tt.Click("rewrite-copy-proposal"); err != nil || copied != "rollback" {
+		t.Fatalf("proposal ID not copied: %q %v", copied, err)
+	}
 	if err := tt.Click("rewrite-apply"); err != nil {
 		t.Fatal(err)
 	}

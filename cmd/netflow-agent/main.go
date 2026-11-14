@@ -24,7 +24,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags := flag.NewFlagSet("netflow-agent", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.Usage = func() {
-		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, kernel-options, kernel-option NAME VALUE|inherit, update-geo, tun on|off, profiles, profile-settings ID, profile-settings-set|profile-url-set (JSON stdin), import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, rewrite-history, clear-rewrite-history, preview|rollback-preview (JSON stdin), apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, webdav-config, webdav-clear, webdav-save|webdav-list|webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
+		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, kernel-options, kernel-option NAME VALUE|inherit, update-geo, tun on|off, profiles, profile-settings ID, profile-settings-set|profile-url-set (JSON stdin), import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, rewrite-history, clear-rewrite-history, preview|rollback-preview (JSON stdin), preview-rules ID before|after [OFFSET [LIMIT]], cancel-preview ID, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, webdav-config, webdav-clear, webdav-save|webdav-list|webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
 	pid := flags.Int("pid", 0, "NetFlow process id when several instances run")
@@ -107,7 +107,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	case "help":
 		flags.Usage()
 		return nil
-	case "diagnostics", "shutdown", "rewrite-history", "clear-rewrite-history", "kernel-options", "kernel-option", "update-geo", "groups", "profiles", "profile-settings", "profile-settings-set", "profile-url-set", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "webdav-config", "webdav-save", "webdav-clear", "webdav-list", "webdav-upload", "webdav-restore", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
+	case "diagnostics", "shutdown", "rewrite-history", "clear-rewrite-history", "preview-rules", "kernel-options", "kernel-option", "update-geo", "groups", "profiles", "profile-settings", "profile-settings-set", "profile-url-set", "import-profile", "update-profile", "delete-profile", "profile-job-status", "backup-create", "restore-create", "backup-job-status", "backup-schedule", "backup-schedule-set", "webdav-config", "webdav-save", "webdav-clear", "webdav-list", "webdav-upload", "webdav-restore", "providers", "update-provider", "provider-job-status", "rules", "select", "mode", "use-profile", "close-connection", "tun":
 		method := flags.Arg(0)
 		stdin := input
 		var input any
@@ -133,6 +133,28 @@ func run(args []string, input io.Reader, output io.Writer) error {
 				if err != nil {
 					return errors.New("invalid rules limit")
 				}
+			}
+			input = q
+		case "preview-rules":
+			if flags.NArg() < 3 || flags.NArg() > 5 || flags.Arg(1) == "" || (flags.Arg(2) != "before" && flags.Arg(2) != "after") {
+				return errors.New("preview-rules requires ID before|after and optional OFFSET and LIMIT")
+			}
+			q := agent.PreviewRulesArgs{ProposalID: flags.Arg(1), Stage: flags.Arg(2)}
+			var err error
+			if flags.NArg() > 3 {
+				q.Offset, err = strconv.Atoi(flags.Arg(3))
+				if err != nil {
+					return errors.New("invalid preview offset")
+				}
+			}
+			if flags.NArg() > 4 {
+				q.Limit, err = strconv.Atoi(flags.Arg(4))
+				if err != nil {
+					return errors.New("invalid preview limit")
+				}
+			}
+			if q.Offset < 0 || q.Limit < 0 || q.Limit > 500 {
+				return errors.New("offset must be nonnegative and limit at most 500")
 			}
 			input = q
 		case "update-provider":
@@ -338,6 +360,15 @@ func run(args []string, input io.Reader, output io.Writer) error {
 		}
 		var out agent.Preview
 		if err := client.Call(ctx, flags.Arg(0), request, &out); err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(out)
+	case "cancel-preview":
+		if flags.NArg() != 2 || flags.Arg(1) == "" {
+			return errors.New("cancel-preview requires the proposal id")
+		}
+		var out agent.ActionResult
+		if err := client.Call(ctx, "cancel-preview", agent.ApplyArgs{ProposalID: flags.Arg(1)}, &out); err != nil {
 			return err
 		}
 		return json.NewEncoder(output).Encode(out)

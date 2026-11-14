@@ -918,6 +918,10 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if err != nil || json.Unmarshal(out, &proposal) != nil || proposal.ProposalID == "" {
 		t.Fatalf("headless preview failed: %s %v", out, err)
 	}
+	var previewPage agent.PreviewRulesResult
+	if out, err = call("preview-rules", proposal.ProposalID, "after", "0", "5"); err != nil || json.Unmarshal(out, &previewPage) != nil || previewPage.Total != proposal.RulesAfterTotal || len(previewPage.Rules) == 0 {
+		t.Fatalf("headless preview rule page failed: %s %v", out, err)
+	}
 	if out, err = call("apply", proposal.ProposalID); err != nil {
 		t.Fatalf("headless apply failed: %s %v", out, err)
 	}

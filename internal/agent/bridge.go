@@ -30,6 +30,9 @@ type response struct {
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  string          `json:"error,omitempty"`
 }
+
+const maxBridgeResponseBytes = 32 << 20
+
 type endpoint struct {
 	Address string `json:"address"`
 	Token   string `json:"token"`
@@ -321,8 +324,15 @@ func (c Client) call(ctx context.Context, ep endpoint, method string, args any, 
 		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 4096))
 		return fmt.Errorf("agent bridge returned HTTP %d", res.StatusCode)
 	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, maxBridgeResponseBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(data) > maxBridgeResponseBytes {
+		return errors.New("agent response exceeds the 32 MiB limit")
+	}
 	var result response
-	if err = json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(&result); err != nil {
+	if err = json.Unmarshal(data, &result); err != nil {
 		return err
 	}
 	if result.Error != "" {

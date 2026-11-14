@@ -157,6 +157,9 @@ def main():
             raise RuntimeError("agent reported a nonexistent connection as closed")
         change = {"scope":"global", "operation":"set", "layer":{"prepend":["IP-CIDR,127.0.0.1/32,REJECT"]}}
         proposal = call("preview", data=json.dumps(change))
+        page = call("preview-rules", proposal["proposal_id"], "after", "0", "2")
+        if not page["rules"] or page["rules"][0] != "IP-CIDR,127.0.0.1/32,REJECT" or page["total"] != proposal["rules_after_total"]:
+            raise RuntimeError("CLI preview page did not match the proposed rules")
         call("apply", proposal["proposal_id"])
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         try:
@@ -304,7 +307,7 @@ def main():
             mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n"); mcp.stdin.flush()
             response = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
             names = {item["name"] for item in response["result"]["tools"]}
-            expected = {"netflow_status", "netflow_diagnostics", "netflow_kernel_options", "netflow_set_kernel_option", "netflow_shutdown_headless", "netflow_set_tun", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_rewrite_history", "netflow_preview_rollback", "netflow_clear_rewrite_history", "netflow_proxy_groups", "netflow_rules",
+            expected = {"netflow_status", "netflow_diagnostics", "netflow_kernel_options", "netflow_set_kernel_option", "netflow_shutdown_headless", "netflow_set_tun", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_preview_rules", "netflow_cancel_preview", "netflow_apply_rewrite", "netflow_rewrite_history", "netflow_preview_rollback", "netflow_clear_rewrite_history", "netflow_proxy_groups", "netflow_rules",
                         "netflow_profiles", "netflow_profile_settings", "netflow_update_profile_settings", "netflow_replace_profile_url", "netflow_import_profile", "netflow_update_profile", "netflow_profile_job_status", "netflow_delete_profile",
                         "netflow_backup_create", "netflow_backup_job_status", "netflow_restore_backup", "netflow_backup_schedule", "netflow_backup_schedule_set", "netflow_webdav_config", "netflow_webdav_save", "netflow_webdav_clear", "netflow_webdav_list", "netflow_webdav_upload", "netflow_webdav_restore",
                         "netflow_providers", "netflow_update_provider", "netflow_provider_job_status",
@@ -312,6 +315,13 @@ def main():
                         "netflow_migration_preview", "netflow_migration_import", "netflow_migration_export"}
             if names != expected:
                 raise RuntimeError(f"unexpected MCP tools: {names}")
+            proposal = call("preview", data=json.dumps({"scope":"global", "operation":"clear"}))
+            response = rpc({"jsonrpc":"2.0", "id":12, "method":"tools/call", "params":{"name":"netflow_preview_rules", "arguments":{"proposal_id":proposal["proposal_id"], "stage":"after", "offset":0, "limit":2}}})
+            if response.get("result", {}).get("isError") or response.get("result", {}).get("structuredContent", {}).get("total") != proposal["rules_after_total"]:
+                raise RuntimeError(f"MCP preview page failed: {response}")
+            response = rpc({"jsonrpc":"2.0", "id":13, "method":"tools/call", "params":{"name":"netflow_cancel_preview", "arguments":{"proposal_id":proposal["proposal_id"]}}})
+            if response.get("result", {}).get("isError") or not response.get("result", {}).get("structuredContent", {}).get("ok"):
+                raise RuntimeError(f"MCP cancel preview failed: {response}")
             response = rpc({"jsonrpc":"2.0", "id":10, "method":"tools/call", "params":{"name":"netflow_rewrite_history", "arguments":{}}})
             if response.get("result", {}).get("isError") or not response.get("result", {}).get("structuredContent", {}).get("entries"):
                 raise RuntimeError(f"MCP rewrite history failed: {response}")

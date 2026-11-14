@@ -16,6 +16,7 @@ import (
 	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/sysproxy"
 	"github.com/neko233-com/netflow/internal/tun"
+	"github.com/neko233-com/netflow/internal/validation"
 )
 
 func TestAgentRollbackPreviewAppliesOnlySelectedScope(t *testing.T) {
@@ -29,6 +30,22 @@ func TestAgentRollbackPreviewAppliesOnlySelectedScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.core.Stop()
+	draft, err := a.prepareAgentPreview(agent.Change{Scope: "global", Operation: "set", Layer: rewrite.Layer{Prepend: []string{"DOMAIN,capacity.test,DIRECT"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.agentProposals = map[string]agentProposal{"reserved": {expires: time.Now().Add(time.Minute), ruleBytes: maxPreviewRuleMemory}}
+	if _, err := a.finishAgentPreview(draft, validation.Result{}); err == nil {
+		t.Fatal("preview exceeded aggregate memory limit")
+	}
+	cancelResult, cancelErr := a.agentCommand("cancel-preview", []byte(`{"proposal_id":"reserved"}`))
+	if cancelErr != nil || !cancelResult.(agent.ActionResult).OK {
+		t.Fatalf("cancel did not release capacity: %+v %v", cancelResult, cancelErr)
+	}
+	if _, err := a.finishAgentPreview(draft, validation.Result{}); err != nil {
+		t.Fatalf("released capacity not reusable: %v", err)
+	}
+	a.agentProposals = nil
 	apply := func(change agent.Change) agent.ApplyResult {
 		t.Helper()
 		p, err := a.agentPreview(change)

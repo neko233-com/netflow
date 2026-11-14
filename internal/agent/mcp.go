@@ -65,6 +65,18 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "preview", change, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_preview_rules", Description: "Page through all before or after rules of an unexpired preview. Use next_offset until it equals total; pages may be shorter than the requested limit.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in PreviewRulesArgs) (*mcp.CallToolResult, PreviewRulesResult, error) {
+			var out PreviewRulesResult
+			err := client.Call(ctx, "preview-rules", in, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_cancel_preview", Description: "Discard an unexpired proposal without applying it, releasing its stored preview rules."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in ApplyArgs) (*mcp.CallToolResult, ActionResult, error) {
+			var out ActionResult
+			err := client.Call(ctx, "cancel-preview", in, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_rewrite_history", Description: "List bounded stored rewrite-state revision summaries, newest first. History may include a state whose kernel reload failed.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, RewriteHistory, error) {
 			var out RewriteHistory

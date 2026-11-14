@@ -127,6 +127,11 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		if callErr = decodeStrict(args, &input); callErr == nil {
 			value, callErr = a.agentRewriteHistory()
 		}
+	case "preview-rules":
+		var input agent.PreviewRulesArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			value, callErr = a.agentPreviewRules(input)
+		}
 	case "clear-rewrite-history":
 		var input agent.Empty
 		if callErr = decodeStrict(args, &input); callErr == nil {
@@ -160,6 +165,17 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 		var input agent.ApplyArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {
 			value, callErr = a.agentApply(input.ProposalID)
+		}
+	case "cancel-preview":
+		var input agent.ApplyArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if input.ProposalID == "" {
+				callErr = errors.New("proposal id is required")
+			} else {
+				proposal, exists := a.agentProposals[input.ProposalID]
+				delete(a.agentProposals, input.ProposalID)
+				value = agent.ActionResult{OK: exists && proposal.expires.After(time.Now())}
+			}
 		}
 	case "groups":
 		value, callErr = a.agentGroups()
@@ -455,6 +471,7 @@ func decodeStrict(raw json.RawMessage, out any) error {
 func (a *App) expiryLoop(stop <-chan struct{}) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	nextProposalCleanup := time.Now().Add(15 * time.Second)
 	for {
 		select {
 		case <-stop:
@@ -468,10 +485,20 @@ func (a *App) expiryLoop(stop <-chan struct{}) {
 					break
 				}
 			}
-			if !expired {
+			cleanupProposals := !now.Before(nextProposalCleanup)
+			if cleanupProposals {
+				nextProposalCleanup = now.Add(15 * time.Second)
+			}
+			if !expired && !cleanupProposals {
 				continue
 			}
 			a.runOnMain(func() {
+				if cleanupProposals {
+					a.pruneExpiredProposals(time.Now())
+				}
+				if !expired {
+					return
+				}
 				if err := a.expireRules(time.Now()); err != nil {
 					a.rewriteWarning = "Temporary rule cleanup failed; inspect the rules file and application logs."
 					if a.model != nil {

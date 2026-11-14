@@ -14,6 +14,9 @@ type RuleEditor struct {
 	Scope, ProfileID           string
 	Prepend, Append, Remove    string
 	ProposalID, Preview, Error string
+	PreviewSummary, CopyNotice string
+	PreviewWarnings            []string
+	PreviewTruncated           bool
 	History                    []rewrite.HistoryItem
 	HistoryChoices             []string
 	HistorySelected            string
@@ -58,6 +61,23 @@ func ruleLines(s string) []string {
 	return out
 }
 
+func rulePreviewWarning(message string) string {
+	switch message {
+	case "The profile is inactive; changes take effect when it is activated.":
+		return "此订阅未激活；激活后规则才会生效。"
+	case "The core is not in rule mode, so rule changes will not control routing until rule mode is selected.":
+		return "当前不是规则模式；切换到规则模式后覆写才会控制路由。"
+	case "Some HTTP provider caches are missing; their downloaded contents were not validated.":
+		return "部分 HTTP 集合缓存缺失，未校验其下载内容。"
+	case "This revision is a stored state snapshot; a previous kernel reload may have failed. Only the selected scope is restored.":
+		return "历史版本是保存的状态快照，先前内核重载可能失败；只恢复所选范围。"
+	case "Preview contains only the first page of rules; use preview-rules to inspect remaining pages before applying.":
+		return "当前只显示首批规则，请使用 Agent 分页查看其余规则。"
+	default:
+		return message
+	}
+}
+
 func (m *Model) previewRules() {
 	e := &m.RuleEditor
 	change := agent.Change{Scope: e.Scope, Operation: "set", ProfileID: e.ProfileID, Layer: rewrite.Layer{Prepend: ruleLines(e.Prepend), Append: ruleLines(e.Append), Remove: ruleLines(e.Remove)}}
@@ -81,6 +101,8 @@ func (m *Model) invalidateRulePreview() {
 	}
 	m.ruleEditorSeq++
 	m.RuleEditor.ProposalID, m.RuleEditor.Preview, m.RuleEditor.Error = "", "", ""
+	m.RuleEditor.PreviewSummary, m.RuleEditor.CopyNotice = "", ""
+	m.RuleEditor.PreviewWarnings, m.RuleEditor.PreviewTruncated = nil, false
 	m.RuleEditor.Busy = false
 }
 
@@ -133,16 +155,32 @@ func (m *Model) finishRulePreview(preview agent.Preview, err error) {
 	}
 	e.Error = ""
 	e.ProposalID = preview.ProposalID
-	lines := []string{fmt.Sprintf("规则数量：%d → %d", len(preview.RulesBefore), len(preview.RulesAfter))}
-	lines = append(lines, preview.Warnings...)
+	beforeTotal, afterTotal := preview.RulesBeforeTotal, preview.RulesAfterTotal
+	if beforeTotal < len(preview.RulesBefore) {
+		beforeTotal = len(preview.RulesBefore)
+	}
+	if afterTotal < len(preview.RulesAfter) {
+		afterTotal = len(preview.RulesAfter)
+	}
+	e.PreviewSummary = fmt.Sprintf("规则数量：%d → %d", beforeTotal, afterTotal)
+	e.PreviewWarnings = nil
+	for _, warning := range preview.Warnings {
+		e.PreviewWarnings = append(e.PreviewWarnings, rulePreviewWarning(warning))
+	}
+	e.PreviewTruncated = beforeTotal > len(preview.RulesBefore) || afterTotal > len(preview.RulesAfter) || preview.RulesBeforeTruncated || preview.RulesAfterTruncated
+	lines := []string{e.PreviewSummary}
+	if e.PreviewTruncated {
+		lines = append(lines, "分页查看的提案 ID："+preview.ProposalID)
+	}
+	lines = append(lines, e.PreviewWarnings...)
 	lines = append(lines, "应用后的规则：")
 	limit := len(preview.RulesAfter)
 	if limit > 100 {
 		limit = 100
 	}
 	lines = append(lines, preview.RulesAfter[:limit]...)
-	if limit < len(preview.RulesAfter) {
-		lines = append(lines, fmt.Sprintf("… 另有 %d 条规则", len(preview.RulesAfter)-limit))
+	if limit < afterTotal {
+		lines = append(lines, fmt.Sprintf("… 另有 %d 条规则，可通过 Agent CLI 或 MCP 分页查看", afterTotal-limit))
 	}
 	e.Preview = strings.Join(lines, "\n")
 }
@@ -196,6 +234,23 @@ func (m *Model) ruleEditorDialog(c *mygoui.Context, pal Palette) {
 						mygoui.Text(c, e.Error).FontSize(12).TextColor(pal.Error)
 					}
 					if e.Preview != "" {
+						mygoui.Row(c).FillWidth().AlignItems(mygoui.Center).Gap(8).Children(func() {
+							mygoui.Text(c, e.PreviewSummary).FontSize(12).Bold().Grow(1)
+							if e.PreviewTruncated && textButton(c, pal, "复制提案 ID", "复制提案 ID 以分页查看完整规则", "rewrite-copy-proposal") {
+								m.copy(e.ProposalID)
+								e.CopyNotice = m.Notice
+							}
+						})
+						if e.CopyNotice != "" {
+							mygoui.Text(c, e.CopyNotice).FontSize(12).TextColor(pal.TextMuted)
+						}
+						for i, warning := range e.PreviewWarnings {
+							if i == 3 {
+								mygoui.Text(c, "更多提示请查看下方预览内容。").FontSize(12).TextColor(pal.Warning)
+								break
+							}
+							mygoui.Text(c, warning).FillWidth().FontSize(12).TextColor(pal.Warning)
+						}
 						mygoui.TextArea(c, &e.Preview).FillWidth().Height(105).ReadOnly(true).Label("rewrite-preview-result")
 					}
 					for _, field := range []struct {

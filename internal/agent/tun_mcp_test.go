@@ -15,6 +15,16 @@ func TestMCPRequestsTUN(t *testing.T) {
 		if method == "rewrite-history" {
 			return RewriteHistory{}, nil
 		}
+		if method == "preview-rules" {
+			var in PreviewRulesArgs
+			if json.Unmarshal(args, &in) != nil || in.ProposalID != "proposal" || in.Stage != "after" {
+				t.Error("incorrect preview page request")
+			}
+			return PreviewRulesResult{Total: 1, NextOffset: 1, Rules: []string{"MATCH,DIRECT"}}, nil
+		}
+		if method == "cancel-preview" {
+			return ActionResult{OK: true}, nil
+		}
 		if method == "clear-rewrite-history" {
 			return ClearRewriteHistoryResult{Revision: 2}, nil
 		}
@@ -100,6 +110,8 @@ func TestMCPRequestsTUN(t *testing.T) {
 	}
 	for _, call := range []*mcp.CallToolParams{
 		{Name: "netflow_rewrite_history", Arguments: map[string]any{}},
+		{Name: "netflow_preview_rules", Arguments: map[string]any{"proposal_id": "proposal", "stage": "after"}},
+		{Name: "netflow_cancel_preview", Arguments: map[string]any{"proposal_id": "proposal"}},
 		{Name: "netflow_clear_rewrite_history", Arguments: map[string]any{}},
 		{Name: "netflow_preview_rollback", Arguments: map[string]any{"revision": 0, "scope": "global"}},
 		{Name: "netflow_kernel_options", Arguments: map[string]any{}},

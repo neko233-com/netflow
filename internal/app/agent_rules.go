@@ -38,6 +38,87 @@ type agentProposal struct {
 	tunSetting    bool
 	mode          string
 	options       *kernelopts.Options
+	before, after []string
+	ruleBytes     int
+}
+
+const maxPreviewRuleMemory = 64 << 20
+const maxPreviewPageBytes = 256 << 10
+
+// The bridge and agent clients have finite response limits. Pages are bounded
+// by both rule count and encoded JSON bytes, including escaped characters.
+func previewRulePage(rules []string, offset, limit int) (agent.PreviewRulesResult, error) {
+	if offset < 0 || limit < 0 || limit > 500 {
+		return agent.PreviewRulesResult{}, errors.New("offset must be nonnegative and limit must be at most 500")
+	}
+	if limit == 0 {
+		limit = 100
+	}
+	if offset > len(rules) {
+		offset = len(rules)
+	}
+	out := agent.PreviewRulesResult{Total: len(rules), Offset: offset, NextOffset: offset, Rules: []string{}}
+	encodedBytes := 2
+	for out.NextOffset < len(rules) && len(out.Rules) < limit {
+		item := rules[out.NextOffset]
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return agent.PreviewRulesResult{}, err
+		}
+		if len(encoded)+2 > maxPreviewPageBytes {
+			return agent.PreviewRulesResult{}, errors.New("one rule exceeds the preview page size limit")
+		}
+		if encodedBytes+len(encoded)+1 > maxPreviewPageBytes {
+			break
+		}
+		encodedBytes += len(encoded) + 1
+		out.Rules = append(out.Rules, item)
+		out.NextOffset++
+	}
+	return out, nil
+}
+
+func previewRuleFootprint(lists ...[]string) (int, error) {
+	total := 0
+	for _, list := range lists {
+		for _, rule := range list {
+			if len(rule) > maxPreviewPageBytes/6 {
+				encoded, err := json.Marshal(rule)
+				if err != nil || len(encoded)+2 > maxPreviewPageBytes {
+					return 0, errors.New("one rule exceeds the preview page size limit")
+				}
+			}
+			if len(rule) > maxPreviewRuleMemory-total-16 {
+				return 0, errors.New("preview rules exceed the in-memory size limit")
+			}
+			total += len(rule) + 16
+		}
+	}
+	return total, nil
+}
+
+func (a *App) agentPreviewRules(in agent.PreviewRulesArgs) (agent.PreviewRulesResult, error) {
+	p, ok := a.agentProposals[in.ProposalID]
+	if !ok || !p.expires.After(time.Now()) {
+		delete(a.agentProposals, in.ProposalID)
+		return agent.PreviewRulesResult{}, errors.New("proposal missing or expired; preview again")
+	}
+	switch in.Stage {
+	case "before":
+		return previewRulePage(p.before, in.Offset, in.Limit)
+	case "after":
+		return previewRulePage(p.after, in.Offset, in.Limit)
+	default:
+		return agent.PreviewRulesResult{}, errors.New("stage must be before or after")
+	}
+}
+
+func (a *App) pruneExpiredProposals(now time.Time) {
+	for id, proposal := range a.agentProposals {
+		if !proposal.expires.After(now) {
+			delete(a.agentProposals, id)
+		}
+	}
 }
 
 func (a *App) agentStatus() (agent.Status, error) {
@@ -258,13 +339,31 @@ func (a *App) finishAgentPreview(draft previewDraft, checked validation.Result) 
 			return agent.Preview{}, errors.New("connection rule expired during validation; preview again")
 		}
 	}
-	for k, p := range a.agentProposals {
-		if !p.expires.After(now) {
-			delete(a.agentProposals, k)
-		}
-	}
+	a.pruneExpiredProposals(now)
 	if len(a.agentProposals) >= 32 {
 		return agent.Preview{}, errors.New("too many pending proposals")
+	}
+	ruleBytes, err := previewRuleFootprint(draft.before, draft.after)
+	if err != nil {
+		return agent.Preview{}, err
+	}
+	used := 0
+	for _, proposal := range a.agentProposals {
+		used += proposal.ruleBytes
+	}
+	if ruleBytes > maxPreviewRuleMemory-used {
+		return agent.Preview{}, errors.New("pending preview rules exceed the in-memory size limit; apply, cancel or wait for existing previews")
+	}
+	before, err := previewRulePage(draft.before, 0, 100)
+	if err != nil {
+		return agent.Preview{}, err
+	}
+	after, err := previewRulePage(draft.after, 0, 100)
+	if err != nil {
+		return agent.Preview{}, err
+	}
+	if before.NextOffset < before.Total || after.NextOffset < after.Total {
+		draft.warnings = append(draft.warnings, "Preview contains only the first page of rules; use preview-rules to inspect remaining pages before applying.")
 	}
 	expires := now.Add(2 * time.Minute)
 	for _, c := range draft.state.Connections {
@@ -272,8 +371,8 @@ func (a *App) finishAgentPreview(draft previewDraft, checked validation.Result) 
 			expires = c.ExpiresAt
 		}
 	}
-	a.agentProposals[id] = agentProposal{change: draft.change, state: draft.state, revision: draft.revision, activeProfile: draft.active, sources: draft.hashes, expires: expires, tunEnabled: status.TUN, tunSetting: draft.tunSetting, mode: status.Mode, options: draft.options}
-	return agent.Preview{ProposalID: id, Revision: draft.revision, ActiveProfile: draft.active, TargetProfile: draft.target, RulesBefore: draft.before, RulesAfter: draft.after, Warnings: draft.warnings, ExpiresAt: expires}, nil
+	a.agentProposals[id] = agentProposal{change: draft.change, state: draft.state, revision: draft.revision, activeProfile: draft.active, sources: draft.hashes, expires: expires, tunEnabled: status.TUN, tunSetting: draft.tunSetting, mode: status.Mode, options: draft.options, before: draft.before, after: draft.after, ruleBytes: ruleBytes}
+	return agent.Preview{ProposalID: id, Revision: draft.revision, ActiveProfile: draft.active, TargetProfile: draft.target, RulesBefore: before.Rules, RulesAfter: after.Rules, RulesBeforeTotal: before.Total, RulesAfterTotal: after.Total, RulesBeforeTruncated: before.NextOffset < before.Total, RulesAfterTruncated: after.NextOffset < after.Total, Warnings: draft.warnings, ExpiresAt: expires}, nil
 }
 
 // previewSources validates the whole effective config for the selected profile.
