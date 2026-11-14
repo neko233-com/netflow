@@ -65,3 +65,22 @@ func TestSubscriptionStorageBoundsAndCancellation(t *testing.T) {
 		t.Fatal("file count limit ignored", err)
 	}
 }
+
+func TestSubscriptionPrunePreservesReferencedFileAliases(t *testing.T) {
+	root := t.TempDir()
+	retained, err := StoreSubscription(context.Background(), root, []byte("retained"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join("profiles", "alias.yaml")
+	if err := os.Link(filepath.Join(root, retained), filepath.Join(root, alias)); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	result, err := PruneSubscriptions(context.Background(), root, []string{alias}, func() error { return nil })
+	if err != nil || result.Removed != 0 {
+		t.Fatalf("referenced file alias was pruned: %+v %v", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, retained)); err != nil {
+		t.Fatal("managed alias disappeared", err)
+	}
+}

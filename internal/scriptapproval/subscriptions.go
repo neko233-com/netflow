@@ -96,6 +96,12 @@ func PruneSubscriptions(ctx context.Context, root string, refs []string, guard f
 	if ctx == nil || guard == nil {
 		return result, errors.New("subscription cleanup is not configured")
 	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if len(refs) > 10000 {
+		return result, ErrChanged
+	}
 	kept := map[string]bool{}
 	for _, ref := range refs {
 		if strings.EqualFold(filepath.Clean(filepath.Dir(ref)), filepath.Clean(filepath.FromSlash(subscriptionDir))) {
@@ -121,9 +127,47 @@ func PruneSubscriptions(ctx context.Context, root string, refs []string, guard f
 	if (readErr != nil && !errors.Is(readErr, io.EOF)) || closeErr != nil || rootErr != nil || len(entries) > 4096 {
 		return result, ErrChanged
 	}
+	// A reference may use a hard link or a Windows short-name alias rather
+	// than the canonical cache name. Preserve the underlying file as well.
+	var referenced []os.FileInfo
+	for _, ref := range refs {
+		if ref == "" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		f, err := safepath.OpenRead(root, ref)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return result, ErrChanged
+		}
+		info, statErr := f.Stat()
+		closeErr := f.Close()
+		if statErr != nil || closeErr != nil || !info.Mode().IsRegular() {
+			return result, ErrChanged
+		}
+		referenced = append(referenced, info)
+	}
 	for _, entry := range entries {
 		name := entry.Name()
 		if kept[strings.ToLower(name)] || !managedSubscriptionName(name) || !entry.Type().IsRegular() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			return result, ErrChanged
+		}
+		protected := false
+		for _, ref := range referenced {
+			if os.SameFile(info, ref) {
+				protected = true
+				break
+			}
+		}
+		if protected {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
