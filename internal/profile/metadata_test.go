@@ -1,6 +1,42 @@
 package profile
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/neko233-com/netflow/internal/scriptmeta"
+)
+
+func TestScriptApprovalProtectsProfileNameAcrossMetadataAPIs(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if err := store.Save(File{Items: []CatalogItem{{UID: "one", Name: "Old", Type: "remote", Option: CatalogOption{VergeScriptApproval: &scriptmeta.Approval{}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, "profiles.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, desc := "New", "changed"
+	if _, err := store.PatchMetadata("one", MetadataPatch{Name: &name, Description: &desc}); err == nil {
+		t.Fatal("patch accepted a name change")
+	}
+	if err := store.UpdateMetadata("one", name, desc, nil); err == nil {
+		t.Fatal("full metadata update accepted a name change")
+	}
+	after, err := os.ReadFile(filepath.Join(dir, "profiles.json"))
+	if err != nil || string(before) != string(after) {
+		t.Fatal("rejected name change modified catalog")
+	}
+	name = "Old"
+	if _, err := store.PatchMetadata("one", MetadataPatch{Name: &name, Description: &desc}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateMetadata("one", "Old", "updated", nil); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestUpdateMetadataPersistsDownloadOptionsWithoutErasingExtensions(t *testing.T) {
 	store := NewStore(t.TempDir())

@@ -101,6 +101,9 @@ func (s *Store) PatchMetadata(uid string, patch MetadataPatch) (CatalogItem, err
 			if name == "" || len(name) > 256 || strings.ContainsAny(name, "\r\n\x00") {
 				return CatalogItem{}, errors.New("invalid profile name")
 			}
+			if item.Option.VergeScriptApproval != nil && name != item.Name {
+				return CatalogItem{}, errors.New("已启用的 Verge 脚本绑定订阅名称；请先关闭脚本，修改名称后重新预览并启用")
+			}
 			item.Name = name
 		}
 		if patch.Description != nil {
@@ -282,6 +285,9 @@ func (s *Store) UpdateMetadata(uid, name, description string, options *CatalogOp
 	}
 	for i := range f.Items {
 		if f.Items[i].UID == uid {
+			if f.Items[i].Option.VergeScriptApproval != nil && name != f.Items[i].Name {
+				return errors.New("已启用的 Verge 脚本绑定订阅名称；请先关闭脚本，修改名称后重新预览并启用")
+			}
 			if options != nil && f.Items[i].Type == "remote" {
 				if options.UpdateInterval < 1 || options.UpdateInterval > 43200 {
 					return errors.New("更新间隔必须在 1 到 43200 分钟之间")
