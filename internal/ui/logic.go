@@ -114,7 +114,10 @@ const (
 )
 
 // ClassifySignal maps a delay onto the home signal tiers.
-func ClassifySignal(ms int) SignalKind {
+func ClassifySignal(ms, timeout int) SignalKind {
+	if timeout <= 0 {
+		timeout = DelayTimeout
+	}
 	switch {
 	case ms == DelayTesting:
 		return SignalTesting
@@ -122,7 +125,7 @@ func ClassifySignal(ms int) SignalKind {
 		return SignalUntested
 	case ms > 100000:
 		return SignalError
-	case ms == 0 || ms >= DelayTimeout:
+	case ms == 0 || ms >= timeout:
 		return SignalTimeout
 	case ms >= 500:
 		return SignalHigh
@@ -136,8 +139,8 @@ func ClassifySignal(ms int) SignalKind {
 }
 
 // SignalLabel is the Chinese status next to the signal mark.
-func SignalLabel(ms int) string {
-	switch ClassifySignal(ms) {
+func SignalLabel(ms, timeout int) string {
+	switch ClassifySignal(ms, timeout) {
 	case SignalTesting:
 		return "测试中"
 	case SignalUntested:
@@ -160,8 +163,8 @@ func SignalLabel(ms int) string {
 }
 
 // SignalTone colors the signal mark.
-func SignalTone(ms int) Tone {
-	switch ClassifySignal(ms) {
+func SignalTone(ms, timeout int) Tone {
+	switch ClassifySignal(ms, timeout) {
 	case SignalError, SignalTimeout, SignalHigh:
 		return ToneError
 	case SignalMedium:
@@ -176,8 +179,8 @@ func SignalTone(ms int) Tone {
 }
 
 // SignalBars is how many of four bars are filled.
-func SignalBars(ms int) int {
-	switch ClassifySignal(ms) {
+func SignalBars(ms, timeout int) int {
+	switch ClassifySignal(ms, timeout) {
 	case SignalExcellent:
 		return 4
 	case SignalGood:

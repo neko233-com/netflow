@@ -358,7 +358,7 @@ func (m *Model) groupBlock(c *mygoui.Context, pal Palette, i int) {
 		}
 		w, _ := c.Size()
 		cols := ProxyColumns(contentWidth(w, m.sidebarWidth()), m.Prefs.ProxyColumns)
-		nodes := SortNodes(FilterNodes(g.Nodes, g.FilterApplied, SearchOpts{}, DelayTimeout), g.Sort, DelayTimeout)
+		nodes := SortNodes(FilterNodes(g.Nodes, g.FilterApplied, SearchOpts{}, m.delayTimeoutMS()), g.Sort, m.delayTimeoutMS())
 		if len(nodes) == 0 {
 			mygoui.Column(c).Padding(12).AlignItems(mygoui.Center).Children(func() {
 				mygoui.Text(c, "暂无代理").TextColor(pal.TextMuted)
@@ -504,11 +504,11 @@ func (m *Model) nodeRow(c *mygoui.Context, pal Palette, g *ProxyGroup, n ProxyNo
 		if showCheck {
 			mygoui.Text(c, "选择").FontSize(12).TextColor(pal.Primary)
 		} else if n.Delay >= 0 {
-			mygoui.Text(c, DelayText(n.Delay, DelayTimeout)).FontSize(14).TextColor(pal.Color(DelayTone(n.Delay, DelayTimeout)))
+			mygoui.Text(c, DelayText(n.Delay, m.delayTimeoutMS())).FontSize(14).TextColor(pal.Color(DelayTone(n.Delay, m.delayTimeoutMS())))
 		} else if selected {
 			mygoui.Text(c, "✓").FontSize(14).TextColor(pal.Primary)
 		} else {
-			mygoui.Text(c, DelayText(n.Delay, DelayTimeout)).FontSize(13).TextColor(pal.TextMuted)
+			mygoui.Text(c, DelayText(n.Delay, m.delayTimeoutMS())).FontSize(13).TextColor(pal.TextMuted)
 		}
 	})
 	if row.Clicked() {

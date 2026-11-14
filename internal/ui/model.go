@@ -105,7 +105,7 @@ type Hooks struct {
 	UninstallService                func() error
 	CheckUnlock                     func(name string) (status, region string, ms int, err error)
 	CheckUnlockAsync                func(name string, done func(string, string, int, error))
-	TestProxyAsync                  func(group, name, url string, done func(int, error))
+	TestProxyAsync                  func(group, name, url string, timeout time.Duration, done func(int, error))
 	CheckUpdateAsync                func(done func(update.Result, error))
 	QueryIPAsync                    func(done func(ipinfo.Result, error))
 	LoadGroupIcon                   func(context.Context, string) ([]byte, error)
@@ -157,6 +157,9 @@ type Model struct {
 	portsDraftActive     bool
 	hotkeyDraft          Prefs
 	hotkeyDraftActive    bool
+	delayURLDraft        string
+	delayTimeoutDraft    string
+	delayDraftActive     bool
 	ShowNextUpdate       map[string]bool
 	Form                 ProfileForm
 	ProfileURLChangeUID  string

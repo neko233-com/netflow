@@ -28,7 +28,7 @@ func (a *App) probeSiteAsync(url string, done func(int, error)) {
 	}()
 }
 
-func (a *App) testProxyAsync(group, name, url string, done func(int, error)) {
+func (a *App) testProxyAsync(group, name, url string, timeout time.Duration, done func(int, error)) {
 	slots, stop := a.probeSlots, a.probeStop
 	go func() {
 		select {
@@ -37,7 +37,7 @@ func (a *App) testProxyAsync(group, name, url string, done func(int, error)) {
 			return
 		}
 		defer func() { <-slots }()
-		ms, err := a.core.TestDelay(group, name, url, 10*time.Second)
+		ms, err := a.core.TestDelay(group, name, url, timeout)
 		a.runOnMain(func() {
 			done(ms, err)
 			if a.win != nil {

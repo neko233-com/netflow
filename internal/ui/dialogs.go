@@ -3,6 +3,7 @@ package ui
 import (
 	"runtime"
 	"strconv"
+	"strings"
 
 	mygoui "github.com/egoist/mygo/ui"
 	"github.com/metacubex/mihomo/constant/features"
@@ -18,6 +19,11 @@ func (m *Model) overlay(c *mygoui.Context, pal Palette) {
 		m.hotkeyDraft = m.Prefs
 		m.hotkeyDraftActive = true
 	}
+	if m.Dialogs.Misc && !m.delayDraftActive {
+		m.delayURLDraft = m.delayURL()
+		m.delayTimeoutDraft = strconv.Itoa(m.delayTimeoutMS())
+		m.delayDraftActive = true
+	}
 	m.homeSettingsDialog(c, pal)
 	m.chainDialog(c, pal)
 	m.deleteDialog(c, pal)
@@ -32,6 +38,9 @@ func (m *Model) overlay(c *mygoui.Context, pal Palette) {
 	m.simpleDialog(c, pal, &m.Dialogs.Theme, "主题设置", m.themeBody)
 	m.simpleDialog(c, pal, &m.Dialogs.Layout, "界面设置", m.layoutBody)
 	m.simpleDialog(c, pal, &m.Dialogs.Misc, "杂项设置", m.miscBody)
+	if !m.Dialogs.Misc {
+		m.delayDraftActive = false
+	}
 	m.simpleDialog(c, pal, &m.Dialogs.Hotkey, "热键设置", m.hotkeyBody)
 	if !m.Dialogs.Hotkey {
 		m.hotkeyDraftActive = false
@@ -572,17 +581,52 @@ func (m *Model) miscBody(c *mygoui.Context, pal Palette) {
 	mygoui.Text(c, "代理列数").FontSize(13)
 	sel := mygoui.Select(c, &col, opts).Width(160).Label("proxy-cols")
 	if sel.Changed() {
+		previous := m.Prefs.ProxyColumns
 		if col == "自动" {
 			m.Prefs.ProxyColumns = AutoProxyColumns
 		} else {
 			m.Prefs.ProxyColumns = atoi(col)
 		}
+		if m.Hooks.SavePrefs != nil {
+			if err := m.Hooks.SavePrefs(m.Prefs); err != nil {
+				m.Prefs.ProxyColumns = previous
+				m.Notice = err.Error()
+			}
+		}
 	}
 	mygoui.Text(c, "内部值 "+itoa(m.Prefs.ProxyColumns)).FontSize(12).TextColor(pal.TextMuted)
-	mygoui.Text(c, "默认延迟测试").FontSize(13)
-	url := "http://cp.cloudflare.com/generate_204"
-	mygoui.Text(c, url).FontSize(12).TextColor(pal.TextMuted)
-	mygoui.Text(c, "默认超时 10000").FontSize(12).TextColor(pal.TextMuted)
+	mygoui.Text(c, "默认延迟测试链接").FontSize(13)
+	mygoui.TextInput(c, &m.delayURLDraft).FillWidth().Label("delay-url")
+	mygoui.Text(c, "代理组指定测速链接时优先使用该链接。").FontSize(12).TextColor(pal.TextMuted)
+	mygoui.Text(c, "测速超时（100–60000 毫秒）").FontSize(13)
+	mygoui.TextInput(c, &m.delayTimeoutDraft).FillWidth().Label("delay-timeout")
+	if filledButton(c, pal, "保存测速设置", "delay-settings-save", true) {
+		m.saveDelaySettings()
+	}
+}
+
+func (m *Model) saveDelaySettings() {
+	url := strings.TrimSpace(m.delayURLDraft)
+	timeout, err := strconv.Atoi(strings.TrimSpace(m.delayTimeoutDraft))
+	if !validDelayURL(url) {
+		m.Notice = "测速链接必须是有效的 HTTP 或 HTTPS 地址，且不能包含用户名、密码或片段"
+		return
+	}
+	if err != nil || timeout < 100 || timeout > 60000 {
+		m.Notice = "测速超时必须为 100–60000 毫秒"
+		return
+	}
+	next := m.Prefs
+	next.DelayURL, next.DelayTimeoutMS = url, timeout
+	if m.Hooks.SavePrefs != nil {
+		if err := m.Hooks.SavePrefs(next); err != nil {
+			m.Notice = err.Error()
+			return
+		}
+	}
+	m.Prefs.DelayURL, m.Prefs.DelayTimeoutMS = url, timeout
+	m.delayURLDraft, m.delayTimeoutDraft = url, strconv.Itoa(timeout)
+	m.Notice = "测速设置已保存"
 }
 
 func (m *Model) hotkeyBody(c *mygoui.Context, pal Palette) {

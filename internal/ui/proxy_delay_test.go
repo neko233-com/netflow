@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestProxyDelayAndHomeSelectionUseKernelHooks(t *testing.T) {
@@ -21,8 +22,8 @@ func TestProxyDelayAndHomeSelectionUseKernelHooks(t *testing.T) {
 		t.Fatalf("wrong home group: %+v", m.Home.Node)
 	}
 	var finish func(int, error)
-	m.Hooks.TestProxyAsync = func(group, name, url string, done func(int, error)) {
-		if name != "three" || url != defaultDelayURL {
+	m.Hooks.TestProxyAsync = func(group, name, url string, timeout time.Duration, done func(int, error)) {
+		if name != "three" || url != defaultDelayURL || timeout != 10*time.Second {
 			t.Fatalf("delay request %s %s", name, url)
 		}
 		finish = done

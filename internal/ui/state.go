@@ -227,6 +227,8 @@ type Prefs struct {
 	LogLevel       string
 	DNSOverwrite   bool
 	ProxyColumns   int
+	DelayURL       string
+	DelayTimeoutMS int
 	HoverDelay     int
 	TrafficGraph   bool
 	MemoryUsage    bool
@@ -285,6 +287,8 @@ func DefaultPrefs() Prefs {
 		IPv6:           true,
 		UnifiedDelay:   true,
 		ProxyColumns:   AutoProxyColumns,
+		DelayURL:       defaultDelayURL,
+		DelayTimeoutMS: DelayTimeout,
 		HoverDelay:     HoverJumpDelay,
 		TrafficGraph:   true,
 		MemoryUsage:    true,

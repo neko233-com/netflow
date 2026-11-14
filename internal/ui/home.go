@@ -134,7 +134,7 @@ func (m *Model) currentCard(c *mygoui.Context, pal Palette) mygoui.Element {
 			return
 		}
 		mygoui.Row(c).Padding(8).Radius(4).Background(pal.Primary.Alpha(0.05)).Border(1, pal.Primary.Alpha(0.1)).AlignItems(mygoui.Center).Gap(8).Children(func() {
-			signalMark(c, pal, n.Delay)
+			signalMark(c, pal, n.Delay, m.delayTimeoutMS())
 			mygoui.Column(c).Grow(1).Gap(4).Children(func() {
 				name := n.Name
 				if name == "" {
@@ -157,7 +157,7 @@ func (m *Model) currentCard(c *mygoui.Context, pal Palette) mygoui.Element {
 				})
 			})
 			if m.Home.Mode != "direct" && n.Name != "" {
-				chip(c, pal, DelayText(n.Delay, DelayTimeout), DelayTone(n.Delay, DelayTimeout), false)
+				chip(c, pal, DelayText(n.Delay, m.delayTimeoutMS()), DelayTone(n.Delay, m.delayTimeoutMS()), false)
 			}
 		})
 		m.proxySelects(c, pal)
@@ -255,11 +255,11 @@ func (m *Model) selectHomeNode(name string) {
 
 func (m *Model) nodesForGroup(name string) []ProxyNode {
 	if len(m.Home.Node.GroupNodes) > 0 && (name == "" || name == m.Home.Node.Group) {
-		return SortNodes(m.Home.Node.GroupNodes, m.nodeSort(), DelayTimeout)
+		return SortNodes(m.Home.Node.GroupNodes, m.nodeSort(), m.delayTimeoutMS())
 	}
 	for _, g := range m.Groups {
 		if g.Name == name {
-			return SortNodes(g.Nodes, g.Sort, DelayTimeout)
+			return SortNodes(g.Nodes, g.Sort, m.delayTimeoutMS())
 		}
 	}
 	return nil

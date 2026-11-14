@@ -4,9 +4,34 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/url"
+	"strings"
+	"time"
 )
 
 const defaultDelayURL = "https://cp.cloudflare.com/generate_204"
+
+func validDelayURL(raw string) bool {
+	if len(raw) > 2048 || strings.TrimSpace(raw) != raw || strings.Contains(raw, "#") {
+		return false
+	}
+	u, err := url.ParseRequestURI(raw)
+	return err == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https") && u.User == nil && u.Fragment == ""
+}
+
+func (m *Model) delayTimeoutMS() int {
+	if m.Prefs.DelayTimeoutMS < 100 || m.Prefs.DelayTimeoutMS > 60000 {
+		return DelayTimeout
+	}
+	return m.Prefs.DelayTimeoutMS
+}
+
+func (m *Model) delayURL() string {
+	if !validDelayURL(m.Prefs.DelayURL) {
+		return defaultDelayURL
+	}
+	return m.Prefs.DelayURL
+}
 
 func (m *Model) testProxyDelay(group, name, url string) {
 	if name == "" {
@@ -38,10 +63,18 @@ func (m *Model) testProxyDelay(group, name, url string) {
 		m.Home.Node.Delay = DelayTesting
 	}
 	if url == "" {
-		url = defaultDelayURL
+		for i := range m.Groups {
+			if m.Groups[i].Name == group && m.Groups[i].TestURL != "" {
+				url = m.Groups[i].TestURL
+				break
+			}
+		}
+		if url == "" {
+			url = m.delayURL()
+		}
 	}
 	profileID := m.CurrentProfile
-	m.Hooks.TestProxyAsync(group, name, url, func(ms int, err error) {
+	m.Hooks.TestProxyAsync(group, name, url, time.Duration(m.delayTimeoutMS())*time.Millisecond, func(ms int, err error) {
 		if m.CurrentProfile != profileID {
 			return
 		}

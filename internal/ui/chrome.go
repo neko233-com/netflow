@@ -167,12 +167,12 @@ func meter(c *mygoui.Context, pal Palette, pct int) {
 	mygoui.Text(c, fmt.Sprintf("%d%%", pct)).FontSize(12).TextColor(pal.TextMuted)
 }
 
-func signalMark(c *mygoui.Context, pal Palette, ms int) {
-	tone := pal.Color(SignalTone(ms))
-	bars := SignalBars(ms)
+func signalMark(c *mygoui.Context, pal Palette, ms, timeout int) {
+	tone := pal.Color(SignalTone(ms, timeout))
+	bars := SignalBars(ms, timeout)
 	mygoui.Row(c).Size(38, 38).Radius(6).Shrink(0).Gap(2).Padding(6).
 		Background(tone.Alpha(0.12)).AlignItems(mygoui.End).Justify(mygoui.Center).
-		Tooltip(SignalLabel(ms) + ": " + DelayText(ms, DelayTimeout)).Children(func() {
+		Tooltip(SignalLabel(ms, timeout) + ": " + DelayText(ms, timeout)).Children(func() {
 		for i := 0; i < 4; i++ {
 			h := float32(8 + i*4)
 			bar := mygoui.Box(c).Width(3).Height(h).Radius(1)

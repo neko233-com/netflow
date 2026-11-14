@@ -18,22 +18,22 @@ func TestClassifyDelayAndSignalUseDifferentScales(t *testing.T) {
 	if ClassifyDelay(450, 0) != DelayHigh || DelayTone(450, 0) != ToneWarning {
 		t.Fatal("chip high")
 	}
-	if ClassifySignal(180) != SignalExcellent || SignalTone(180) != ToneSuccess {
+	if ClassifySignal(180, 0) != SignalExcellent || SignalTone(180, 0) != ToneSuccess {
 		t.Fatal("signal excellent")
 	}
-	if ClassifySignal(220) != SignalGood || SignalTone(220) != ToneInfo {
+	if ClassifySignal(220, 0) != SignalGood || SignalTone(220, 0) != ToneInfo {
 		t.Fatal("signal good")
 	}
-	if ClassifySignal(350) != SignalMedium || SignalTone(350) != ToneWarning {
+	if ClassifySignal(350, 0) != SignalMedium || SignalTone(350, 0) != ToneWarning {
 		t.Fatal("signal medium")
 	}
-	if ClassifySignal(800) != SignalHigh || SignalTone(800) != ToneError {
+	if ClassifySignal(800, 0) != SignalHigh || SignalTone(800, 0) != ToneError {
 		t.Fatal("signal high")
 	}
 	if DelayText(DelayTesting, 0) != "testing" || DelayText(0, 0) != "Timeout" || DelayText(1000000, 0) != "Error" || DelayText(-1, 0) != "-" {
 		t.Fatalf("texts %s %s %s %s", DelayText(DelayTesting, 0), DelayText(0, 0), DelayText(1000000, 0), DelayText(-1, 0))
 	}
-	if SignalLabel(DelayTesting) != "测试中" || SignalBars(80) != 4 || SignalBars(-1) != 0 {
+	if SignalLabel(DelayTesting, 0) != "测试中" || SignalBars(80, 0) != 4 || SignalBars(-1, 0) != 0 {
 		t.Fatal("signal label")
 	}
 }
