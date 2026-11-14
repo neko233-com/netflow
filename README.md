@@ -1,6 +1,6 @@
 # NetFlow
 
-NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 UI 和 [mihomo](https://github.com/MetaCubeX/mihomo) 的桌面代理客户端，目标是逐步实现 Clash Verge 的常用功能。界面不是网页，也不需要 WebView。内核目前使用 [基于 mihomo v1.19.33 的公开补丁版本](https://github.com/neko233-com/mihomo/tree/v1.19.33-netflow.8)，修复日志等级并发访问、控制器生命周期竞争以及 TUN 状态同步问题。
+NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 UI 和 [mihomo](https://github.com/MetaCubeX/mihomo) 的桌面代理客户端，目标是逐步实现 Clash Verge 的常用功能。界面不是网页，也不需要 WebView。内核目前使用 [基于 mihomo v1.19.33 的公开补丁版本](https://github.com/neko233-com/mihomo/tree/v1.19.33-netflow.9)，修复日志等级并发访问、控制器生命周期竞争以及 TUN 状态同步问题，并支持 Agent 离线校验。
 
 **目前是开发预览版，尚未达到 Clash Verge 功能对等，也不建议替代现有稳定客户端。** 本项目从 [Clash Go](https://github.com/charlzyx/clash-go) 的 `0a0fd79` 版本开始，保留上游 MIT 许可和署名，正进行 Windows 适配。
 
@@ -17,6 +17,7 @@ NetFlow 是一个使用 Go、[MyGo](https://github.com/egoist/mygo) GPU 原生 U
 - 代理模式、局域网、IPv6、统一延迟、日志等级和监听端口可在界面中修改，作为全局覆写持久化，不修改订阅原文件；设置失败会尝试恢复。旧版 NetFlow 遗留的系统代理会在升级时安全恢复。链式代理尚未接入内核；其他设置页面中的部分控件仍只保存界面偏好，请以实际功能和错误提示为准。
 - TUN 协议栈可跟随订阅，也可持久化覆写为 System、Mixed、gVisor 或 Mips；发布构建包含 gVisor，Tailscale 出站未包含。更改协议栈会重新加载内核。
 - DNS 覆写按订阅保存；设置中的编辑器接受 mihomo `dns` 段内容，应用时校验合并后的配置并在内核重载失败时尝试回滚。DNS 监听端口需要自行避免冲突。
+- 手动更新 GeoData 会使用当前配置中的 HTTPS 地址，通过正在运行的内核混合代理下载配置目录里已有的数据库，并校验内容；不会回退到直连。更新先保存在用户配置目录中，退出并重新启动 NetFlow 后逐个原子替换，避免覆盖 Windows 正在映射的数据库，也不会只更新 TUN 的临时内核目录。下载期间原文件若被修改，启动时会保留原文件并隔离待更新内容；中断后可继续应用。每个数据库最多 64 MiB，单次最多 120 MiB。此操作需要启用可用的混合端口，不会自动下载尚不存在的数据库。
 - “当前配置”显示内核上次成功应用的合成配置，可能包含凭据；查看器最多显示前 256 KiB。订阅文件可从订阅菜单打开，保存后需重新激活；远程订阅更新会覆盖文件中的手动编辑。
 - 订阅菜单可在本地生成分享二维码。二维码包含完整订阅链接，请只向可信设备展示。
 - 网络端口由订阅或配置决定。默认使用混合端口 7897、SOCKS 7898、HTTP 7899；端口被其他程序占用时需在配置中调整。默认不开放 HTTP 控制接口；配置显式指定控制接口时，仅允许带密钥的回环 IP 地址。
@@ -41,6 +42,8 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 预览在独立进程中离线校验配置和本地规则、代理集合，不会为校验下载或修复 GeoData；配置引用缺失或损坏的 GeoData 时会返回错误，缺少 HTTP 集合缓存时会提示其下载内容未被验证。提案最多有效两分钟，配置、已校验的集合文件、GeoData、订阅、路由模式或 TUN 状态变化后须重新预览，TUN 切换期间不能预览或应用。应用失败时尝试恢复旧规则。连接层根据源 IP、目标域名或 IP、端口及网络匹配**后续连接**，可能同时影响其他符合条件的连接；已建立的连接不能被重新路由，可显式选择关闭原连接。规则只在规则模式下控制路由。Agent 状态包含连接元数据，务必只授予可信程序访问权限。
 
 CLI 还提供 `version`、`diagnostics`、`groups`、`rules [偏移 [数量]]`、`select <组> <节点>`、`mode <rule|global|direct>`、`use-profile <订阅 ID>` 和 `close-connection <连接 ID>`。`version` 无需运行桌面程序；其余操作有对应的 `netflow_` MCP 工具。设置页、CLI 和 MCP 的诊断摘要仅包含版本、平台、运行状态及计数，不包含订阅地址、配置目录、错误原文、令牌或连接详情。切换节点、模式、订阅及关闭连接会直接改变运行状态；关闭不存在的连接会返回 `closed: false`。规则覆写仍需要先预览再应用。
+
+`update-geo` 和 MCP 的 `netflow_update_geodata` 可发起与设置页相同的 GeoData 更新。请求返回后通过 `status` 中的 `geo_pending`、`geo_error` 和 `geo_restart_required` 跟踪结果；下载完成后仍需退出并重新启动程序。
 
 ## Clash Verge 迁移
 

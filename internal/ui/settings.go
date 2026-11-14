@@ -144,7 +144,7 @@ func (m *Model) clashSettings(c *mygoui.Context, pal Palette) {
 			clickRow(c, pal, "UWP 工具", "uwp", false, func() {}, nil)
 		}
 		clickRow(c, pal, "更新 GeoData", "geo", m.Busy == "geo", func() {
-			m.Notice = "GeoData 更新尚未实现"
+			m.updateGeo()
 		}, nil)
 		clickRow(c, pal, "流量隧道管理", "tunnels", false, func() { m.Notice = "流量隧道管理" }, nil)
 	})

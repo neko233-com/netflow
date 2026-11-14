@@ -35,6 +35,12 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "tun", in, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_update_geodata", Description: "Download existing GeoData databases through the active local proxy. Poll netflow_status for geo_pending, geo_error and geo_restart_required; updates apply after restarting NetFlow."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, GeoResult, error) {
+			var out GeoResult
+			err := client.Call(ctx, "update-geo", nil, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_preview_rewrite", Description: "Preview a global, subscription profile, or time-limited connection-matcher rule rewrite. Returns a short-lived proposal; changes do not apply until netflow_apply_rewrite. Existing connections are not rerouted.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
 		func(ctx context.Context, _ *mcp.CallToolRequest, change Change) (*mcp.CallToolResult, Preview, error) {
 			var out Preview

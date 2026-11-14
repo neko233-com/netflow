@@ -34,6 +34,7 @@ type Hooks struct {
 	UpdateRuleProvider         func(name string) error
 	UpdateRuleProviderAsync    func(name string, done func(error))
 	UpdateProxyProviderAsync   func(name string, done func(error))
+	UpdateGeoAsync             func(done func(int, error))
 	SetLogPaused               func(paused bool)
 	ClearLogs                  func()
 	ImportURL                  func(url string) error

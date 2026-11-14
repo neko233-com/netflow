@@ -21,6 +21,7 @@ import (
 	"github.com/neko233-com/netflow/internal/clashlog"
 	"github.com/neko233-com/netflow/internal/conn"
 	"github.com/neko233-com/netflow/internal/core"
+	"github.com/neko233-com/netflow/internal/geoupdate"
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/rewrite"
@@ -87,6 +88,9 @@ type App struct {
 	privilegedTUN    bool
 	tunBusy          bool
 	tunLastError     string
+	geoBusy          bool
+	geoLastError     string
+	geoRestart       bool
 	localCoreFactory func() coreEngine
 }
 
@@ -130,6 +134,16 @@ func (a *App) Prepare() error {
 		return err
 	}
 	a.dir = dir
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	geoCount, geoErr := geoupdate.ApplyPending(dir)
+	if geoErr != nil {
+		if _, err := geoupdate.QuarantinePending(dir); err != nil {
+			geoErr = errors.Join(geoErr, fmt.Errorf("保留待更新文件失败: %w", err))
+		}
+		a.geoLastError = geoErr.Error()
+	}
 	if a.store == nil {
 		a.store = appconfig.NewFileStore(dir)
 	}
@@ -175,10 +189,15 @@ func (a *App) Prepare() error {
 	osName, osVersion := sysinfo.Current()
 	a.model = ui.NewModel(ui.HomeState{ConfigDir: dir, Version: core.Version(), OS: osName, OSVersion: osVersion})
 	a.applySettings()
+	if geoErr != nil {
+		a.model.Notice = "GeoData 更新未完全应用: " + geoErr.Error()
+	} else if geoCount > 0 {
+		a.model.Notice = fmt.Sprintf("已应用 %d 个 GeoData 数据库更新", geoCount)
+	}
 	if tunPreflightErr != nil {
-		a.model.Notice = "虚拟网卡未启动: " + tunPreflightErr.Error()
+		a.model.Notice = strings.TrimSpace(a.model.Notice + " 虚拟网卡未启动: " + tunPreflightErr.Error())
 	} else if tunNeedsConsent {
-		a.model.Notice = "虚拟网卡未自动启动，请重新开启并授权"
+		a.model.Notice = strings.TrimSpace(a.model.Notice + " 虚拟网卡未自动启动，请重新开启并授权")
 	}
 	for _, page := range ui.Pages() {
 		if page.Path == a.model.Prefs.StartPage {

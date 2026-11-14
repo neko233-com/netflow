@@ -145,3 +145,25 @@ func TestDiagnosticsCommandUsesBridge(t *testing.T) {
 		t.Fatalf("unexpected diagnostics: %s %v", output.String(), err)
 	}
 }
+
+func TestGeoUpdateCommandUsesBridge(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method != "update-geo" {
+			t.Errorf("unexpected bridge method: %s", method)
+		}
+		return agent.GeoResult{Accepted: true, Pending: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	var output bytes.Buffer
+	if err := run([]string{"--config-dir", dir, "update-geo"}, bytes.NewReader(nil), &output); err != nil {
+		t.Fatal(err)
+	}
+	var result agent.GeoResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil || !result.Accepted || !result.Pending {
+		t.Fatalf("unexpected response: %s %v", output.String(), err)
+	}
+}

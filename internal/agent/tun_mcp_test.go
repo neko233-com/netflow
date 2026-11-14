@@ -15,6 +15,9 @@ func TestMCPRequestsTUN(t *testing.T) {
 		if method == "diagnostics" {
 			return Diagnostics{SchemaVersion: 1, ProfileCount: 2}, nil
 		}
+		if method == "update-geo" {
+			return GeoResult{Accepted: true, Pending: true}, nil
+		}
 		var in TunArgs
 		if method != "tun" || json.Unmarshal(args, &in) != nil || in.Enabled == nil || *in.Enabled {
 			t.Error("incorrect TUN request")
@@ -54,5 +57,14 @@ func TestMCPRequestsTUN(t *testing.T) {
 	var diagnostics Diagnostics
 	if err != nil || json.Unmarshal(data, &diagnostics) != nil || diagnostics.SchemaVersion != 1 || diagnostics.ProfileCount != 2 {
 		t.Fatalf("unexpected MCP diagnostics: %s %v", data, err)
+	}
+	result, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "netflow_update_geodata", Arguments: map[string]any{}})
+	if err != nil || result.IsError {
+		t.Fatalf("GeoData tool failed: %v %+v", err, result)
+	}
+	data, err = json.Marshal(result.StructuredContent)
+	var geo GeoResult
+	if err != nil || json.Unmarshal(data, &geo) != nil || !geo.Accepted || !geo.Pending {
+		t.Fatalf("unexpected GeoData result: %s %v", data, err)
 	}
 }

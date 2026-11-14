@@ -148,6 +148,28 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 				}
 			}
 		}
+	case "update-geo":
+		var input agent.Empty
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			var returned bool
+			a.updateGeoAsync(func(count int, err error) {
+				if !returned {
+					callErr = err
+					return
+				}
+				if a.model != nil {
+					if err != nil {
+						a.model.Notice = "GeoData 更新失败: " + err.Error()
+					} else {
+						a.model.Notice = fmt.Sprintf("已下载 %d 个 GeoData 数据库，请退出并重新启动 NetFlow 以应用", count)
+					}
+				}
+			})
+			returned = true
+			if callErr == nil {
+				value = agent.GeoResult{Accepted: true, Pending: a.geoBusy}
+			}
+		}
 	case "mode":
 		var input agent.ModeArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {

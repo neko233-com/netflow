@@ -17,6 +17,9 @@ type Status struct {
 	TUN           bool          `json:"tun"`
 	TUNPending    bool          `json:"tun_pending"`
 	TUNError      string        `json:"tun_error,omitempty"`
+	GeoPending    bool          `json:"geo_pending"`
+	GeoError      string        `json:"geo_error,omitempty"`
+	GeoRestart    bool          `json:"geo_restart_required"`
 	TUNStacks     []string      `json:"tun_stacks"`
 	Mode          string        `json:"mode"`
 	ActiveProfile string        `json:"active_profile,omitempty"`
@@ -141,4 +144,9 @@ type TunResult struct {
 	Accepted bool `json:"accepted"`
 	Pending  bool `json:"pending"`
 	TUN      bool `json:"tun"`
+}
+
+type GeoResult struct {
+	Accepted bool `json:"accepted"`
+	Pending  bool `json:"pending"`
 }

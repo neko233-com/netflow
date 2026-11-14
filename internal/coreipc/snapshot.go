@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/neko233-com/netflow/internal/geoupdate"
 )
 
 const maxStageBytes = 128 << 20
@@ -37,6 +39,14 @@ func snapshotDirectory(root string) ([]StageFile, error) {
 			return err
 		}
 		if rel == "." {
+			return nil
+		}
+		// Pending downloads and interrupted update transactions are desktop
+		// state, never input to the privileged worker.
+		if !strings.ContainsAny(rel, `/\`) && strings.HasPrefix(strings.ToLower(rel), geoupdate.PrivatePrefix) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 {

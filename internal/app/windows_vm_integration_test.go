@@ -30,6 +30,7 @@ import (
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/coreipc"
+	"github.com/neko233-com/netflow/internal/geoupdate"
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/migration"
 	"github.com/neko233-com/netflow/internal/profile"
@@ -505,6 +506,25 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	dnsAddress := dnsListener.LocalAddr().String()
 	dnsListener.Close()
 	dir := t.TempDir()
+	// Simulate an update downloaded before shutdown. The installed GUI must
+	// apply it before the kernel can map the database, then remove the pending
+	// transaction. The fixture is a synthetic MaxMind test database.
+	oldGeo := []byte("previous database")
+	if err := os.WriteFile(filepath.Join(dir, "Country.mmdb"), oldGeo, 0600); err != nil {
+		t.Fatal(err)
+	}
+	pendingDir := filepath.Join(dir, geoupdate.PendingDirectory)
+	if err := os.Mkdir(pendingDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pendingDir, "item-0"), vmGeoFixture, 0600); err != nil {
+		t.Fatal(err)
+	}
+	beforeGeo, afterGeo := sha256.Sum256(oldGeo), sha256.Sum256(vmGeoFixture)
+	geoManifest := fmt.Sprintf(`{"version":1,"items":[{"name":"Country.mmdb","kind":"mmdb","before":"%x","after":"%x","payload":"item-0"}]}`, beforeGeo, afterGeo)
+	if err := os.WriteFile(filepath.Join(pendingDir, "manifest.json"), []byte(geoManifest), 0600); err != nil {
+		t.Fatal(err)
+	}
 	config := fmt.Sprintf("mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\nipv6: false\nmode: rule\nprofile: {store-fake-ip: true}\ndns:\n  enable: true\n  listen: '%s'\n  enhanced-mode: fake-ip\n  nameserver: ['%s']\ntun:\n  enable: false\n  stack: system\n  auto-route: true\n  auto-detect-interface: true\nrules:\n  - MATCH,REJECT\n", dnsAddress, packet.LocalAddr().String())
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
 		t.Fatal(err)
@@ -598,6 +618,28 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		data, _ := os.ReadFile(filepath.Join(dir, "gui.log"))
 		t.Fatalf("installed GUI did not start agent: %v status=%+v log=%s", err, s, data)
 	}
+	updatedGeo, geoErr := os.ReadFile(filepath.Join(dir, "Country.mmdb"))
+	if geoErr != nil || sha256.Sum256(updatedGeo) != afterGeo {
+		t.Fatalf("installed GUI did not apply pending GeoData: %v", geoErr)
+	}
+	if _, geoErr := os.Stat(pendingDir); !errors.Is(geoErr, os.ErrNotExist) {
+		t.Fatalf("pending GeoData transaction remains: %v", geoErr)
+	}
+	if out, err := call("update-geo"); err != nil {
+		t.Fatalf("GeoData update request failed: %s %v", out, err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		s, err = status()
+		if err == nil && !s.GeoPending && s.GeoError != "" {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil || s.GeoPending || !strings.Contains(s.GeoError, "混合代理") || s.GeoRestart {
+		t.Fatalf("GeoData update status: %+v %v", s, err)
+	}
+	t.Log("installed GUI applied a pending GeoData database and Agent reported the missing-proxy failure")
 	diagnosticOutput, diagnosticErr := call("diagnostics")
 	var diagnostics agent.Diagnostics
 	if diagnosticErr != nil || json.Unmarshal(diagnosticOutput, &diagnostics) != nil || diagnostics.AppVersion != netflow.Version() || diagnostics.CoreVersion != core.Version() || diagnostics.CoreVersion == "unknown" || !diagnostics.CoreRunning || diagnostics.TUN {
@@ -990,6 +1032,13 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	// Repeat only the handoff with the default in-memory cache; the full TUN
 	// stack and crash tests above use persistent fake-IP storage.
 	memoryDir := t.TempDir()
+	failedGeoDir := filepath.Join(memoryDir, geoupdate.PendingDirectory)
+	if err := os.Mkdir(failedGeoDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(failedGeoDir, "manifest.json"), []byte("invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	memoryConfig := strings.Replace(config, "store-fake-ip: true", "store-fake-ip: false", 1)
 	if err := os.WriteFile(filepath.Join(memoryDir, "config.yaml"), []byte(memoryConfig), 0600); err != nil {
 		t.Fatal(err)
@@ -1040,6 +1089,13 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		data, _ := os.ReadFile(filepath.Join(memoryDir, "gui.log"))
 		t.Fatalf("memory-cache GUI startup: %+v %v %s", s, err, data)
 	}
+	if s.GeoError == "" || s.GeoRestart {
+		t.Fatalf("failed startup GeoData update not reported: %+v", s)
+	}
+	if _, err := os.Stat(failedGeoDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed GeoData transaction was not quarantined: %v", err)
+	}
+	t.Log("Agent reported a failed startup GeoData update and its transaction was quarantined")
 	memoryA := lookupFake("memory-a.netflow-test.example.", dnsAddress)
 	memoryB := lookupFake("memory-b.netflow-test.example.", dnsAddress)
 	for _, enabled := range []bool{true, false} {

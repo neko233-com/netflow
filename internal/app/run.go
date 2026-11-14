@@ -113,6 +113,7 @@ func (a *App) ready(quitting *bool) {
 	a.model.Hooks.TestProxyAsync = a.testProxyAsync
 	a.model.Hooks.UpdateRuleProviderAsync = a.updateRuleProviderAsync
 	a.model.Hooks.UpdateProxyProviderAsync = a.updateProxyProviderAsync
+	a.model.Hooks.UpdateGeoAsync = a.updateGeoAsync
 	a.model.Hooks.CheckUpdateAsync = a.checkUpdateAsync
 	a.model.Hooks.QueryIPAsync = a.queryIPAsync
 	a.model.Hooks.SystemDark = mygo.Theme.IsDark

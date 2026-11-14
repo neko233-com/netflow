@@ -17,6 +17,9 @@ func TestSnapshotCopiesUserFilesAndExcludesRuntimeSecrets(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "verge-imports"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(dir, ".netflow-geodata-pending"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	for name, data := range map[string]string{
 		"config.yaml":         "rules: []\n",
 		"cache.db":            "locked-cache",
@@ -28,6 +31,8 @@ func TestSnapshotCopiesUserFilesAndExcludesRuntimeSecrets(t *testing.T) {
 		"agent-rules.json":    "desktop rules",
 		"verge-imports/v0123456789abcdef0123456789abcdef.zip": "private recovery archive",
 		"verge-imports/user.yaml":                             "arbitrary user file",
+		".netflow-geodata-pending/manifest.json":              "desktop transaction",
+		".netflow-geodata-tmp-abandoned":                      "unfinished update",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(data), 0600); err != nil {
 			t.Fatal(err)

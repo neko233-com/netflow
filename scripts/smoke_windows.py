@@ -245,7 +245,7 @@ def main():
             mcp.stdin.write(json.dumps({"jsonrpc":"2.0", "method":"notifications/initialized"}) + "\n"); mcp.stdin.flush()
             response = rpc({"jsonrpc":"2.0", "id":2, "method":"tools/list", "params":{}})
             names = {item["name"] for item in response["result"]["tools"]}
-            expected = {"netflow_status", "netflow_diagnostics", "netflow_set_tun", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
+            expected = {"netflow_status", "netflow_diagnostics", "netflow_set_tun", "netflow_update_geodata", "netflow_preview_rewrite", "netflow_apply_rewrite", "netflow_proxy_groups", "netflow_rules",
                         "netflow_select_proxy", "netflow_set_mode", "netflow_use_profile", "netflow_close_connection",
                         "netflow_migration_preview", "netflow_migration_import", "netflow_migration_export"}
             if names != expected:
@@ -259,6 +259,19 @@ def main():
             response = rpc({"jsonrpc":"2.0", "id":4, "method":"tools/call", "params":{"name":"netflow_proxy_groups", "arguments":{}}})
             if response.get("result", {}).get("isError") or "error" in response:
                 raise RuntimeError(f"MCP proxy groups failed: {response}")
+            response = rpc({"jsonrpc":"2.0", "id":5, "method":"tools/call", "params":{"name":"netflow_update_geodata", "arguments":{}}})
+            if response.get("result", {}).get("isError") or not response.get("result", {}).get("structuredContent", {}).get("accepted"):
+                raise RuntimeError(f"MCP GeoData request failed: {response}")
+            deadline = time.monotonic() + 15
+            while True:
+                status = call("status")
+                if not status.get("geo_pending") and status.get("geo_error"):
+                    if "没有可更新" not in status["geo_error"]:
+                        raise RuntimeError(f"unexpected GeoData status: {status['geo_error']}")
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("MCP GeoData completion was not reported")
+                time.sleep(0.2)
         finally:
             mcp.terminate(); mcp.wait(timeout=10)
         print(f"Windows {'installed' if installed else 'portable'}: routing, CLI rewrites and expiry, diagnostics and MCP checks passed.")
