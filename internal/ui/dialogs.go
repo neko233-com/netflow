@@ -1239,16 +1239,18 @@ func (m *Model) dnsBody(c *mygoui.Context, pal Palette) {
 	mygoui.TextArea(c, &m.DNSDraft).FillWidth().Height(180).Label("dns-override-yaml")
 	if filledButton(c, pal, "保存并启用", "dns-save", true) {
 		p := m.currentProfile()
-		if p == nil || p.UID != m.DNSProfileID || m.Hooks.SetProfileDNS == nil {
+		if p == nil || p.UID != m.DNSProfileID || (m.Hooks.SetProfileDNS == nil && m.Hooks.SetProfileDNSAsync == nil) {
 			m.Notice = "DNS 覆写不可用"
 			return
 		}
-		if err := m.Hooks.SetProfileDNS(p.UID, true, m.DNSDraft); err != nil {
-			m.Notice = err.Error()
-			return
-		}
-		m.Dialogs.DNS = false
-		m.Notice = "DNS 覆写已应用"
+		m.applyProfileDNS(p.UID, true, m.DNSDraft, func(err error) {
+			if err != nil {
+				m.Notice = err.Error()
+				return
+			}
+			m.Dialogs.DNS = false
+			m.Notice = "DNS 覆写已应用"
+		})
 	}
 }
 
@@ -1281,12 +1283,14 @@ func (m *Model) dnsConfirm(c *mygoui.Context, pal Palette) {
 				}
 				if filledButton(c, pal, "仍然开启", "dns-anyway", true) {
 					p := m.currentProfile()
-					if p != nil && m.Hooks.SetProfileDNS != nil {
-						if err := m.Hooks.SetProfileDNS(p.UID, true, p.Option.DNSOverride); err != nil {
-							m.Notice = err.Error()
-						} else {
-							m.Prefs.DNSOverwrite = true
-						}
+					if p != nil && (m.Hooks.SetProfileDNS != nil || m.Hooks.SetProfileDNSAsync != nil) {
+						m.applyProfileDNS(p.UID, true, p.Option.DNSOverride, func(err error) {
+							if err != nil {
+								m.Notice = err.Error()
+							} else {
+								m.Prefs.DNSOverwrite = true
+							}
+						})
 					}
 					m.DNSAsk = false
 				}

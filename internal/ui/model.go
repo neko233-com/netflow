@@ -67,6 +67,7 @@ type Hooks struct {
 	RestoreWebDAVAsync              func(agent.WebDAVRestoreArgs, func(error)) error
 	SaveProfileMetadata             func(form ProfileForm) error
 	SetProfileDNS                   func(id string, enabled bool, text string) error
+	SetProfileDNSAsync              func(id string, enabled bool, text string, done func(error))
 	LoadEffectiveConfig             func() (string, error)
 	Diagnostics                     func() (string, error)
 	OpenProfileFile                 func(id string) error

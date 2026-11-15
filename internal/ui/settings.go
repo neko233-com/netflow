@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"runtime"
 
 	mygoui "github.com/egoist/mygo/ui"
@@ -100,7 +101,7 @@ func (m *Model) clashSettings(c *mygoui.Context, pal Palette) {
 			sw := mygoui.Switch(c, &m.Prefs.DNSOverwrite).Disabled(disabled).Label("dns-overwrite")
 			if sw.Changed() {
 				p := m.currentProfile()
-				if p == nil || m.Hooks.SetProfileDNS == nil {
+				if p == nil || (m.Hooks.SetProfileDNS == nil && m.Hooks.SetProfileDNSAsync == nil) {
 					m.Prefs.DNSOverwrite = !m.Prefs.DNSOverwrite
 					m.Notice = "DNS 覆写不可用"
 					return
@@ -113,10 +114,13 @@ func (m *Model) clashSettings(c *mygoui.Context, pal Palette) {
 					m.Notice = "请先填写 DNS 配置"
 					return
 				}
-				if err := m.Hooks.SetProfileDNS(p.UID, m.Prefs.DNSOverwrite, p.Option.DNSOverride); err != nil {
-					m.Prefs.DNSOverwrite = !m.Prefs.DNSOverwrite
-					m.Notice = err.Error()
-				}
+				enabled := m.Prefs.DNSOverwrite
+				m.applyProfileDNS(p.UID, enabled, p.Option.DNSOverride, func(err error) {
+					if err != nil {
+						m.Prefs.DNSOverwrite = !enabled
+						m.Notice = err.Error()
+					}
+				})
 			}
 		})
 		m.switchLine(c, pal, "IPv6", &m.Prefs.IPv6, "ipv6", func(on bool) { m.setKernelBool("ipv6", &m.Prefs.IPv6, on) }, nil)
@@ -158,6 +162,18 @@ func (m *Model) clashSettings(c *mygoui.Context, pal Palette) {
 		}, nil)
 		clickRow(c, pal, "流量隧道管理", "tunnels", false, func() { m.Notice = "流量隧道管理" }, nil)
 	})
+}
+
+func (m *Model) applyProfileDNS(id string, enabled bool, text string, done func(error)) {
+	if m.Hooks.SetProfileDNSAsync != nil {
+		m.Hooks.SetProfileDNSAsync(id, enabled, text, done)
+		return
+	}
+	if m.Hooks.SetProfileDNS != nil {
+		done(m.Hooks.SetProfileDNS(id, enabled, text))
+		return
+	}
+	done(errors.New("DNS 覆写不可用"))
 }
 
 func (m *Model) setKernelBool(name string, field *bool, on bool) {
