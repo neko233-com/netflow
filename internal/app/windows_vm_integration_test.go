@@ -140,13 +140,20 @@ func vmGUIShutdownFailure(t *testing.T) {
 	})
 	deadline := time.Now().Add(30 * time.Second)
 	for hwnd == 0 && time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("shutdown-failure GUI exited before its window appeared: %v\n%s", err, output.String())
+		default:
+		}
 		user.NewProc("EnumWindows").Call(callback, 0)
 		if hwnd == 0 {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	if hwnd == 0 {
-		t.Fatal("shutdown-failure GUI window did not appear")
+		_ = cmd.Process.Kill()
+		err := <-done
+		t.Fatalf("shutdown-failure GUI window did not appear: %v\n%s", err, output.String())
 	}
 	menu, _, _ := user.NewProc("GetMenu").Call(hwnd)
 	fileMenu, _, _ := user.NewProc("GetSubMenu").Call(menu, 0)
