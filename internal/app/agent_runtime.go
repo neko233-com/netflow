@@ -62,6 +62,31 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 	if method == "status" {
 		return a.dispatchAgentStatus(ctx)
 	}
+	if method == "restart-core" {
+		var input agent.Empty
+		if err := decodeStrict(args, &input); err != nil {
+			return nil, err
+		}
+		result := make(chan error, 1)
+		executed := false
+		a.runOnMain(func() {
+			executed = true
+			if err := ctx.Err(); err != nil {
+				result <- err
+				return
+			}
+			a.restartCoreAsync(func(err error) { result <- err })
+		})
+		if !executed {
+			return nil, errors.New("application is shutting down")
+		}
+		select {
+		case err := <-result:
+			return agent.ActionResult{OK: err == nil}, err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if method == "cancel-apply" {
 		var in agent.Empty
 		if err := decodeStrict(args, &in); err != nil {

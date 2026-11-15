@@ -345,7 +345,15 @@ func (a *App) trayActions() TrayActions {
 		},
 		RestartCore: func() {
 			if !a.guiConfigBusy() {
-				_ = a.restartCore()
+				a.restartCoreAsync(func(err error) {
+					if a.model != nil {
+						if err != nil {
+							a.model.Notice = err.Error()
+						} else {
+							a.model.Notice = "内核已重启"
+						}
+					}
+				})
 			}
 		},
 		Quit: func() { mygo.App.Quit() },

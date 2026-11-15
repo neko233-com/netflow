@@ -20,18 +20,22 @@ type profileSwitch struct {
 // All fields other than done are owned by the app event loop. done is closed
 // only after the kernel operation and any cancellation request have ended.
 type guiConfigOperation struct {
-	done       chan struct{}
-	reloadDone chan struct{}
-	cancelDone chan struct{}
-	canceled   bool
-	rollback   bool
-	quit       bool
-	finished   func(error)
+	done          chan struct{}
+	ctx           context.Context
+	cancel        context.CancelFunc
+	cancelMessage string
+	reloadDone    chan struct{}
+	cancelDone    chan struct{}
+	canceled      bool
+	rollback      bool
+	quit          bool
+	finished      func(error)
 }
 
 // The callbacks run on the app event loop. The only work moved off that loop
 // is the kernel reload, including the reload required to restore old state.
 type guiConfigTransaction struct {
+	apply    func(context.Context) error
 	commit   func() error
 	rollback func() (bool, error)
 	wrap     func(error, error) error
@@ -68,13 +72,16 @@ func (a *App) startGUIConfigOperation(message string, begin func() (*guiConfigTr
 		done(errors.New("虚拟网卡正在切换，请稍后重试"))
 		return
 	}
-	op := &guiConfigOperation{done: make(chan struct{}), finished: done}
+	ctx, cancel := context.WithCancel(context.Background())
+	op := &guiConfigOperation{done: make(chan struct{}), ctx: ctx, cancel: cancel, finished: done}
 	a.guiOperation = op
 	// Block other actor mutations immediately, including the interval before
 	// the deferred begin callback runs. Begin itself uses the unrestricted path.
 	a.guiBarrier.Store(op)
 	if a.model != nil {
 		a.model.OperationMessage = message
+		a.model.OperationDetail = "正在等待内核完成配置应用。"
+		a.model.OperationCancelLabel = "取消并恢复"
 		a.model.OperationCancel = func() { a.cancelGUIConfigOperation(op) }
 	}
 	if a.win != nil {
@@ -97,7 +104,12 @@ func (a *App) startGUIConfigOperation(message string, begin func() (*guiConfigTr
 		}
 		op.reloadDone = make(chan struct{})
 		go func() {
-			err := a.core.Reload()
+			var err error
+			if tx.apply != nil {
+				err = tx.apply(op.ctx)
+			} else {
+				err = a.core.Reload()
+			}
 			close(op.reloadDone)
 			a.runOnMainUnrestricted(func() { a.finishGUIConfigReload(op, tx, err) })
 		}()
@@ -120,8 +132,12 @@ func (a *App) cancelGUIConfigOperation(op *guiConfigOperation) {
 		return
 	}
 	op.canceled = true
+	op.cancel()
 	if a.model != nil {
-		a.model.OperationMessage = "正在取消并恢复配置"
+		a.model.OperationMessage = op.cancelMessage
+		if a.model.OperationMessage == "" {
+			a.model.OperationMessage = "正在取消并恢复配置"
+		}
 		a.model.OperationCancel = nil
 	}
 	if a.win != nil {
@@ -222,6 +238,7 @@ func (a *App) finishGUIConfigOperation(op *guiConfigOperation, err error) {
 	if a.guiOperation != op {
 		return
 	}
+	op.cancel()
 	a.guiOperation = nil
 	if op.finished != nil {
 		op.finished(err)
@@ -245,6 +262,8 @@ func (a *App) finishGUIConfigOperation(op *guiConfigOperation, err error) {
 	}
 	if a.model != nil {
 		a.model.OperationMessage = ""
+		a.model.OperationDetail = ""
+		a.model.OperationCancelLabel = ""
 		a.model.OperationCancel = nil
 	}
 	a.guiBarrier.CompareAndSwap(op, nil)

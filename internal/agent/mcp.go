@@ -114,6 +114,16 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "shutdown", nil, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_restart_core", Description: "Stop and restart the kernel. Existing connections are interrupted; cancellation or failure can leave the kernel and TUN stopped. A retry can re-enable the previously configured TUN. If the request times out, inspect status before retrying."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, ActionResult, error) {
+			var out ActionResult
+			c := client
+			if c.Timeout <= 0 {
+				c.Timeout = 2 * time.Minute
+			}
+			err := c.Call(ctx, "restart-core", nil, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_cancel_apply", Description: "Request cancellation of the configuration application active when this request reaches the kernel. Accepted means cancellation was requested, not that rollback is complete; wait for the original operation and inspect status. Does not intentionally disable TUN."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, CancelApplyResult, error) {
 			var out CancelApplyResult

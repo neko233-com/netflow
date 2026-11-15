@@ -184,6 +184,7 @@ func (a *App) ready(quitting *bool) {
 	a.model.Hooks.UseProfileAsync = a.useProfileAsync
 	a.model.Hooks.ImportURLAsync = a.importURLAsync
 	a.model.Hooks.ImportLocalAsync = a.importLocalAsync
+	a.model.Hooks.RestartCoreAsync = a.restartCoreAsync
 	a.model.Hooks.UpdateProfileAsync = a.updateProfileAsync
 	a.model.Hooks.ChangeProfileURLAsync = a.changeProfileURLAsync
 	a.model.Hooks.UpdateProfileViaProxyAsync = a.updateProfileViaProxyAsync

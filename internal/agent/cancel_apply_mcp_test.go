@@ -45,3 +45,40 @@ func TestCancelApplyMCP(t *testing.T) {
 		t.Fatalf("cancel response: %s %v", data, err)
 	}
 }
+
+func TestRestartCoreMCP(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := Start(dir, func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method != "restart-core" {
+			return nil, errors.New("unexpected method")
+		}
+		return ActionResult{OK: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	ctx := context.Background()
+	server := NewMCP(Client{Dir: dir})
+	client := mcp.NewClient(&mcp.Implementation{Name: "restart-test", Version: "1"}, nil)
+	st, ct := mcp.NewInMemoryTransports()
+	ss, err := server.Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := client.Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	result, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "netflow_restart_core", Arguments: map[string]any{}})
+	if err != nil || result.IsError {
+		t.Fatalf("restart tool: %+v %v", result, err)
+	}
+	data, err := json.Marshal(result.StructuredContent)
+	var value ActionResult
+	if err != nil || json.Unmarshal(data, &value) != nil || !value.OK {
+		t.Fatalf("restart response: %s %v", data, err)
+	}
+}

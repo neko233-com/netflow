@@ -25,6 +25,53 @@ func TestProfileOperationCanBeCanceledFromBusyView(t *testing.T) {
 	}
 }
 
+func TestRestartOperationWarnsThatCoreMayRemainStopped(t *testing.T) {
+	m := DemoModel()
+	m.OperationMessage = "正在重启内核"
+	m.OperationDetail = "取消后内核可能保持停止；重试可能重新启用虚拟网卡。"
+	m.OperationCancelLabel = "取消重启"
+	called := false
+	m.OperationCancel = func() { called = true }
+	tt := renderModel(m, WindowWidth, WindowHeight, false)
+	if !tt.HasText(m.OperationDetail) {
+		t.Fatal("restart consequence is not displayed")
+	}
+	if err := tt.Click("取消重启"); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("restart cancel was not invoked")
+	}
+}
+
+func TestProxyRestartUsesAsyncHook(t *testing.T) {
+	for _, running := range []bool{false, true} {
+		m := DemoModel()
+		m.Router.Replace("/proxies")
+		m.Home.Mode, m.Home.Running, m.Home.Error = "rule", running, ""
+		m.Groups = nil
+		m.Profiles = []ProfileItem{{UID: "p1", Type: "local"}}
+		m.CurrentProfile = "p1"
+		var finish func(error)
+		m.Hooks.RestartCoreAsync = func(done func(error)) { finish = done }
+		tt := renderModel(m, WindowWidth, WindowHeight, false)
+		id := "empty-restart-core-unavailable"
+		if running {
+			id = "empty-restart-no-proxy-info"
+		}
+		if err := tt.Click(id); err != nil {
+			t.Fatal(err)
+		}
+		if finish == nil {
+			t.Fatal("restart was not started")
+		}
+		finish(errors.New("restart failed"))
+		if m.Notice != "restart failed" {
+			t.Fatal("restart failure was not shown")
+		}
+	}
+}
+
 func TestActivateProfileWaitsForAsyncResult(t *testing.T) {
 	m := DemoModel()
 	var finish func(error)

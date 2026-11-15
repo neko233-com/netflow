@@ -139,7 +139,15 @@ func (m *Model) proxyEmpty(c *mygoui.Context, pal Palette, reason EmptyReason) {
 				}
 				if reason == EmptyCore || reason == EmptyNoInfo {
 					if filledButton(c, pal, "重启内核", "empty-restart-"+string(reason), true) {
-						if m.Hooks.RestartCore != nil {
+						if m.Hooks.RestartCoreAsync != nil {
+							m.Hooks.RestartCoreAsync(func(err error) {
+								if err != nil {
+									m.Notice = err.Error()
+								} else {
+									m.Notice = "内核已重启"
+								}
+							})
+						} else if m.Hooks.RestartCore != nil {
 							if err := m.Hooks.RestartCore(); err != nil {
 								m.Notice = err.Error()
 							}

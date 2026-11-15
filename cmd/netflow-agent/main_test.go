@@ -432,6 +432,31 @@ func TestCancelApplyCLI(t *testing.T) {
 	}
 }
 
+func TestRestartCoreCLI(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method != "restart-core" {
+			return nil, errors.New("unexpected method")
+		}
+		return agent.ActionResult{OK: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	var output bytes.Buffer
+	if err := run([]string{"--config-dir", dir, "restart-core"}, strings.NewReader(""), &output); err != nil {
+		t.Fatal(err)
+	}
+	var result agent.ActionResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil || !result.OK {
+		t.Fatalf("response: %s %v", output.String(), err)
+	}
+	if err := run([]string{"--config-dir", dir, "restart-core", "extra"}, strings.NewReader(""), &bytes.Buffer{}); err == nil {
+		t.Fatal("extra argument accepted")
+	}
+}
+
 func TestDiagnosticsCommandUsesBridge(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := agent.Start(dir, func(_ context.Context, method string, _ json.RawMessage) (any, error) {

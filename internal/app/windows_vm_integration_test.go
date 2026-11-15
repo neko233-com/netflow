@@ -240,6 +240,20 @@ func vmVisibleWindows(pid uint32) int {
 
 func vmClickOperationCancel(t *testing.T, hwnd uintptr, message string) {
 	t.Helper()
+	model := ui.NewModel(ui.HomeState{})
+	model.OperationMessage = message
+	model.OperationCancel = func() {}
+	label := "取消并恢复"
+	if message == "正在重启内核" {
+		model.OperationDetail = "取消后内核可能保持停止；重试可能重新启用虚拟网卡。"
+		model.OperationCancelLabel = "取消重启"
+		label = model.OperationCancelLabel
+	}
+	vmClickModelControl(t, hwnd, model, label)
+}
+
+func vmClickModelControl(t *testing.T, hwnd uintptr, model *ui.Model, label string) {
+	t.Helper()
 	user32 := windows.NewLazySystemDLL("user32.dll")
 	class, err := windows.UTF16PtrFromString("MyGoSurface")
 	if err != nil {
@@ -258,13 +272,10 @@ func vmClickOperationCancel(t *testing.T, hwnd uintptr, message string) {
 	if dpi == 0 {
 		dpi = 96
 	}
-	model := ui.NewModel(ui.HomeState{})
-	model.OperationMessage = message
-	model.OperationCancel = func() {}
 	tester := mygoui.NewTester(model.View, int((bounds.right-bounds.left)*96/int32(dpi)), int((bounds.bottom-bounds.top)*96/int32(dpi)))
-	button, ok := tester.Find("取消并恢复")
+	button, ok := tester.Find(label)
 	if !ok {
-		t.Fatal("cancel control is absent from busy view")
+		t.Fatalf("control %q is absent from model view", label)
 	}
 	x := uint32((button.X + button.W/2) * float32(dpi) / 96)
 	y := uint32((button.Y + button.H/2) * float32(dpi) / 96)
@@ -2805,6 +2816,136 @@ func vmHeadlessExpiryShutdown(t *testing.T, appExe string) {
 	t.Fatal("expiry shutdown did not restore networking")
 }
 
+func vmGUIRestartCancellation(t *testing.T, appExe string) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, canceled := make(chan struct{}), make(chan struct{})
+	var enteredOnce, canceledOnce sync.Once
+	provider := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		enteredOnce.Do(func() { close(entered) })
+		<-r.Context().Done()
+		canceledOnce.Do(func() { close(canceled) })
+	}))
+	defer provider.Close()
+	base := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	next := base + "proxy-providers:\n  slow: {type: http, url: '" + provider.URL + "', path: providers/restart-vm.yaml, interval: 3600, health-check: {enable: false}}\n"
+	dir := t.TempDir()
+	_, err = profile.NewStore(dir).ImportLocal("first.yaml", []byte(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"prefs":"{\"AutoStartTUN\":true,\"StartPage\":\"/proxies\",\"PauseOnBlur\":false}"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	process := vmCommand(context.Background(), appExe)
+	process.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000 | 0x00004000}
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(entry), "NETFLOW_CONFIG_DIR=") {
+			process.Env = append(process.Env, entry)
+		}
+	}
+	process.Env = append(process.Env, "NETFLOW_CONFIG_DIR="+dir, "GOMAXPROCS=1")
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- process.Wait() }()
+	defer func() { _ = process.Process.Kill(); <-finished }()
+	client := agent.Client{Dir: dir, Timeout: 90 * time.Second}
+	var status agent.Status
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		if client.Call(context.Background(), "status", nil, &status) == nil && status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !status.TUN {
+		t.Fatal("restart test TUN startup failed")
+	}
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	var hwnd uintptr
+	callback := syscall.NewCallback(func(window uintptr, _ uintptr) uintptr {
+		var owner uint32
+		user32.NewProc("GetWindowThreadProcessId").Call(window, uintptr(unsafe.Pointer(&owner)))
+		if owner == uint32(process.Process.Pid) {
+			var title [128]uint16
+			user32.NewProc("GetWindowTextW").Call(window, uintptr(unsafe.Pointer(&title[0])), uintptr(len(title)))
+			if windows.UTF16ToString(title[:]) == "NetFlow" {
+				hwnd = window
+			}
+		}
+		return 1
+	})
+	user32.NewProc("EnumWindows").Call(callback, 0)
+	if hwnd == 0 {
+		t.Fatal("restart test GUI window missing")
+	}
+	user32.NewProc("ShowWindow").Call(hwnd, 5)
+	user32.NewProc("SetForegroundWindow").Call(hwnd)
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(next), 0600); err != nil {
+		t.Fatal(err)
+	}
+	restartDone := make(chan error, 1)
+	go func() {
+		var result agent.ActionResult
+		restartDone <- client.Call(context.Background(), "restart-core", nil, &result)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(20 * time.Second):
+		var title [128]uint16
+		user32.NewProc("GetWindowTextW").Call(hwnd, uintptr(unsafe.Pointer(&title[0])), uintptr(len(title)))
+		statusErr := client.Call(context.Background(), "status", nil, &status)
+		t.Fatalf("restart provider did not start: title=%q running=%t tun=%t status=%v", windows.UTF16ToString(title[:]), status.Running, status.TUN, statusErr)
+	}
+	var ignored uintptr
+	if ok, _, _ := user32.NewProc("SendMessageTimeoutW").Call(hwnd, 0, 0, 0, 2, 2000, uintptr(unsafe.Pointer(&ignored))); ok == 0 {
+		t.Fatal("restart blocked GUI")
+	}
+	var response agent.CancelApplyResult
+	if err := client.Call(context.Background(), "cancel-apply", nil, &response); err != nil || !response.Accepted {
+		t.Fatalf("Agent did not accept restart cancellation: %+v %v", response, err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(15 * time.Second):
+		t.Fatal("restart provider was not canceled")
+	}
+	select {
+	case err := <-restartDone:
+		if err == nil {
+			t.Fatal("canceled Agent restart reported success")
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("canceled Agent restart did not finish")
+	}
+	deadline = time.Now().Add(25 * time.Second)
+	for time.Now().Before(deadline) {
+		if client.Call(context.Background(), "status", nil, &status) == nil && !status.Running && !status.TUN {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if status.Running || status.TUN {
+		t.Fatalf("canceled restart state: %+v", status)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, dns, e := vmNetworkSnapshot()
+		if e == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
+			t.Log("GUI remained responsive; Agent canceled restart and restored TUN networking")
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatal("canceled restart did not restore networking")
+}
+
 func vmProfileUpdateCancellation(t *testing.T, appExe string, headless bool) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -3877,6 +4018,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		}
 	}
 	t.Log("MSI installation and installed binary hashes verified")
+	vmGUIRestartCancellation(t, filepath.Join(install, "NetFlow.exe"))
 	agentExe := filepath.Join(install, "netflow-agent.exe")
 	versionCtx, versionCancel := context.WithTimeout(context.Background(), 35*time.Second)
 	versionOutput, versionErr := vmCommand(versionCtx, agentExe, "version").CombinedOutput()

@@ -102,6 +102,7 @@ type Hooks struct {
 	CopyWebDAVField                 func(string) error
 	OpenDir                         func(kind string)
 	RestartCore                     func() error
+	RestartCoreAsync                func(done func(error))
 	BrowseScript                    func() (string, error)
 	Copy                            func(text string) error
 	Quit                            func()
@@ -123,13 +124,15 @@ type Hooks struct {
 type Model struct {
 	// OperationMessage is rendered alone while an application transaction is
 	// using the kernel. Other model state remains owned by the event loop.
-	OperationMessage string
-	OperationCancel  func()
-	Router           *mygoui.Router
-	Home             HomeState
-	Cards            HomeCards
-	Draft            HomeCards
-	HomeEdit         bool
+	OperationMessage     string
+	OperationDetail      string
+	OperationCancelLabel string
+	OperationCancel      func()
+	Router               *mygoui.Router
+	Home                 HomeState
+	Cards                HomeCards
+	Draft                HomeCards
+	HomeEdit             bool
 
 	NetTab      int
 	ChartSmooth bool
@@ -281,27 +284,9 @@ func (m *Model) View(c *mygoui.Context) {
 	if m == nil {
 		return
 	}
-	if m.OperationMessage != "" {
-		mygoui.Column(c).Fill().Center().Gap(16).Children(func() {
-			mygoui.Text(c, m.OperationMessage).FontSize(20)
-			mygoui.Text(c, "正在等待内核完成配置应用。")
-			if m.OperationCancel != nil && mygoui.Button(c, "取消并恢复").Clicked() {
-				m.OperationCancel()
-			}
-		})
-		return
+	if m.OperationMessage == "" {
+		m.normalize()
 	}
-	m.normalize()
-	if m.Router.Path() != "/rules" {
-		m.Rules.Loaded = false
-	}
-	if m.Router.Path() != "/proxies" {
-		m.resetProxyNavigation()
-		if m.groupIcons != nil {
-			m.groupIcons.cancelPending()
-		}
-	}
-	m.flushFilters(c.Now())
 	dark := c.Theme().Dark
 	if m.Prefs.ThemeMode == "system" && m.Hooks.SystemDark != nil {
 		dark = m.Hooks.SystemDark()
@@ -319,6 +304,34 @@ func (m *Model) View(c *mygoui.Context) {
 	}
 	c.SetTheme(theme)
 	c.Root().Background(pal.Paper)
+	if m.OperationMessage != "" {
+		mygoui.Column(c).Fill().Center().Gap(16).Children(func() {
+			mygoui.Text(c, m.OperationMessage).FontSize(20)
+			detail := m.OperationDetail
+			if detail == "" {
+				detail = "正在等待内核完成配置应用。"
+			}
+			mygoui.Text(c, detail)
+			label := m.OperationCancelLabel
+			if label == "" {
+				label = "取消并恢复"
+			}
+			if m.OperationCancel != nil && mygoui.Button(c, label).Clicked() {
+				m.OperationCancel()
+			}
+		})
+		return
+	}
+	if m.Router.Path() != "/rules" {
+		m.Rules.Loaded = false
+	}
+	if m.Router.Path() != "/proxies" {
+		m.resetProxyNavigation()
+		if m.groupIcons != nil {
+			m.groupIcons.cancelPending()
+		}
+	}
+	m.flushFilters(c.Now())
 	mygoui.Row(c).Fill().AlignItems(mygoui.Stretch).Children(func() {
 		m.sidebar(c, pal)
 		mygoui.Column(c).Grow(1).FillHeight().Background(pal.Content).Children(func() {
