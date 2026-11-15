@@ -15,13 +15,19 @@ import (
 // a dedicated event loop in headless mode. Dispatch must wait for an accepted
 // callback to finish; it may decline work during shutdown.
 func (a *App) runOnMain(fn func()) {
+	a.runOnMainContext(context.Background(), fn)
+}
+
+// A request waiting behind a configuration transaction must release its
+// Agent capacity when the caller leaves; it must not run after cancellation.
+func (a *App) runOnMainContext(ctx context.Context, fn func()) {
 	for {
-		if a.headlessStopping.Load() {
+		if ctx.Err() != nil || a.headlessStopping.Load() {
 			return
 		}
 		var blocked *guiConfigOperation
 		a.runOnMainUnrestricted(func() {
-			if a.headlessStopping.Load() {
+			if ctx.Err() != nil || a.headlessStopping.Load() {
 				return
 			}
 			blocked = a.guiBarrier.Load()
@@ -32,7 +38,11 @@ func (a *App) runOnMain(fn func()) {
 		if blocked == nil {
 			return
 		}
-		<-blocked.done
+		select {
+		case <-blocked.done:
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 

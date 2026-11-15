@@ -69,7 +69,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		}
 		result := make(chan error, 1)
 		executed := false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if err := ctx.Err(); err != nil {
 				result <- err
@@ -78,7 +78,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			a.restartCoreAsync(func(err error) { result <- err })
 		})
 		if !executed {
-			return nil, errors.New("application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		select {
 		case err := <-result:
@@ -126,7 +126,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		result := make(chan response, 1)
 		var operation *guiConfigOperation
 		executed := false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if err := ctx.Err(); err != nil {
 				result <- response{err: err}
@@ -164,7 +164,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			})
 		})
 		if !executed {
-			return nil, errors.New("application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		select {
 		case out := <-result:
@@ -186,7 +186,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		result := make(chan response, 1)
 		var operation *guiConfigOperation
 		executed := false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if err := ctx.Err(); err != nil {
 				result <- response{err: err}
@@ -212,7 +212,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			}
 		})
 		if !executed {
-			return nil, errors.New("application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		select {
 		case out := <-result:
@@ -234,7 +234,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		result := make(chan response, 1)
 		var operation *guiConfigOperation
 		executed := false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if err := ctx.Err(); err != nil {
 				result <- response{err: err}
@@ -247,7 +247,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			}
 		})
 		if !executed {
-			return nil, errors.New("application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		select {
 		case out := <-result:
@@ -275,7 +275,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		result := make(chan error, 1)
 		var operation *guiConfigOperation
 		executed := false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if err := ctx.Err(); err != nil {
 				result <- err
@@ -292,7 +292,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			}
 		})
 		if !executed {
-			return nil, errors.New("application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		select {
 		case err := <-result:
@@ -318,7 +318,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var hash [32]byte
 		var captureErr error
 		executed := false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if captureErr = ctx.Err(); captureErr != nil {
 				return
@@ -350,7 +350,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			}
 		})
 		if !executed {
-			return nil, errors.New("application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		if captureErr != nil {
 			if ctx.Err() != nil {
@@ -361,7 +361,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		guard := func() error {
 			var guardErr error
 			ran := false
-			a.runOnMain(func() {
+			a.runOnMainContext(ctx, func() {
 				ran = true
 				if guardErr = ctx.Err(); guardErr != nil {
 					return
@@ -376,7 +376,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 				}
 			})
 			if !ran {
-				return errors.New("application is shutting down")
+				return agentRequestUnavailable(ctx)
 			}
 			return guardErr
 		}
@@ -420,7 +420,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var lockedProfile string
 		var prepareErr error
 		executed := false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if prepareErr = ctx.Err(); prepareErr == nil {
 				draft, prepareErr = a.captureVergeScriptDraft(in.ProfileID)
@@ -445,7 +445,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			defer client.CloseIdleConnections()
 		}
 		if !executed {
-			return nil, errors.New("application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		if prepareErr != nil {
 			if ctx.Err() != nil {
@@ -503,14 +503,14 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var result agent.VergeScriptPreview
 		var finishErr error
 		executed = false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if finishErr = ctx.Err(); finishErr == nil {
 				result, finishErr = a.finishVergeScriptPreview(draft, prepared, rollback, update)
 			}
 		})
 		if !executed {
-			return nil, errors.New("application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		return result, finishErr
 	}
@@ -528,7 +528,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var proposal vergeScriptPreviewPages
 		var takeErr error
 		executed := false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if takeErr = ctx.Err(); takeErr != nil {
 				return
@@ -543,7 +543,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			takeErr = a.checkVergeScriptDraft(proposal.draft)
 		})
 		if !executed {
-			return nil, errors.New("application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		if takeErr != nil {
 			return nil, takeErr
@@ -557,7 +557,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		executed = false
 		completed := make(chan error, 1)
 		var operation *guiConfigOperation
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			finish := func(err error) {
 				if err == nil && a.model != nil {
@@ -581,7 +581,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			}
 		})
 		if !executed {
-			return nil, errors.New("application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		select {
 		case finishErr = <-completed:
@@ -623,14 +623,14 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var draft chainDraft
 		var prepareErr error
 		executed := false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if prepareErr = ctx.Err(); prepareErr == nil {
 				draft, prepareErr = a.prepareAgentChain(in)
 			}
 		})
 		if !executed {
-			return nil, errors.New("desktop application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		if prepareErr != nil {
 			return nil, prepareErr
@@ -642,14 +642,14 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var result agent.ChainPreview
 		var finishErr error
 		executed = false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if finishErr = ctx.Err(); finishErr == nil {
 				result, finishErr = a.finishAgentChainPreview(draft, checked)
 			}
 		})
 		if !executed {
-			return nil, errors.New("desktop application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		return result, finishErr
 	}
@@ -671,7 +671,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var draft previewDraft
 		var prepareErr error
 		executed := false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if prepareErr = ctx.Err(); prepareErr == nil {
 				if method == "preview" {
@@ -682,7 +682,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			}
 		})
 		if !executed {
-			return nil, errors.New("desktop application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		if prepareErr != nil {
 			return nil, prepareErr
@@ -697,21 +697,21 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var result agent.Preview
 		var finishErr error
 		executed = false
-		a.runOnMain(func() {
+		a.runOnMainContext(ctx, func() {
 			executed = true
 			if finishErr = ctx.Err(); finishErr == nil {
 				result, finishErr = a.finishAgentPreview(draft, checked)
 			}
 		})
 		if !executed {
-			return nil, errors.New("desktop application is shutting down")
+			return nil, agentRequestUnavailable(ctx)
 		}
 		return result, finishErr
 	}
 	var value any
 	var callErr error
 	executed := false
-	a.runOnMain(func() {
+	a.runOnMainContext(ctx, func() {
 		executed = true
 		if err := ctx.Err(); err != nil {
 			callErr = err
@@ -729,9 +729,16 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		value, callErr = a.agentCommand(method, args)
 	})
 	if !executed {
-		return nil, errors.New("desktop application is shutting down")
+		return nil, agentRequestUnavailable(ctx)
 	}
 	return value, callErr
+}
+
+func agentRequestUnavailable(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return errors.New("application is shutting down")
 }
 
 // Cancel only the transaction started by this request; the callback may run

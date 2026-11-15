@@ -3731,6 +3731,19 @@ func vmHeadlessUncachedShutdown(t *testing.T, agentExe, operation string, cancel
 		t.Fatal("pending status was not coalesced")
 	}
 	if cancelRequest {
+		// Exercise more canceled requests than the bridge has ordinary slots
+		// while the original configuration operation still holds its barrier.
+		for i := 0; i < 40; i++ {
+			queuedCtx, cancelQueued := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			err := client.Call(queuedCtx, "groups", nil, nil)
+			cancelQueued()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("queued request %d did not expire cleanly: %v", i, err)
+			}
+		}
+		t.Log("canceled queued requests did not exhaust Agent capacity while TUN was active")
+	}
+	if cancelRequest {
 		cancelCall()
 	} else {
 		var result agent.ActionResult
