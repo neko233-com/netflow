@@ -503,20 +503,56 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		var active bool
 		var finishErr error
 		executed = false
+		completed := make(chan error, 1)
+		var operation *guiConfigOperation
 		a.runOnMain(func() {
 			executed = true
-			active, finishErr = a.finishVergeScriptCommit(ctx, ready)
-			if finishErr == nil && a.model != nil {
-				a.loadProfiles()
-				a.refreshHome()
-				a.model.Notice = "Verge 脚本设置已应用"
-				if a.win != nil {
-					a.win.Invalidate()
+			finish := func(err error) {
+				if err == nil && a.model != nil {
+					a.loadProfiles()
+					a.refreshHome()
+					a.model.Notice = "Verge 脚本设置已应用"
+					if a.win != nil {
+						a.win.Invalidate()
+					}
 				}
+				completed <- err
+			}
+			if a.headless {
+				active, finishErr = a.finishVergeScriptCommit(ctx, ready)
+				finish(finishErr)
+				return
+			}
+			previous := a.guiOperation
+			a.startGUIConfigOperation("正在应用 Verge 脚本", func() (*guiConfigTransaction, error) {
+				var tx *guiConfigTransaction
+				active, tx, finishErr = a.beginVergeScriptCommit(ctx, ready)
+				return tx, finishErr
+			}, finish)
+			if a.guiOperation != previous {
+				operation = a.guiOperation
 			}
 		})
 		if !executed {
 			return nil, errors.New("application is shutting down")
+		}
+		select {
+		case finishErr = <-completed:
+			// The completion callback runs before the GUI transaction releases
+			// its barrier. Do not acknowledge completion until queued work can
+			// observe the committed or restored state.
+			if operation != nil {
+				select {
+				case <-operation.done:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+		case <-ctx.Done():
+			if operation != nil {
+				go a.runOnMainUnrestricted(func() { a.cancelGUIConfigOperation(operation) })
+			}
+			return nil, ctx.Err()
 		}
 		if finishErr != nil {
 			return nil, finishErr

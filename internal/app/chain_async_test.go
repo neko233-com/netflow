@@ -27,6 +27,8 @@ type controlledChainReload struct {
 	cancelOnce                 sync.Once
 	calls                      atomic.Int32
 	failRestore                bool
+	failAfterRelease           error
+	restoreFailure             error
 }
 
 func (e *controlledChainReload) ProviderMembers(name string) ([]core.ProxyNode, error) {
@@ -44,8 +46,14 @@ func (e *controlledChainReload) Reload() error {
 			return context.Canceled
 		case <-e.release:
 		}
+		if e.failAfterRelease != nil {
+			return e.failAfterRelease
+		}
 	}
 	if call == 2 && e.failRestore {
+		if e.restoreFailure != nil {
+			return e.restoreFailure
+		}
 		return errors.New("injected rollback failure")
 	}
 	return e.coreEngine.Reload()

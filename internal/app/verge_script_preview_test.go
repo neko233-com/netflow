@@ -59,7 +59,9 @@ func TestVergeScriptCacheCleanupRejectsMissingCatalog(t *testing.T) {
 	a := New(Options{})
 	a.dir = dir
 	a.profiles = profile.NewStore(dir)
-	a.dispatch = func(fn func()) { fn() }
+	dispatcher := newSerialDispatcher()
+	defer dispatcher.close()
+	a.dispatch = dispatcher.call
 	if _, err := a.dispatchAgent(context.Background(), "verge-script-cache-prune", json.RawMessage(`{}`)); err == nil {
 		t.Fatal("missing catalog accepted")
 	}
@@ -105,7 +107,9 @@ func TestVergeScriptPreviewUsesOfflineValidationWithoutChangingCore(t *testing.T
 	if !a.core.Status().Running {
 		t.Fatal("core did not start")
 	}
-	a.dispatch = func(fn func()) { fn() }
+	dispatcher := newSerialDispatcher()
+	defer dispatcher.close()
+	a.dispatch = dispatcher.call
 	draft, err := a.captureVergeScriptDraft("")
 	if err != nil {
 		t.Fatal(err)

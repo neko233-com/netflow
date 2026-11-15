@@ -55,14 +55,14 @@ func (a *App) rollbackSubscription(d vergeScriptDraft) (*vergeSubscriptionUpdate
 	return &vergeSubscriptionUpdate{body: retained, snapshot: snapshot}, nil
 }
 
-// finishVergeSubscriptionUpdate runs on the event loop. New subscription
+// beginVergeSubscriptionUpdate runs on the event loop. New subscription
 // bytes are written to a unique file before the catalog atomically switches
 // both file and script approval. Startup rebuilds config.yaml from the catalog
 // if the process stops between the catalog and active-config writes.
-func (a *App) finishVergeSubscriptionUpdate(ctx context.Context, ready vergeScriptCommit, catalog profile.File, catalogBefore []byte, index int, nextBase []byte) (bool, error) {
+func (a *App) beginVergeSubscriptionUpdate(ctx context.Context, ready vergeScriptCommit, catalog profile.File, catalogBefore []byte, index int, nextBase []byte) (bool, *guiConfigTransaction, error) {
 	d, p, update := ready.proposal.draft, ready.proposal.prepared, ready.proposal.update
 	if update == nil || index < 0 || index >= len(catalog.Items) || catalog.Items[index].UID != d.target {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	item := &catalog.Items[index]
 	nextURL := update.snapshot.URL
@@ -71,40 +71,40 @@ func (a *App) finishVergeSubscriptionUpdate(ctx context.Context, ready vergeScri
 		nextURL = item.URL
 	}
 	if (item.Type == "remote" && !profile.ValidURL(nextURL)) || (item.Type != "remote" && nextURL != "") || (update.snapshot.File == "" && nextURL != item.URL && !update.replacementURL) {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	nextName := update.snapshot.Name
 	if nextName == "" {
 		nextName = item.Name
 	}
 	if len(nextName) > 256 || strings.ContainsAny(nextName, "\r\n\x00") || (update.snapshot.File == "" && nextName != item.Name) {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	oldBody, oldPath, err := readProfileFile(a.dir, item.File)
 	if err != nil || d.hashes[oldPath] != sha256.Sum256(oldBody) {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	if d.target == d.active && !bytes.Equal(profile.EnsureMixedPort(oldBody, 7897), d.base) {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	nextFile := update.snapshot.File
 	if nextFile == "" {
 		nextFile = ready.stagedFile
 	}
 	if nextFile == "" {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	retained, path, readErr := readProfileFile(a.dir, nextFile)
 	retainedHash := sha256.Sum256(retained)
 	if readErr != nil || !bytes.Equal(retained, update.body) {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	if previous, ok := d.hashes[path]; ok && previous != retainedHash {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	if update.snapshot.File != "" {
 		if _, ok := d.hashes[path]; !ok {
-			return false, scriptpreview.ErrSourcesChanged
+			return false, nil, scriptpreview.ErrSourcesChanged
 		}
 	}
 	d.hashes[path] = retainedHash
@@ -116,50 +116,58 @@ func (a *App) finishVergeSubscriptionUpdate(ctx context.Context, ready vergeScri
 	item.File, item.URL, item.Name, item.Updated, item.Used, item.Total, item.Expire = nextFile, nextURL, nextName, update.snapshot.Updated, update.snapshot.Used, update.snapshot.Total, update.snapshot.Expire
 	item.Option.VergeScriptPrevious, item.Option.VergeScriptApproval, item.Option.VergeExtensions = previous, ready.approval, ready.extensions
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if err := a.checkAgentSources(d.hashes); err != nil {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	if err := a.profiles.SaveIfUnchanged(catalog, catalogBefore); err != nil {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	active := d.target == d.active
-	configChanged := false
-	rollback := func(cause error) error {
-		if err := a.profiles.RestoreSnapshotIfUnchanged(catalog, catalogBefore); err != nil {
-			return errors.Join(cause, errors.New("subscription update failed and catalog changed; inspect configuration"))
-		}
-		if configChanged {
-			if err := safepath.CompareAndWrite(a.dir, "config.yaml", nextBase, d.base); err != nil {
-				return errors.Join(cause, fmt.Errorf("subscription update failed and active config could not be restored: %w", err))
-			}
-			if d.status.Running {
-				if err := a.core.Reload(); err != nil {
-					return errors.Join(cause, errors.New("subscription update failed and core reload could not be restored"))
-				}
-			}
-		}
-		return cause
-	}
 	if active {
 		if err := safepath.CompareAndWrite(a.dir, "config.yaml", d.base, nextBase); err != nil {
-			return false, rollback(err)
-		}
-		configChanged = true
-		if d.status.Running {
-			if err := a.core.Reload(); err != nil {
-				return false, rollback(errors.New("subscription update reload failed"))
+			if restoreErr := a.profiles.RestoreSnapshotIfUnchanged(catalog, catalogBefore); restoreErr != nil {
+				return false, nil, errors.Join(err, errors.New("subscription update failed and catalog changed; inspect configuration"))
 			}
-			effective, err := a.core.EffectiveConfig()
-			if err != nil || sha256.Sum256(effective) != p.EffectiveSHA256 {
-				return false, rollback(errors.New("subscription update did not match preview"))
-			}
+			return false, nil, err
 		}
 	}
-	delete(a.profileAutoReview, d.target)
-	delete(a.profileAutoRetry, d.target)
-	return active && d.status.Running, nil
+	running := active && d.status.Running
+	return running, &guiConfigTransaction{
+		reload: running,
+		commit: func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if running {
+				effective, err := a.core.EffectiveConfig()
+				if err != nil || sha256.Sum256(effective) != p.EffectiveSHA256 {
+					return errors.New("subscription update did not match preview")
+				}
+			}
+			delete(a.profileAutoReview, d.target)
+			delete(a.profileAutoRetry, d.target)
+			return nil
+		},
+		rollback: func() (bool, error) {
+			if err := a.profiles.RestoreSnapshotIfUnchanged(catalog, catalogBefore); err != nil {
+				return false, errors.New("subscription update failed and catalog changed; inspect configuration")
+			}
+			if active {
+				if err := safepath.CompareAndWrite(a.dir, "config.yaml", nextBase, d.base); err != nil {
+					return false, fmt.Errorf("subscription update failed and active config could not be restored: %w", err)
+				}
+			}
+			return running, nil
+		},
+		wrap: func(cause, restoreErr error) error {
+			if restoreErr != nil {
+				return errors.Join(vergeApplyCause(cause), errors.New("subscription update restoration failed; inspect configuration"))
+			}
+			return vergeApplyCause(cause)
+		},
+	}, nil
 }
 
 // prepareVergeScriptUpdate compares the current approved configuration with

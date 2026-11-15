@@ -59,7 +59,9 @@ func TestImportedVergeRulesRunBeforeScriptsAndRemainSeparateFromAgent(t *testing
 				t.Fatal(err)
 			}
 			defer a.core.Stop()
-			a.dispatch = func(fn func()) { fn() }
+			dispatcher := newSerialDispatcher()
+			defer dispatcher.close()
+			a.dispatch = dispatcher.call
 			catalog, err := a.profiles.Load()
 			if err != nil || len(catalog.Items) != 1 || !catalog.Items[0].Option.VergeRulesBeforeScripts {
 				t.Fatal("new ordering was not recorded", err)
@@ -254,7 +256,7 @@ func TestImportedVergeRulesRunBeforeScriptsAndRemainSeparateFromAgent(t *testing
 				case <-time.After(10 * time.Second):
 					t.Fatal("automatic update did not finish")
 				}
-				a.dispatch = func(fn func()) { fn() }
+				a.dispatch = dispatcher.call
 				list, err := a.agentProfiles()
 				if err != nil || len(list.Profiles) != 1 || !list.Profiles[0].VergeAutoUpdateReview || len(a.model.Profiles) != 1 || !a.model.Profiles[0].Option.VergeAutoUpdateReview {
 					t.Fatal("automatic update review was not exposed", err)

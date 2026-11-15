@@ -22,6 +22,18 @@ type vergeScriptCommit struct {
 	stagedFile string
 }
 
+// Kernel errors may include subscription URLs or credentials. Preserve
+// cancellation semantics without returning arbitrary kernel diagnostics.
+func vergeApplyCause(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return errors.New("script application failed")
+}
+
 // prepareVergeScriptCommit may run off the app event loop. It writes only an
 // immutable output file; it does not commit any setting or reload the kernel.
 func (a *App) prepareVergeScriptCommit(ctx context.Context, proposal vergeScriptPreviewPages) (vergeScriptCommit, error) {
@@ -110,15 +122,14 @@ func (a *App) prepareVergeScriptCommit(ctx context.Context, proposal vergeScript
 	return vergeScriptCommit{proposal: proposal, approval: approval, extensions: extensions, sources: sources, stagedFile: stagedFile}, nil
 }
 
-// finishVergeScriptCommit is serialized on the app event loop. It commits
-// the catalog conditionally, reloads the active profile and restores the exact
-// previous catalog on failure. The caller must preview rollback separately.
-func (a *App) finishVergeScriptCommit(ctx context.Context, ready vergeScriptCommit) (bool, error) {
+// beginVergeScriptCommit runs on the app event loop and stages the validated
+// catalog change. Its transaction restores the previous snapshot on failure.
+func (a *App) beginVergeScriptCommit(ctx context.Context, ready vergeScriptCommit) (bool, *guiConfigTransaction, error) {
 	if ctx == nil {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	p, d := ready.proposal.prepared, ready.proposal.draft
 	candidateBase := d.base
@@ -130,29 +141,29 @@ func (a *App) finishVergeScriptCommit(ctx context.Context, ready vergeScriptComm
 		}
 	}
 	if !ready.proposal.expires.After(time.Now()) {
-		return false, errors.New("script preview expired; preview again")
+		return false, nil, errors.New("script preview expired; preview again")
 	}
 	if err := a.checkVergeScriptDraft(d); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	for path, hash := range ready.sources {
 		if existing, ok := d.hashes[path]; ok && existing != hash {
-			return false, scriptpreview.ErrSourcesChanged
+			return false, nil, scriptpreview.ErrSourcesChanged
 		}
 		d.hashes[path] = hash
 	}
 	if err := a.checkAgentSources(d.hashes); err != nil {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	if err := p.Candidate.CheckCurrent(ctx, a.dir, candidateBase, candidateName, p.Candidate.Selection, p.Candidate.Clock); err != nil {
 		if ctx.Err() != nil {
-			return false, ctx.Err()
+			return false, nil, ctx.Err()
 		}
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	catalog, snapshot, err := a.profiles.LoadForUpdate()
 	if err != nil || sha256.Sum256(snapshot) != d.hashes[filepath.Join(a.dir, "profiles.json")] {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	index := -1
 	for i := range catalog.Items {
@@ -162,10 +173,10 @@ func (a *App) finishVergeScriptCommit(ctx context.Context, ready vergeScriptComm
 		}
 	}
 	if index < 0 {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	if ready.proposal.update != nil {
-		return a.finishVergeSubscriptionUpdate(ctx, ready, catalog, snapshot, index, candidateBase)
+		return a.beginVergeSubscriptionUpdate(ctx, ready, catalog, snapshot, index, candidateBase)
 	}
 	option := &catalog.Items[index].Option
 	previous := &scriptmeta.Previous{VergeExtensions: option.VergeExtensions}
@@ -175,30 +186,59 @@ func (a *App) finishVergeScriptCommit(ctx context.Context, ready vergeScriptComm
 	}
 	option.VergeScriptPrevious, option.VergeScriptApproval, option.VergeExtensions = previous, ready.approval, ready.extensions
 	if err := ctx.Err(); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if err := a.profiles.SaveIfUnchanged(catalog, snapshot); err != nil {
-		return false, scriptpreview.ErrSourcesChanged
+		return false, nil, scriptpreview.ErrSourcesChanged
 	}
 	active := d.status.Running && d.target == d.active
-	if !active {
-		return false, nil
+	return active, &guiConfigTransaction{
+		reload: active,
+		commit: func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if active {
+				effective, err := a.core.EffectiveConfig()
+				if err != nil || sha256.Sum256(effective) != p.EffectiveSHA256 {
+					return errors.New("script apply did not match preview")
+				}
+			}
+			return nil
+		},
+		rollback: func() (bool, error) {
+			if err := a.profiles.RestoreSnapshotIfUnchanged(catalog, snapshot); err != nil {
+				return false, errors.New("script apply failed; restoring catalog failed, inspect configuration")
+			}
+			return active, nil
+		},
+		wrap: func(cause, restoreErr error) error {
+			if restoreErr != nil {
+				return errors.Join(vergeApplyCause(cause), errors.New("script apply failed; restoration failed, inspect configuration"))
+			}
+			return errors.Join(vergeApplyCause(cause), errors.New("script apply failed; previous configuration restored"))
+		},
+	}, nil
+}
+
+// The headless path uses the same staging and rollback rules synchronously.
+func (a *App) finishVergeScriptCommit(ctx context.Context, ready vergeScriptCommit) (bool, error) {
+	active, tx, err := a.beginVergeScriptCommit(ctx, ready)
+	if err != nil {
+		return false, err
 	}
-	rollback := func() error {
-		if err := a.profiles.RestoreSnapshotIfUnchanged(catalog, snapshot); err != nil {
-			return errors.New("script apply failed; restoring catalog failed, inspect configuration")
-		}
-		if err := a.core.Reload(); err != nil {
-			return errors.New("script apply failed; restoring running core failed, inspect configuration")
-		}
-		return errors.New("script apply failed; previous configuration restored")
+	if tx.reload {
+		err = a.core.Reload()
 	}
-	if err := a.core.Reload(); err != nil {
-		return false, rollback()
+	if err == nil {
+		err = tx.commit()
 	}
-	effective, err := a.core.EffectiveConfig()
-	if err != nil || sha256.Sum256(effective) != p.EffectiveSHA256 {
-		return false, rollback()
+	if err == nil {
+		return active, nil
 	}
-	return true, nil
+	needReload, restoreErr := tx.rollback()
+	if restoreErr == nil && needReload {
+		restoreErr = a.core.Reload()
+	}
+	return false, tx.wrap(err, restoreErr)
 }
