@@ -155,7 +155,8 @@ def main():
     check_pe(windows / "NetFlow.exe")
     check_pe(windows / "netflow-agent.exe", subsystem=3)
     check_pe(windows / "netflow-kernel-worker.exe")
-    check_icon_resource(windows / "netflow-kernel-worker.exe")
+    for name in ("NetFlow.exe", "netflow-agent.exe", "netflow-kernel-worker.exe"):
+        check_icon_resource(windows / name)
     check_tun_build_tags(windows / "NetFlow.exe")
     check_tun_build_tags(windows / "netflow-agent.exe")
     check_tun_build_tags(windows / "netflow-kernel-worker.exe")

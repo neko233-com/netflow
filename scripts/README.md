@@ -47,6 +47,8 @@ Automatic memory selection uses 4 GB for a fresh Windows installation and
 3 GB for an existing guest; `-GuestMemory 3G` or `-GuestMemory 4G` overrides
 it. The container limit is 1 GB higher than the guest memory setting.
 
-The Windows background worker icon is generated from `resources/icon.ico`:
+The Windows background worker and Agent icons are generated from `resources/icon.ico`:
 `windres --input scripts/netflow-worker.rc --input-format rc --output-format coff --target pe-x86-64 --output cmd/netflow-kernel-worker/icon_windows_amd64.syso`.
-The checked-in resource object lets release builds run without windres.
+Copy that object to `cmd/netflow-agent/icon_windows_amd64.syso` after regenerating it.
+The checked-in resource objects let release builds run without windres. Packaging
+checks that the GUI, Agent and worker all contain Windows icon resources.

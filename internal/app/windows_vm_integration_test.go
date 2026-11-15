@@ -73,6 +73,27 @@ func vmCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 	return c
 }
 
+func vmVerifyExecutableIcon(path string) error {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	shell := windows.NewLazySystemDLL("shell32.dll")
+	user := windows.NewLazySystemDLL("user32.dll")
+	var large, small uintptr
+	count, _, callErr := shell.NewProc("ExtractIconExW").Call(uintptr(unsafe.Pointer(name)), 0, uintptr(unsafe.Pointer(&large)), uintptr(unsafe.Pointer(&small)), 1)
+	if large != 0 {
+		defer user.NewProc("DestroyIcon").Call(large)
+	}
+	if small != 0 && small != large {
+		defer user.NewProc("DestroyIcon").Call(small)
+	}
+	if count == 0 || (large == 0 && small == 0) {
+		return fmt.Errorf("Windows could not extract the executable icon: %v", callErr)
+	}
+	return nil
+}
+
 // vmVerifyAuthenticode checks the guest's Windows trust store without UI or
 // network retrieval. The host separately checks signer identity and
 // timestamp; signing preflight also requests online revocation checks.
@@ -4369,8 +4390,11 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 				t.Fatalf("guest does not trust installed %s signature: %v", name, err)
 			}
 		}
+		if err := vmVerifyExecutableIcon(filepath.Join(install, name)); err != nil {
+			t.Fatalf("installed %s icon: %v", name, err)
+		}
 	}
-	t.Logf("MSI installation and installed binary hashes verified; existing user data preserved (same build already installed: %t)", matching)
+	t.Logf("MSI installation, installed binary hashes and Windows icons verified; existing user data preserved (same build already installed: %t)", matching)
 	vmGUIRestartCancellation(t, filepath.Join(install, "NetFlow.exe"))
 	agentExe := filepath.Join(install, "netflow-agent.exe")
 	versionCtx, versionCancel := context.WithTimeout(context.Background(), 35*time.Second)
