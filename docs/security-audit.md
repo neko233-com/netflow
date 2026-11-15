@@ -25,3 +25,5 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 '-tags=with_gvisor,no_tailscale'
 2026-11-15 对 `0.2.133-alpha.1` 实际 Windows 发布文件补充本机 Microsoft Defender 自定义扫描：Defender 处于 Normal 模式、实时防护引擎启用，安全智能版本 `1.463.308.0`（更新时间 2026-11-15 08:31，本机时间）。分别扫描发布版 GUI、Agent、特权内核工作进程和 MSI，使用 `-Scan -ScanType 3 -File <文件> -DisableRemediation`，四次均返回退出码 0 且报告未发现威胁。该模式不执行修复，扫描结果只代表该主机、该版本的检测；它不是对 `0.2.99-alpha.1` 既往检测的微软误报裁定，也不能证明软件不存在恶意行为或其他漏洞。
 
 同日对 `0.2.135-alpha.1` 的上述四个 Windows 发布文件重复本机不修复扫描，Defender 安全智能版本仍为 `1.463.308.0`，四次均返回退出码 0 且报告未发现威胁；上述限制同样适用。源码提交 `bf010e1` 的 Windows 环境全工程 `go vet -p 1 ./...` 通过；静态检查不证明运行时行为或安全性。
+
+同日使用 `govulncheck v1.9.0` 重新扫描当前源码（Windows 发布标签 `with_gvisor,no_tailscale`）和 `0.2.135-alpha.1` 的 Windows、macOS ARM64 各三个实际程序，源码与六个二进制均返回 `No vulnerabilities found`。该结果受当时数据库、调用分析和替换模块识别范围限制；macOS 二进制扫描不代表程序已在 Mac 运行。
