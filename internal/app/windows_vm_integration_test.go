@@ -2996,6 +2996,190 @@ func vmProfileUpdateCancellation(t *testing.T, appExe string, headless bool) {
 	t.Fatal("profile update cancellation did not restore networking")
 }
 
+func vmFirstImportCancellation(t *testing.T, appExe string, headless bool) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var enteredOnce, canceledOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enteredOnce.Do(func() { close(entered) })
+		select {
+		case <-r.Context().Done():
+			canceledOnce.Do(func() { close(canceled) })
+			return
+		case <-release:
+		}
+		_, _ = io.WriteString(w, "proxies: [{name: fresh, type: direct}]\n")
+	}))
+	defer provider.Close()
+	defer unblock()
+	base := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	next := base + "proxy-providers:\n  slow: {type: http, url: '" + provider.URL + "', path: providers/import-vm.yaml, interval: 3600, health-check: {enable: false}}\n"
+	subscription := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, next) }))
+	defer subscription.Close()
+	dir := t.TempDir()
+	store := profile.NewStore(dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(base), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !headless {
+		if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"prefs":"{\"AutoStartTUN\":true}"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var process *exec.Cmd
+	if headless {
+		process = vmCommand(context.Background(), appExe, "--headless", "--tun=true")
+	} else {
+		process = vmCommand(context.Background(), appExe)
+		process.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000 | 0x00004000}
+	}
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(entry), "NETFLOW_CONFIG_DIR=") {
+			process.Env = append(process.Env, entry)
+		}
+	}
+	process.Env = append(process.Env, "NETFLOW_CONFIG_DIR="+dir, "GOMAXPROCS=1")
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- process.Wait() }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			_ = process.Process.Kill()
+			<-finished
+		}
+	}()
+	client := agent.Client{Dir: dir, Timeout: 30 * time.Second}
+	var status agent.Status
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		if client.Call(context.Background(), "status", nil, &status) == nil && status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !status.TUN || status.Headless != headless {
+		t.Fatalf("first import TUN startup: %+v", status)
+	}
+	oldConfig, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job agent.ProfileJob
+	if err := client.Call(context.Background(), "import-profile", agent.ProfileImportArgs{URL: subscription.URL}, &job); err != nil || job.JobID == "" {
+		t.Fatalf("start first import: %+v %v", job, err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("first import provider did not start")
+	}
+	if headless {
+		var response agent.ActionResult
+		if err := client.Call(context.Background(), "shutdown", nil, &response); err != nil || !response.OK {
+			t.Fatalf("headless shutdown: %+v %v", response, err)
+		}
+	} else {
+		user32 := windows.NewLazySystemDLL("user32.dll")
+		var hwnd uintptr
+		callback := syscall.NewCallback(func(window uintptr, _ uintptr) uintptr {
+			var owner uint32
+			user32.NewProc("GetWindowThreadProcessId").Call(window, uintptr(unsafe.Pointer(&owner)))
+			if owner == uint32(process.Process.Pid) {
+				var title [128]uint16
+				user32.NewProc("GetWindowTextW").Call(window, uintptr(unsafe.Pointer(&title[0])), uintptr(len(title)))
+				if windows.UTF16ToString(title[:]) == "NetFlow - 正在导入订阅" {
+					hwnd = window
+				}
+			}
+			return 1
+		})
+		user32.NewProc("EnumWindows").Call(callback, 0)
+		if hwnd == 0 {
+			t.Fatal("import operation window missing")
+		}
+		var ignored uintptr
+		if ok, _, _ := user32.NewProc("SendMessageTimeoutW").Call(hwnd, 0, 0, 0, 2, 2000, uintptr(unsafe.Pointer(&ignored))); ok == 0 {
+			t.Fatal("GUI event loop blocked")
+		}
+		vmClickOperationCancel(t, hwnd, "正在导入订阅")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("import provider was not canceled")
+	}
+	unblock()
+	if headless {
+		select {
+		case err := <-finished:
+			stopped = true
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatal("headless shutdown stalled")
+		}
+	} else {
+		deadline = time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			if client.Call(context.Background(), "profile-job-status", agent.ProfileJobArgs{JobID: job.JobID}, &job) == nil && job.State != "pending" {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if job.State != "failed" {
+			t.Fatalf("canceled job state: %+v", job)
+		}
+		if err := client.Call(context.Background(), "status", nil, &status); err != nil || !status.TUN {
+			t.Fatalf("TUN lost after cancellation: %+v %v", status, err)
+		}
+		off := false
+		var tunResult agent.TunResult
+		if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &off}, &tunResult); err != nil {
+			t.Fatal(err)
+		}
+		deadline = time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			if client.Call(context.Background(), "status", nil, &status) == nil && !status.TUN && !status.TUNPending {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if status.TUN || status.TUNPending {
+			t.Fatal("GUI TUN did not stop")
+		}
+		_ = process.Process.Kill()
+		<-finished
+		stopped = true
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if err != nil || !bytes.Equal(got, oldConfig) {
+		t.Fatalf("first import did not restore config: %v", err)
+	}
+	catalog, err := store.Load()
+	if err != nil || len(catalog.Items) != 0 || catalog.Current != "" {
+		t.Fatalf("first import did not roll back catalog: %+v %v", catalog, err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, servers, e := vmNetworkSnapshot()
+		if e == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(servers, beforeDNS) {
+			t.Logf("first import canceled with TUN and networking restored (headless=%t)", headless)
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatal("first import cancellation did not restore networking")
+}
+
 func vmHeadlessStartupCancellation(t *testing.T, appExe string) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -4425,6 +4609,8 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	vmGUIConfigSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), "option")
 	vmProfileUpdateCancellation(t, filepath.Join(install, "NetFlow.exe"), false)
 	vmProfileUpdateCancellation(t, filepath.Join(install, "NetFlow.exe"), true)
+	vmFirstImportCancellation(t, filepath.Join(install, "NetFlow.exe"), false)
+	vmFirstImportCancellation(t, filepath.Join(install, "NetFlow.exe"), true)
 	vmHeadlessExpiryShutdown(t, filepath.Join(install, "NetFlow.exe"))
 	vmHeadlessStartupCancellation(t, filepath.Join(install, "NetFlow.exe"))
 	vmGUIStartupProvider(t, filepath.Join(install, "NetFlow.exe"))

@@ -44,6 +44,25 @@ func TestSubscriptionAsyncWorkflowAndBulkResults(t *testing.T) {
 	}
 }
 
+func TestLocalImportRunsInOrderAndReportsFailures(t *testing.T) {
+	m := NewModel(HomeState{})
+	var finish func(error)
+	var paths []string
+	m.Hooks.ImportLocalAsync = func(path string, done func(error)) { paths = append(paths, path); finish = done }
+	m.dropProfiles([]string{"a.yaml", "bad.txt", "b.yml"})
+	if !m.ProfileBusy || len(paths) != 1 || paths[0] != "a.yaml" {
+		t.Fatal("first import was not started")
+	}
+	finish(errors.New("failed"))
+	if !m.ProfileBusy || len(paths) != 2 || paths[1] != "b.yml" {
+		t.Fatalf("imports were not serialized: %v", paths)
+	}
+	finish(nil)
+	if m.ProfileBusy || !strings.Contains(m.Notice, "已导入 1") || !strings.Contains(m.Notice, "失败 2") {
+		t.Fatalf("result: %s", m.Notice)
+	}
+}
+
 func TestBulkDeleteRequiresConfirmationAndSkipsActive(t *testing.T) {
 	m := NewModel(HomeState{})
 	m.Router.Replace("/profile")

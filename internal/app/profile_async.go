@@ -3,10 +3,13 @@ package app
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -34,13 +37,109 @@ func (a *App) importURLAsync(raw string, done func(error)) {
 		defer client.CloseIdleConnections()
 		result, err := fetchProfileResponseContext(ctx, raw, client, "")
 		a.runOnMain(func() {
-			if err == nil {
-				err = a.importURLData(raw, result.body, result.headers)
+			finish := func(_ string, err error) {
+				done(err)
+				if a.win != nil {
+					a.win.Invalidate()
+				}
 			}
-			done(err)
-			if a.win != nil {
-				a.win.Invalidate()
+			if err != nil {
+				finish("", err)
+				return
 			}
+			a.importProfileAsync(func() (profile.CatalogItem, bool, error) {
+				return a.profiles.ImportRemoteConfigured(raw, func(string) ([]byte, error) { return result.body, nil }, result.headers, nil)
+			}, result.body, finish)
+		})
+	}()
+}
+
+// Importing the first profile also activates it. Run that reload as a
+// cancelable transaction, so a slow provider cannot block either event loop.
+func (a *App) importProfileAsync(importItem func() (profile.CatalogItem, bool, error), body []byte, done func(string, error)) {
+	var uid string
+	var discarded bool
+	a.startGUIConfigOperation("正在导入订阅", func() (*guiConfigTransaction, error) {
+		if a.profiles == nil {
+			a.profiles = profile.NewStore(a.dir)
+		}
+		if err := validateProfile(body); err != nil {
+			return nil, err
+		}
+		item, first, err := importItem()
+		if err != nil {
+			return nil, err
+		}
+		uid = item.UID
+		if !first {
+			return &guiConfigTransaction{commit: func() error { a.loadProfiles(); return nil }, rollback: func() (bool, error) { return false, nil }, wrap: profileSwitchError}, nil
+		}
+		_, catalogSnapshot, err := a.profiles.LoadForUpdate()
+		if err != nil {
+			return nil, fmt.Errorf("读取导入后的订阅目录失败: %w", err)
+		}
+		discard := func(err error) error {
+			if restoreErr := a.profiles.DiscardFirstImportIfUnchanged(uid, catalogSnapshot, body); restoreErr != nil {
+				return errors.Join(err, fmt.Errorf("回滚导入失败: %w", restoreErr))
+			}
+			discarded = true
+			a.loadProfiles()
+			return err
+		}
+		tx, err := a.beginProfileSwitch(uid)
+		if err != nil {
+			return nil, discard(err)
+		}
+		return &guiConfigTransaction{
+			commit:   func() error { return a.commitProfileSwitch(tx) },
+			rollback: func() (bool, error) { return a.beginProfileSwitchRollback(tx) },
+			wrap: func(cause, restoreErr error) error {
+				if restoreErr != nil {
+					return profileSwitchError(cause, restoreErr)
+				}
+				return discard(cause)
+			},
+			reload: a.core != nil && a.core.Status().Running,
+		}, nil
+	}, func(err error) {
+		if err != nil && discarded {
+			uid = ""
+		}
+		done(uid, err)
+	})
+}
+
+func (a *App) importLocalAsync(path string, done func(error)) {
+	ctx := a.profileRequestContext()
+	a.profileWorkers.Add(1)
+	go func() {
+		defer a.profileWorkers.Done()
+		var body []byte
+		f, err := os.Open(path)
+		if err == nil {
+			body, err = io.ReadAll(io.LimitReader(f, (8<<20)+1))
+			_ = f.Close()
+			if err == nil && len(body) > 8<<20 {
+				err = errors.New("配置文件超过 8 MiB")
+			}
+		}
+		if err == nil {
+			err = ctx.Err()
+		}
+		a.runOnMain(func() {
+			finish := func(err error) {
+				done(err)
+				if a.win != nil {
+					a.win.Invalidate()
+				}
+			}
+			if err != nil {
+				finish(err)
+				return
+			}
+			a.importProfileAsync(func() (profile.CatalogItem, bool, error) {
+				return a.profiles.ImportLocalWithState(path, body)
+			}, body, func(_ string, err error) { finish(err) })
 		})
 	}()
 }
@@ -257,14 +356,19 @@ func (a *App) createProfileWithResult(form ui.ProfileForm, done func(string, err
 		defer client.CloseIdleConnections()
 		result, err := fetchProfileResponseContext(ctx, raw, client, options.UserAgent)
 		a.runOnMain(func() {
-			uid := ""
-			if err == nil {
-				uid, err = a.importURLDataConfigured(raw, result.body, result.headers, &metadata)
+			finish := func(uid string, err error) {
+				done(uid, err)
+				if a.win != nil {
+					a.win.Invalidate()
+				}
 			}
-			done(uid, err)
-			if a.win != nil {
-				a.win.Invalidate()
+			if err != nil {
+				finish("", err)
+				return
 			}
+			a.importProfileAsync(func() (profile.CatalogItem, bool, error) {
+				return a.profiles.ImportRemoteConfigured(raw, func(string) ([]byte, error) { return result.body, nil }, result.headers, &metadata)
+			}, result.body, finish)
 		})
 	}()
 }

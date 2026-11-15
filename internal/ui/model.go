@@ -47,6 +47,7 @@ type Hooks struct {
 	ImportURL                       func(url string) error
 	ImportURLAsync                  func(url string, done func(error))
 	ImportLocal                     func(path string) error
+	ImportLocalAsync                func(path string, done func(error))
 	DeleteProfile                   func(uid string) error
 	UpdateProfile                   func(uid string) error
 	UpdateProfileAsync              func(uid string, done func(error))

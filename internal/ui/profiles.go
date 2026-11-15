@@ -159,6 +159,44 @@ func homeFrom(item ProfileItem) *HomeProfile {
 }
 
 func (m *Model) dropProfiles(files []string) {
+	if m.ProfileBusy {
+		m.Notice = "订阅正在处理，请稍后重试"
+		return
+	}
+	if m.Hooks.ImportLocalAsync != nil {
+		m.ProfileBusy = true
+		succeeded, failed := 0, 0
+		var next func(int)
+		next = func(i int) {
+			if i == len(files) {
+				m.ProfileBusy = false
+				if failed > 0 {
+					m.Notice = "已导入 " + itoa(succeeded) + "，失败 " + itoa(failed)
+				} else if succeeded > 0 {
+					m.Notice = "本地配置已导入"
+				}
+				return
+			}
+			f := files[i]
+			low := strings.ToLower(f)
+			if !strings.HasSuffix(low, ".yaml") && !strings.HasSuffix(low, ".yml") {
+				failed++
+				next(i + 1)
+				return
+			}
+			m.Hooks.ImportLocalAsync(f, func(err error) {
+				if err != nil {
+					m.Notice = err.Error()
+					failed++
+				} else {
+					succeeded++
+				}
+				next(i + 1)
+			})
+		}
+		next(0)
+		return
+	}
 	for _, f := range files {
 		low := strings.ToLower(f)
 		if !strings.HasSuffix(low, ".yaml") && !strings.HasSuffix(low, ".yml") {

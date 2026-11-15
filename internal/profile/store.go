@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -523,9 +524,22 @@ func (s *Store) SharedProfileFile(catalog File, uid string) (bool, error) {
 // DiscardFirstImport rolls back a failed first activation, without touching
 // an existing catalog or any file outside the managed profiles directory.
 func (s *Store) DiscardFirstImport(uid string) error {
+	return s.discardFirstImport(uid, nil, nil)
+}
+
+// DiscardFirstImportIfUnchanged preserves concurrent edits to the newly
+// imported catalog entry and profile file during an asynchronous activation.
+func (s *Store) DiscardFirstImportIfUnchanged(uid string, catalogSnapshot, body []byte) error {
+	return s.discardFirstImport(uid, catalogSnapshot, body)
+}
+
+func (s *Store) discardFirstImport(uid string, expectedCatalog, expectedBody []byte) error {
 	f, snapshot, err := s.LoadForUpdate()
 	if err != nil {
 		return err
+	}
+	if expectedCatalog != nil && !bytes.Equal(snapshot, expectedCatalog) {
+		return errors.New("订阅目录已变化，无法自动回滚导入")
 	}
 	if f.Current != uid {
 		return errors.New("订阅目录已变化，无法自动回滚导入")
@@ -553,20 +567,29 @@ func (s *Store) DiscardFirstImport(uid string) error {
 	if err := validateManagedProfilePath(rel); err != nil {
 		return err
 	}
-	removal, err := safepath.PrepareRemoval(s.dir, rel)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if removal != nil {
-		defer removal.Close()
+	var removal *safepath.Removal
+	if expectedCatalog == nil {
+		removal, err = safepath.PrepareRemoval(s.dir, rel)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if removal != nil {
+			defer removal.Close()
+		}
 	}
 	f.Current = ""
 	f.Items = append(f.Items[:index], f.Items[index+1:]...)
 	if err = s.SaveIfUnchanged(f, snapshot); err != nil {
 		return err
 	}
-	if removal != nil {
-		if err := removal.Remove(); err != nil {
+	if removal != nil || expectedCatalog != nil {
+		var removeErr error
+		if expectedCatalog != nil {
+			removeErr = safepath.CompareAndRemove(s.dir, rel, expectedBody)
+		} else {
+			removeErr = removal.Remove()
+		}
+		if err := removeErr; err != nil {
 			written, encodeErr := encodeCatalog(f)
 			if encodeErr != nil {
 				return errors.Join(err, encodeErr)
