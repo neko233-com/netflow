@@ -31,3 +31,5 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 '-tags=with_gvisor,no_tailscale'
 同日对 `0.2.137-alpha.1` 重复上述源码及六个程序的 Go 漏洞扫描，均返回 `No vulnerabilities found`；本机 Defender 安全智能版本 `1.463.308.0` 对 Windows 三个程序和 MSI 的不修复自定义扫描也均报告未发现威胁。上述覆盖范围、既往检测未裁定及未签名限制仍适用。
 
 同日对 `0.2.138-alpha.1` 重复上述源码、六个程序的 Go 漏洞扫描以及 Windows 三个程序和 MSI 的本机 Defender 不修复扫描，均未检出已知问题；Defender 安全智能版本为 `1.463.308.0`。相同的覆盖范围和限制仍适用。
+
+同日对加入 Agent 图标后的 `0.2.139-alpha.1` Windows 三个程序和 MSI 进行本机 Defender 不修复扫描，均未发现威胁；安全智能版本仍为 `1.463.308.0`。这不改变旧版检测尚无微软裁定、发布文件尚未签名等限制。
