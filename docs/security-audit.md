@@ -21,3 +21,5 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 '-tags=with_gvisor,no_tailscale'
 ```
 
 单磁盘 Windows 来宾在复测 `0.2.99-alpha.1` 时将 `NetFlow.exe` 标记为 `Trojan:Win32/Wacatac.C!ml` 并阻止运行。本机对同哈希副本的不修复自定义扫描未检出威胁，但不能据此判断来宾检测为误报；完整证据和限制见 [Windows 验证记录](windows-vm-validation.md)。尚无微软最终裁定，也没有公开可信的 Windows 代码签名。
+
+2026-11-15 对 `0.2.133-alpha.1` 实际 Windows 发布文件补充本机 Microsoft Defender 自定义扫描：Defender 处于 Normal 模式、实时防护引擎启用，安全智能版本 `1.463.308.0`（更新时间 2026-11-15 08:31，本机时间）。分别扫描发布版 GUI、Agent、特权内核工作进程和 MSI，使用 `-Scan -ScanType 3 -File <文件> -DisableRemediation`，四次均返回退出码 0 且报告未发现威胁。该模式不执行修复，扫描结果只代表该主机、该版本的检测；它不是对 `0.2.99-alpha.1` 既往检测的微软误报裁定，也不能证明软件不存在恶意行为或其他漏洞。
