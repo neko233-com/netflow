@@ -869,6 +869,14 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if !status.TUN || !status.Headless {
 		t.Fatalf("headless TUN did not start: %+v", status)
 	}
+	var restart agent.ActionResult
+	if output, err := call("restart-core"); err != nil || json.Unmarshal(output, &restart) != nil || !restart.OK {
+		t.Fatalf("headless CLI restart failed: %s %v", output, err)
+	}
+	if output, err := call("status"); err != nil || json.Unmarshal(output, &status) != nil || !status.Running || !status.TUN || !status.Headless {
+		t.Fatalf("headless restart lost TUN: %s %v", output, err)
+	}
+	t.Log("installed headless CLI restarted the kernel and kept TUN enabled")
 	vmAgentChainRoundTrip(t, agentExe, dir)
 	vmLatencyRoundTrip(t, agentExe, dir)
 	var connectionPage agent.ConnectionsResult
@@ -5113,6 +5121,27 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		t.Fatalf("unexpected HTTP response: %s %v", body, err)
 	}
 	t.Log("TUN DNS interception, REJECT and DIRECT fake-IP forwarding verified")
+	hc.CloseIdleConnections()
+	var restartResult agent.ActionResult
+	if out, e := call("restart-core"); e != nil || json.Unmarshal(out, &restartResult) != nil || !restartResult.OK {
+		t.Fatalf("GUI Agent restart failed: %s %v", out, e)
+	}
+	if s, err = status(); err != nil || !s.Running || !s.TUN {
+		t.Fatalf("GUI restart lost TUN: %+v %v", s, err)
+	}
+	if lookupFake("beta.netflow-test.example.", dnsAddress) != beta || lookupFake("alpha.netflow-test.example.", dnsAddress) != alpha || lookupFake("netflow-test.example.", dnsAddress) != fakeIP {
+		t.Fatal("GUI restart lost Fake-IP mappings")
+	}
+	resp, err = hc.Get("http://netflow-test.example:18765/health")
+	if err != nil {
+		t.Fatalf("forwarding after GUI restart: %v", err)
+	}
+	body, err = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || string(body) != "OK" {
+		t.Fatalf("forwarding after GUI restart returned %q: %v", body, err)
+	}
+	t.Log("GUI Agent restart preserved TUN Fake-IP mappings and forwarding")
 	if out, e := call("tun", "off"); e != nil {
 		t.Fatalf("TUN off request: %s %v", out, e)
 	}
