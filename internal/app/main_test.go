@@ -10,6 +10,9 @@ import (
 	"github.com/neko233-com/netflow/internal/validation"
 )
 
+// Integration-only helpers may need the real main goroutine for native UI.
+var appTestMainHook func() (bool, error)
+
 func TestMain(m *testing.M) {
 	if len(os.Args) == 2 && os.Args[1] == "--internal-validate" {
 		if err := validation.Serve(os.Stdin, os.Stdout); err != nil {
@@ -25,7 +28,19 @@ func TestMain(m *testing.M) {
 	}
 	C.SetHomeDir(dir)
 	cache := cachefile.Cache()
-	code := m.Run()
+	code := 0
+	handled := false
+	if appTestMainHook != nil {
+		var hookErr error
+		handled, hookErr = appTestMainHook()
+		if hookErr != nil {
+			fmt.Fprintln(os.Stderr, hookErr)
+			code = 1
+		}
+	}
+	if !handled {
+		code = m.Run()
+	}
 	if cache.DB != nil {
 		_ = cache.Close()
 	}

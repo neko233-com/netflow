@@ -83,22 +83,27 @@ func (e *vmShutdownFailureCore) Stop() error {
 	return errors.Join(e.coreEngine.Stop(), vmShutdownStopError)
 }
 
-// This helper is launched only by the isolated VM verifier. It exercises the
-// native event-loop exit path with a failed kernel stop and no TUN changes.
-func TestWindowsVMGUIShutdownFailureChild(t *testing.T) {
+func init() { appTestMainHook = vmGUIShutdownFailureMain }
+
+// This helper is launched only by the isolated VM verifier. TestMain invokes
+// it on the main goroutine required by MyGo's native event loop.
+func vmGUIShutdownFailureMain() (bool, error) {
 	if os.Getenv("NETFLOW_VM_SHUTDOWN_FAILURE_CHILD") != "1" {
-		t.Skip("requires the isolated VM verifier")
+		return false, nil
 	}
-	requireDisposableVM(t)
+	if err := checkDisposableVM(); err != nil {
+		return true, err
+	}
 	dir := os.Getenv("NETFLOW_VM_SHUTDOWN_FAILURE_DIR")
 	if !filepath.IsAbs(dir) {
-		t.Fatal("missing isolated test directory")
+		return true, errors.New("missing isolated test directory")
 	}
 	a := New(Options{Dirs: appdir.Fixed(dir), Store: appconfig.NewMemory(dir), Proxy: sysproxy.NewMemory(), TUN: tun.NewMemory()})
 	a.core = newSwitchableEngine(&vmShutdownFailureCore{core.New()})
 	if err := a.Run(); !errors.Is(err, vmShutdownStopError) {
-		t.Fatalf("GUI did not report the kernel stop failure: %v", err)
+		return true, fmt.Errorf("GUI did not report the kernel stop failure: %v", err)
 	}
+	return true, nil
 }
 
 func vmGUIShutdownFailure(t *testing.T) {
@@ -112,7 +117,7 @@ func vmGUIShutdownFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
 	defer cancel()
 	cmd := vmCommand(ctx, exe, "-test.v", "-test.run=^TestWindowsVMGUIShutdownFailureChild$")
 	cmd.Env = append(os.Environ(), "CI=1", "GOMAXPROCS=1", "NETFLOW_VM_SHUTDOWN_FAILURE_CHILD=1", "NETFLOW_VM_SHUTDOWN_FAILURE_DIR="+dir)
@@ -155,13 +160,20 @@ func vmGUIShutdownFailure(t *testing.T) {
 		err := <-done
 		t.Fatalf("shutdown-failure GUI window did not appear: %v\n%s", err, output.String())
 	}
-	menu, _, _ := user.NewProc("GetMenu").Call(hwnd)
-	fileMenu, _, _ := user.NewProc("GetSubMenu").Call(menu, 0)
-	count, _, _ := user.NewProc("GetMenuItemCount").Call(fileMenu)
-	if menu == 0 || fileMenu == 0 || count == 0 || int32(count) < 0 {
-		t.Fatal("shutdown-failure GUI file menu unavailable")
+	var quitID uintptr
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		menu, _, _ := user.NewProc("GetMenu").Call(hwnd)
+		fileMenu, _, _ := user.NewProc("GetSubMenu").Call(menu, 0)
+		count, _, _ := user.NewProc("GetMenuItemCount").Call(fileMenu)
+		if menu != 0 && fileMenu != 0 && count != 0 && int32(count) > 0 {
+			quitID, _, _ = user.NewProc("GetMenuItemID").Call(fileMenu, count-1)
+			if quitID != 0 && quitID != 0xffffffff {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	quitID, _, _ := user.NewProc("GetMenuItemID").Call(fileMenu, count-1)
 	if quitID == 0 || quitID == 0xffffffff {
 		t.Fatal("shutdown-failure GUI quit command unavailable")
 	}
@@ -254,25 +266,24 @@ func TestWindowsAuthenticodeTrustCheck(t *testing.T) {
 	}
 }
 
-func requireDisposableVM(t *testing.T) {
-	t.Helper()
+func checkDisposableVM() error {
 	if os.Getenv("NETFLOW_WINDOWS_VM") != "1" || windows.GetCurrentProcessToken().IsElevated() {
-		t.Fatal("refusing to modify networking outside the filtered Windows validation guest")
+		return errors.New("refusing to modify networking outside the filtered Windows validation guest")
 	}
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DESCRIPTION\System\BIOS`, registry.QUERY_VALUE)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
 	defer k.Close()
 	manufacturer, _, err := k.GetStringValue("SystemManufacturer")
 	if err != nil || !strings.Contains(strings.ToLower(manufacturer), "qemu") {
-		t.Fatalf("refusing non-QEMU machine: %q %v", manufacturer, err)
+		return fmt.Errorf("refusing non-QEMU machine: %q %v", manufacturer, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	out, err := vmCommand(ctx, "wmic.exe", "diskdrive", "get", "model", "/value").CombinedOutput()
 	if err != nil {
-		t.Fatalf("disk inventory: %s: %v", out, err)
+		return fmt.Errorf("disk inventory: %s: %w", out, err)
 	}
 	var disks []string
 	for _, line := range strings.Split(string(out), "\n") {
@@ -282,7 +293,15 @@ func requireDisposableVM(t *testing.T) {
 		}
 	}
 	if len(disks) != 1 || !strings.Contains(disks[0], "qemu") {
-		t.Fatalf("refusing guest without exactly one QEMU disk: %q", disks)
+		return fmt.Errorf("refusing guest without exactly one QEMU disk: %q", disks)
+	}
+	return nil
+}
+
+func requireDisposableVM(t *testing.T) {
+	t.Helper()
+	if err := checkDisposableVM(); err != nil {
+		t.Fatal(err)
 	}
 }
 
