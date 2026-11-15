@@ -27,3 +27,5 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 '-tags=with_gvisor,no_tailscale'
 同日对 `0.2.135-alpha.1` 的上述四个 Windows 发布文件重复本机不修复扫描，Defender 安全智能版本仍为 `1.463.308.0`，四次均返回退出码 0 且报告未发现威胁；上述限制同样适用。源码提交 `bf010e1` 的 Windows 环境全工程 `go vet -p 1 ./...` 通过；静态检查不证明运行时行为或安全性。
 
 同日使用 `govulncheck v1.9.0` 重新扫描当前源码（Windows 发布标签 `with_gvisor,no_tailscale`）和 `0.2.135-alpha.1` 的 Windows、macOS ARM64 各三个实际程序，源码与六个二进制均返回 `No vulnerabilities found`。该结果受当时数据库、调用分析和替换模块识别范围限制；macOS 二进制扫描不代表程序已在 Mac 运行。
+
+同日对 `0.2.137-alpha.1` 重复上述源码及六个程序的 Go 漏洞扫描，均返回 `No vulnerabilities found`；本机 Defender 安全智能版本 `1.463.308.0` 对 Windows 三个程序和 MSI 的不修复自定义扫描也均报告未发现威胁。上述覆盖范围、既往检测未裁定及未签名限制仍适用。
