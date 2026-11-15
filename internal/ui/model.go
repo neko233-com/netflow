@@ -31,6 +31,7 @@ type Hooks struct {
 	SetMode                         func(mode string) error
 	SelectProxy                     func(group, node string) error
 	UseProfile                      func(uid string) error
+	UseProfileAsync                 func(uid string, done func(error))
 	CloseConnection                 func(id string) error
 	CloseAllConnections             func() error
 	ClearClosed                     func()
@@ -113,11 +114,15 @@ type Hooks struct {
 
 // Model is the main window: a sidebar and the page it shows.
 type Model struct {
-	Router   *mygoui.Router
-	Home     HomeState
-	Cards    HomeCards
-	Draft    HomeCards
-	HomeEdit bool
+	// OperationMessage is rendered alone while an application transaction is
+	// using the kernel. Other model state remains owned by the event loop.
+	OperationMessage string
+	OperationCancel  func()
+	Router           *mygoui.Router
+	Home             HomeState
+	Cards            HomeCards
+	Draft            HomeCards
+	HomeEdit         bool
 
 	NetTab      int
 	ChartSmooth bool
@@ -267,6 +272,16 @@ func (m *Model) normalize() {
 // View builds one frame of the main window.
 func (m *Model) View(c *mygoui.Context) {
 	if m == nil {
+		return
+	}
+	if m.OperationMessage != "" {
+		mygoui.Column(c).Fill().Center().Gap(16).Children(func() {
+			mygoui.Text(c, m.OperationMessage).FontSize(20)
+			mygoui.Text(c, "正在等待内核完成配置应用。")
+			if m.OperationCancel != nil && mygoui.Button(c, "取消并恢复").Clicked() {
+				m.OperationCancel()
+			}
+		})
 		return
 	}
 	m.normalize()

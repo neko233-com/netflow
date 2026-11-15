@@ -326,6 +326,16 @@ func (m *Model) activateProfile(uid string) {
 	if uid == "" {
 		return
 	}
+	if m.Hooks.UseProfileAsync != nil {
+		m.Hooks.UseProfileAsync(uid, func(err error) {
+			if err != nil {
+				m.Notice = err.Error()
+			} else {
+				m.Notice = "订阅已切换"
+			}
+		})
+		return
+	}
 	if m.Hooks.UseProfile != nil {
 		if err := m.Hooks.UseProfile(uid); err != nil {
 			m.Notice = err.Error()

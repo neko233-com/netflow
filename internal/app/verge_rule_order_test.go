@@ -242,7 +242,11 @@ func TestImportedVergeRulesRunBeforeScriptsAndRemainSeparateFromAgent(t *testing
 				}
 				a.profileAutoRetry = make(map[string]time.Time)
 				queue := make(chan func(), 1)
-				a.dispatch = func(fn func()) { queue <- fn }
+				a.dispatch = func(fn func()) {
+					done := make(chan struct{})
+					queue <- func() { defer close(done); fn() }
+					<-done
+				}
 				a.autoUpdateOne(time.Now())
 				select {
 				case fn := <-queue:

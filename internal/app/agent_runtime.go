@@ -81,6 +81,35 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		}
 		return agent.CancelApplyResult{Accepted: accepted}, nil
 	}
+	if method == "use-profile" && !a.headless {
+		var input agent.ProfileArgs
+		if err := decodeStrict(args, &input); err != nil {
+			return nil, err
+		}
+		result := make(chan error, 1)
+		executed := false
+		a.runOnMain(func() {
+			executed = true
+			if err := ctx.Err(); err != nil {
+				result <- err
+				return
+			}
+			if a.core == nil || !a.core.Status().Running {
+				result <- errors.New("core is not running")
+				return
+			}
+			a.useProfileAsync(input.ProfileID, func(err error) { result <- err })
+		})
+		if !executed {
+			return nil, errors.New("desktop application is shutting down")
+		}
+		select {
+		case err := <-result:
+			return agent.ActionResult{OK: err == nil}, err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if method == "verge-script-cache-prune" {
 		var in agent.Empty
 		if err := decodeStrict(args, &in); err != nil {

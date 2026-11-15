@@ -31,6 +31,7 @@ import (
 	"time"
 	"unsafe"
 
+	mygoui "github.com/egoist/mygo/ui"
 	"github.com/miekg/dns"
 	"github.com/neko233-com/netflow"
 	"github.com/neko233-com/netflow/internal/agent"
@@ -44,6 +45,7 @@ import (
 	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/scriptmeta"
 	"github.com/neko233-com/netflow/internal/tun"
+	"github.com/neko233-com/netflow/internal/ui"
 	"github.com/neko233-com/netflow/internal/validation"
 	"github.com/neko233-com/netflow/internal/vmverify"
 	"golang.org/x/sys/windows"
@@ -1908,6 +1910,209 @@ func vmCancelProfileApply(t *testing.T, agentExe string) {
 	t.Fatal("cancel-profile test did not restore networking after shutdown")
 }
 
+// Exercise the native cancel button during a stalled GUI profile switch,
+// while a real TUN worker is active. All networking stays in the VM.
+func vmGUIProfileSwitchCancellation(t *testing.T, guiExe string) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var enteredOnce, canceledOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enteredOnce.Do(func() { close(entered) })
+		select {
+		case <-r.Context().Done():
+			canceledOnce.Do(func() { close(canceled) })
+		case <-release:
+			_, _ = io.WriteString(w, "proxies: [{name: fresh, type: direct}]\n")
+		}
+	}))
+	defer provider.Close()
+	defer unblock()
+	dir := t.TempDir()
+	base := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	next := base + "proxy-providers:\n  slow: {type: http, url: '" + provider.URL + "', path: providers/gui-slow.yaml, interval: 3600, health-check: {enable: false}}\n"
+	store := profile.NewStore(dir)
+	first, err := store.ImportLocal("first.yaml", []byte(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.ImportLocal("second.yaml", []byte(next))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"prefs":"{\"AutoStartTUN\":true}"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	process := vmCommand(context.Background(), guiExe)
+	process.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000 | 0x00004000}
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(entry), "NETFLOW_CONFIG_DIR=") {
+			process.Env = append(process.Env, entry)
+		}
+	}
+	process.Env = append(process.Env, "NETFLOW_CONFIG_DIR="+dir, "GOMAXPROCS=1")
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- process.Wait() }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			_ = process.Process.Kill()
+			<-finished
+		}
+	}()
+	client := agent.Client{Dir: dir, Timeout: 30 * time.Second}
+	var status agent.Status
+	deadline := time.Now().Add(100 * time.Second)
+	for time.Now().Before(deadline) {
+		if client.Call(context.Background(), "status", nil, &status) == nil && status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if !status.TUN || status.Headless || status.ActiveProfile != first.UID {
+		t.Fatalf("GUI TUN startup: %+v", status)
+	}
+	initial, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- client.Call(context.Background(), "use-profile", agent.ProfileArgs{ProfileID: second.UID}, nil)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("GUI profile provider did not begin")
+	}
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	enum, windowPID := user32.NewProc("EnumWindows"), user32.NewProc("GetWindowThreadProcessId")
+	getTitle := user32.NewProc("GetWindowTextW")
+	var hwnd uintptr
+	callback := syscall.NewCallback(func(window uintptr, _ uintptr) uintptr {
+		var owner uint32
+		windowPID.Call(window, uintptr(unsafe.Pointer(&owner)))
+		if owner == uint32(process.Process.Pid) {
+			var title [128]uint16
+			getTitle.Call(window, uintptr(unsafe.Pointer(&title[0])), uintptr(len(title)))
+			if windows.UTF16ToString(title[:]) == "NetFlow - 正在切换订阅" {
+				hwnd = window
+			}
+		}
+		return 1
+	})
+	enum.Call(callback, 0)
+	if hwnd == 0 {
+		t.Fatal("GUI did not expose its profile operation window")
+	}
+	var ignored uintptr
+	responded, _, _ := user32.NewProc("SendMessageTimeoutW").Call(hwnd, 0, 0, 0, 2, 2000, uintptr(unsafe.Pointer(&ignored)))
+	if responded == 0 {
+		t.Fatal("GUI event loop did not respond during provider initialization")
+	}
+	class, err := windows.UTF16PtrFromString("MyGoSurface")
+	if err != nil {
+		t.Fatal(err)
+	}
+	surface, _, _ := user32.NewProc("FindWindowExW").Call(hwnd, 0, uintptr(unsafe.Pointer(class)), 0)
+	if surface == 0 {
+		t.Fatal("native MyGo drawing surface not found")
+	}
+	type rect struct{ left, top, right, bottom int32 }
+	var bounds rect
+	if ok, _, _ := user32.NewProc("GetClientRect").Call(surface, uintptr(unsafe.Pointer(&bounds))); ok == 0 {
+		t.Fatal("surface size unavailable")
+	}
+	dpi, _, _ := user32.NewProc("GetDpiForWindow").Call(hwnd)
+	if dpi == 0 {
+		dpi = 96
+	}
+	model := ui.NewModel(ui.HomeState{})
+	model.OperationMessage = "正在切换订阅"
+	model.OperationCancel = func() {}
+	tester := mygoui.NewTester(model.View, int((bounds.right-bounds.left)*96/int32(dpi)), int((bounds.bottom-bounds.top)*96/int32(dpi)))
+	button, ok := tester.Find("取消并恢复")
+	if !ok {
+		t.Fatal("cancel control is absent from busy view")
+	}
+	x := uint32((button.X + button.W/2) * float32(dpi) / 96)
+	y := uint32((button.Y + button.H/2) * float32(dpi) / 96)
+	pos := uintptr((y << 16) | (x & 0xffff))
+	post := user32.NewProc("PostMessageW")
+	// Wait for a frame to install the hit regions, then send native pointer
+	// messages to the actual MyGo surface, not the application's RPC bridge.
+	time.Sleep(time.Second)
+	for _, msg := range []uintptr{0x0200, 0x0201, 0x0202} {
+		wp := uintptr(0)
+		if msg == 0x0201 {
+			wp = 1
+		}
+		if posted, _, err := post.Call(surface, msg, wp, pos); posted == 0 {
+			t.Fatalf("post native pointer input: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("native cancel button did not cancel the provider")
+	}
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled GUI switch reported success")
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("GUI profile rollback did not finish")
+	}
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if client.Call(context.Background(), "status", nil, &status) == nil && status.TUN && status.ActiveProfile == first.UID {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !status.TUN || status.ActiveProfile != first.UID {
+		t.Fatalf("GUI rollback TUN/profile: %+v", status)
+	}
+	current, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if err != nil || !bytes.Equal(initial, current) {
+		t.Fatalf("GUI rollback config: %v", err)
+	}
+	catalog, err := store.Load()
+	if err != nil || catalog.Current != first.UID {
+		t.Fatalf("GUI rollback catalog: %+v %v", catalog, err)
+	}
+	off := false
+	var tunResult agent.TunResult
+	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &off}, &tunResult); err != nil {
+		t.Fatalf("disable GUI TUN: %+v %v", tunResult, err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, servers, e := vmNetworkSnapshot()
+		if e == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(servers, beforeDNS) {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	routes, servers, err := vmNetworkSnapshot()
+	if err != nil || !reflect.DeepEqual(routes, beforeRoutes) || !reflect.DeepEqual(servers, beforeDNS) {
+		t.Fatalf("GUI TUN did not restore routes and DNS: %v", err)
+	}
+	_ = process.Process.Kill()
+	<-finished
+	stopped = true
+	t.Log("native GUI cancel interrupted a profile download, restored the old profile and retained TUN until disabled")
+}
+
 func vmHeadlessStartupCancellation(t *testing.T, appExe string) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -3330,6 +3535,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	vmProviderBusyTUN(t, agentExe)
 	vmHeadlessUncachedShutdown(t, agentExe)
 	vmCancelProfileApply(t, agentExe)
+	vmGUIProfileSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"))
 	vmHeadlessStartupCancellation(t, filepath.Join(install, "NetFlow.exe"))
 	vmGUIStartupProvider(t, filepath.Join(install, "NetFlow.exe"))
 	vmHeadlessParentExit(t, agentExe, backupTarget)

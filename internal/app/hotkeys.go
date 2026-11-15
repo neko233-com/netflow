@@ -90,6 +90,10 @@ func (a *App) releaseHotkeys() {
 }
 
 func (a *App) invokeHotkey(key string) {
+	if a.guiOperation != nil {
+		a.showMain()
+		return
+	}
 	if a.model == nil {
 		return
 	}
@@ -112,7 +116,14 @@ func (a *App) invokeHotkey(key string) {
 		if a.model.CurrentProfile == "" {
 			err = errors.New("没有已激活的订阅")
 		} else {
-			err = a.UseProfile(a.model.CurrentProfile)
+			a.useProfileAsync(a.model.CurrentProfile, func(err error) {
+				if err != nil {
+					a.model.Notice = err.Error()
+				} else {
+					a.model.Notice = "快捷键操作已完成"
+				}
+			})
+			return
 		}
 	}
 	if err != nil {

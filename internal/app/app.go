@@ -135,6 +135,8 @@ type App struct {
 	headless            bool
 	headlessRecovery    bool
 	headlessCancel      func()
+	guiOperation        *guiProfileOperation // event loop only
+	guiBarrier          atomic.Pointer[guiProfileOperation]
 }
 
 // New checks options and fills the M1 defaults. It does not start the
@@ -1135,18 +1137,41 @@ func selectorGroup(kind string) bool {
 // profile-switch half of activateSelected. Startup does the same work
 // from Prepare via loadProfiles and loadGroups.
 func (a *App) UseProfile(uid string) error {
+	tx, err := a.beginProfileSwitch(uid)
+	if err != nil {
+		return err
+	}
+	if a.core != nil && a.core.Status().Running {
+		err = a.core.Reload()
+	}
+	if err == nil {
+		err = a.commitProfileSwitch(tx)
+	}
+	if err == nil {
+		return nil
+	}
+	needReload, restoreErr := a.beginProfileSwitchRollback(tx)
+	if restoreErr == nil && needReload {
+		restoreErr = a.core.Reload()
+	}
+	return profileSwitchError(err, restoreErr)
+}
+
+// beginProfileSwitch and the completion methods run on the application event
+// loop. Only the kernel reload between them may run on a worker.
+func (a *App) beginProfileSwitch(uid string) (*profileSwitch, error) {
 	if a != nil && a.tunBusy {
-		return errors.New("虚拟网卡正在切换，请稍后重试")
+		return nil, errors.New("虚拟网卡正在切换，请稍后重试")
 	}
 	if a != nil && a.chain.Load() != nil && a.core != nil && a.core.ProfileID() != uid {
-		return errors.New("请先断开链式代理，再切换订阅")
+		return nil, errors.New("请先断开链式代理，再切换订阅")
 	}
 	if a == nil || a.profiles == nil {
-		return errors.New("订阅存储不可用")
+		return nil, errors.New("订阅存储不可用")
 	}
 	catalog, snapshot, err := a.profiles.LoadForUpdate()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var rel string
 	for _, item := range catalog.Items {
@@ -1156,69 +1181,71 @@ func (a *App) UseProfile(uid string) error {
 		}
 	}
 	if rel == "" {
-		return errors.New("订阅不存在")
+		return nil, errors.New("订阅不存在")
 	}
 	body, _, err := readProfileFile(a.dir, rel)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := validateProfile(body); err != nil {
-		return err
+		return nil, err
 	}
 	if err := a.validateEffectiveProfile(body, uid); err != nil {
-		return err
+		return nil, err
 	}
 	old, readErr := safepath.ReadFile(a.dir, "config.yaml")
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-		return readErr
+		return nil, readErr
 	}
 	nextConfig := profile.EnsureMixedPort(body, 7897)
 	if err := safepath.CompareAndWrite(a.dir, "config.yaml", old, nextConfig); err != nil {
-		return err
+		return nil, err
 	}
 	previousProfile := ""
 	if a.core != nil {
 		previousProfile = a.core.ProfileID()
 		a.core.SetProfileID(uid)
 	}
-	rollback := func(cause error) error {
-		if a.core != nil {
-			a.core.SetProfileID(previousProfile)
-		}
-		var restoreErr error
-		if readErr == nil {
-			restoreErr = safepath.CompareAndWrite(a.dir, "config.yaml", nextConfig, old)
-		} else {
-			restoreErr = safepath.CompareAndRemove(a.dir, "config.yaml", nextConfig)
-			if errors.Is(restoreErr, os.ErrNotExist) {
-				restoreErr = nil
-			}
-		}
-		if restoreErr == nil && a.core != nil && a.core.Status().Running && readErr == nil {
-			restoreErr = a.core.Reload()
-		}
-		if restoreErr != nil {
-			return errors.Join(cause, fmt.Errorf("恢复之前的配置失败: %w", restoreErr))
-		}
-		return cause
+	return &profileSwitch{uid: uid, rel: rel, body: body, oldConfig: old, nextConfig: nextConfig,
+		previousProfile: previousProfile, hadOld: readErr == nil, catalog: catalog, snapshot: snapshot}, nil
+}
+
+func (a *App) commitProfileSwitch(tx *profileSwitch) error {
+	latest, _, err := readProfileFile(a.dir, tx.rel)
+	if err != nil || !bytes.Equal(latest, tx.body) {
+		return errors.New("订阅文件在切换期间发生变化")
 	}
-	if a.core != nil && a.core.Status().Running {
-		if err := a.core.Reload(); err != nil {
-			return rollback(err)
-		}
-	}
-	latest, _, err := readProfileFile(a.dir, rel)
-	if err != nil || !bytes.Equal(latest, body) {
-		return rollback(errors.New("订阅文件在切换期间发生变化"))
-	}
-	catalog.Current = uid
-	if err := a.profiles.SaveIfUnchanged(catalog, snapshot); err != nil {
-		return rollback(err)
+	tx.catalog.Current = tx.uid
+	if err := a.profiles.SaveIfUnchanged(tx.catalog, tx.snapshot); err != nil {
+		return err
 	}
 	a.loadProfiles()
 	a.loadGroups()
 	a.refreshHome()
 	return nil
+}
+
+func (a *App) beginProfileSwitchRollback(tx *profileSwitch) (bool, error) {
+	if a.core != nil {
+		a.core.SetProfileID(tx.previousProfile)
+	}
+	var err error
+	if tx.hadOld {
+		err = safepath.CompareAndWrite(a.dir, "config.yaml", tx.nextConfig, tx.oldConfig)
+	} else {
+		err = safepath.CompareAndRemove(a.dir, "config.yaml", tx.nextConfig)
+		if errors.Is(err, os.ErrNotExist) {
+			err = nil
+		}
+	}
+	return err == nil && a.core != nil && a.core.Status().Running && tx.hadOld, err
+}
+
+func profileSwitchError(cause, restoreErr error) error {
+	if restoreErr != nil {
+		return errors.Join(cause, fmt.Errorf("恢复之前的配置失败: %w", restoreErr))
+	}
+	return cause
 }
 
 func (a *App) bindHooks() {

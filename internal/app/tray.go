@@ -291,26 +291,46 @@ func (a *App) traySnapshot() TraySnapshot {
 
 func (a *App) trayActions() TrayActions {
 	return TrayActions{
-		Show:    a.showMain,
-		SetMode: func(mode string) { _ = a.SetMode(mode) },
+		Show: a.showMain,
+		SetMode: func(mode string) {
+			if a.guiOperation == nil {
+				_ = a.SetMode(mode)
+			}
+		},
 		SelectNode: func(group, node string) {
+			if a.guiOperation != nil {
+				return
+			}
 			if err := a.SelectProxy(group, node); err != nil && a.model != nil {
 				a.model.Notice = err.Error()
 			}
 		},
 		SetProxy: func(on bool) {
+			if a.guiOperation != nil {
+				return
+			}
 			if err := a.SetSystemProxy(on); err != nil && a.model != nil {
 				a.model.Notice = err.Error()
 			}
 		},
-		SetTUN: func(on bool) { a.requestTUN(on, a.tunActionDone) },
+		SetTUN: func(on bool) {
+			if a.guiOperation == nil {
+				a.requestTUN(on, a.tunActionDone)
+			}
+		},
 		SetLite: func(on bool) {
+			if a.guiOperation != nil {
+				return
+			}
 			if err := a.setLightweight(on); err != nil && a.model != nil {
 				a.model.Notice = err.Error()
 			}
 		},
 		OpenDir: a.openDir,
 		CopyEnv: func() {
+			if a.guiOperation != nil {
+				return
+			}
 			format := "bash"
 			if a.model != nil {
 				format = a.model.Prefs.CopyEnv
@@ -319,8 +339,12 @@ func (a *App) trayActions() TrayActions {
 				a.model.Notice = "复制失败: " + err.Error()
 			}
 		},
-		RestartCore: func() { _ = a.restartCore() },
-		Quit:        func() { mygo.App.Quit() },
+		RestartCore: func() {
+			if a.guiOperation == nil {
+				_ = a.restartCore()
+			}
+		},
+		Quit: func() { mygo.App.Quit() },
 	}
 }
 

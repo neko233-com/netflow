@@ -12,8 +12,27 @@ import (
 )
 
 // runOnMain serializes mutations on the UI event loop in desktop mode and on
-// a dedicated event loop in headless mode. It may decline work during shutdown.
+// a dedicated event loop in headless mode. Dispatch must wait for an accepted
+// callback to finish; it may decline work during shutdown.
 func (a *App) runOnMain(fn func()) {
+	for {
+		var blocked *guiProfileOperation
+		a.runOnMainUnrestricted(func() {
+			blocked = a.guiBarrier.Load()
+			if blocked == nil {
+				fn()
+			}
+		})
+		if blocked == nil {
+			return
+		}
+		<-blocked.done
+	}
+}
+
+// The profile transaction's own completion must be able to release the
+// barrier. No other state-mutating callback may bypass it.
+func (a *App) runOnMainUnrestricted(fn func()) {
 	if a.dispatch != nil {
 		a.dispatch(fn)
 		return

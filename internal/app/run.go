@@ -56,7 +56,13 @@ func (a *App) Run() error {
 	var startupStarted bool
 	var startupErr error
 	startupDone := make(chan struct{})
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
+	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
+		if op := a.guiOperation; op != nil {
+			e.PreventDefault()
+			op.quit = true
+			a.cancelGUIProfileOperation(op)
+			return
+		}
 		quitting = true
 		cancel()
 	})
@@ -167,6 +173,7 @@ func (a *App) ready(quitting *bool) {
 		}
 	})
 	a.model.Hooks.SetTUNAsync = a.requestTUN
+	a.model.Hooks.UseProfileAsync = a.useProfileAsync
 	a.model.Hooks.ImportURLAsync = a.importURLAsync
 	a.model.Hooks.UpdateProfileAsync = a.updateProfileAsync
 	a.model.Hooks.ChangeProfileURLAsync = a.changeProfileURLAsync
@@ -278,6 +285,12 @@ func (a *App) ready(quitting *bool) {
 }
 
 func (a *App) trayClick() {
+	if a.guiOperation != nil {
+		if a.win != nil {
+			a.win.Show()
+		}
+		return
+	}
 	switch a.model.Prefs.TrayEvent {
 	case "tray_menu":
 		if a.tray != nil {
@@ -296,6 +309,10 @@ func (a *App) showMain() {
 	if a.win == nil {
 		return
 	}
+	if a.guiOperation != nil {
+		a.win.Show()
+		return
+	}
 	if a.model != nil && a.model.Prefs.Lightweight {
 		if err := a.setLightweight(false); err != nil {
 			a.model.Notice = err.Error()
@@ -304,6 +321,8 @@ func (a *App) showMain() {
 	a.win.Show()
 	a.win.Focus()
 }
+
+func (a *App) quitAfterGUIOperation() { mygo.App.Quit() }
 
 func (a *App) setLightweight(on bool) error {
 	if a.model == nil || a.win == nil {
