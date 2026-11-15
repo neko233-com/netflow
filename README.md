@@ -246,6 +246,8 @@ Windows 默认将用户数据保存在 `%APPDATA%\netflow`。开发时可通过�
 
 在 Windows 上安装 WiX Toolset 3.14 后，运行 `pwsh -File scripts/build-release.ps1` 可构建上述两个平台并生成 ZIP、Windows MSI 和 SHA-256 校验文件。发布脚本在构建前检查目标文件及排他锁，已有同版本产物时拒绝覆盖；构建完成后记录输入摘要和 Windows 文件哈希。程序不嵌入打包时可能尚未提交的 Git 工作区标记，可通过发行标签查看源码。打包脚本不创建 DMG，也不会替代 macOS 原机运行测试、签名或公证。更新依赖后运行 `python scripts/collect_licenses.py` 并检查 [第三方许可清单](LICENSES/third_party/README.md)。
 
+Windows 隔离来宾验证使用 `pwsh -File scripts/test-windows-vm.ps1`，重复运行复用同一专用虚拟磁盘。开发时可加 `-Quick`，执行 MSI、图标、Verge 迁入、GUI 取消和 Headless TUN 恢复的快速冒烟；快速模式不覆盖完整回归，发布前仍需不带 `-Quick` 的完整验证。首次建立 Windows 来宾仍需下载和安装系统。
+
 有可用 Windows 代码签名证书时，可显式传入证书存储中的 40 位指纹和 RFC 3161 HTTPS 时间戳地址：
 
 ```powershell

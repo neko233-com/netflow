@@ -38,6 +38,7 @@ type manifest struct {
 	Files    map[string]artifact `json:"files"`
 	Expected map[string]string   `json:"expected"`
 	Signer   string              `json:"signer,omitempty"`
+	TestMode string              `json:"test_mode"`
 }
 type result struct {
 	ID     string `json:"id"`
@@ -77,7 +78,7 @@ func getManifest() (manifest, error) {
 }
 
 func validateManifest(m manifest) error {
-	if !validHex(m.ID, 32) || len(m.Files) != 2 || len(m.Expected) != 3 || (m.Signer != "" && !validHex(m.Signer, 40)) {
+	if !validHex(m.ID, 32) || len(m.Files) != 2 || len(m.Expected) != 3 || (m.Signer != "" && !validHex(m.Signer, 40)) || (m.TestMode != "full" && m.TestMode != "quick") {
 		return errors.New("invalid manifest")
 	}
 	for _, name := range []string{"netflow-app.test.exe", "NetFlow.msi"} {
@@ -175,7 +176,11 @@ func execute(m manifest, media string) result {
 	msi := filepath.Join(media, "NetFlow.msi")
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, "-test.v", "-test.run=^TestWindowsVMEndToEnd$", "-test.timeout=10m")
+	testName := "TestWindowsVMEndToEnd"
+	if m.TestMode == "quick" {
+		testName = "TestWindowsVMQuick"
+	}
+	cmd := exec.CommandContext(ctx, exe, "-test.v", "-test.run=^"+testName+"$", "-test.timeout=10m")
 	hashes, _ := json.Marshal(m.Expected)
 	signed := "false"
 	if m.Signer != "" {

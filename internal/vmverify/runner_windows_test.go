@@ -44,7 +44,7 @@ func TestVerifyMediaRejectsAlteredFilesAndWrongRun(t *testing.T) {
 }
 
 func TestManifestRequiresValidExpectedSigner(t *testing.T) {
-	m := manifest{ID: strings.Repeat("a", 32), Files: map[string]artifact{}, Expected: map[string]string{}}
+	m := manifest{ID: strings.Repeat("a", 32), Files: map[string]artifact{}, Expected: map[string]string{}, TestMode: "full"}
 	for _, name := range []string{"netflow-app.test.exe", "NetFlow.msi"} {
 		m.Files[name] = artifact{SHA256: strings.Repeat("b", 64), Size: 1}
 	}
@@ -62,6 +62,17 @@ func TestManifestRequiresValidExpectedSigner(t *testing.T) {
 		m.Signer = invalid
 		if err := validateManifest(m); err == nil {
 			t.Fatalf("invalid signer %q accepted", invalid)
+		}
+	}
+	m.Signer = ""
+	m.TestMode = "quick"
+	if err := validateManifest(m); err != nil {
+		t.Fatal("quick test manifest rejected", err)
+	}
+	for _, invalid := range []string{"", "FULL", "quick|full"} {
+		m.TestMode = invalid
+		if err := validateManifest(m); err == nil {
+			t.Fatalf("invalid test mode %q accepted", invalid)
 		}
 	}
 }

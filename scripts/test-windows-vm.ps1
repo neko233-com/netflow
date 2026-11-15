@@ -2,6 +2,7 @@ param(
     [int]$TimeoutMinutes = 45,
     [switch]$TestPolicyOnly,
     [switch]$VerifyBootRetry,
+    [switch]$Quick,
     [ValidateSet('auto', '3G', '4G')][string]$GuestMemory = 'auto',
     [string]$SigningThumbprint = '',
     [string]$TimestampUrl = '',
@@ -73,6 +74,10 @@ function Test-NetFlowMissingCopy([string]$ErrorText, [string]$RunID) {
     $source = [regex]::Escape("/storage/netflow-results/$RunID.json")
     return $ErrorText -match "(?i)could not find the file $source in container\b"
 }
+function Assert-NetFlowValidationScope([System.Collections.IDictionary]$Record, [string]$Mode) {
+    $test = if ($Mode -ceq 'full') { 'TestWindowsVMEndToEnd' } elseif ($Mode -ceq 'quick') { 'TestWindowsVMQuick' } else { throw 'Invalid validation mode' }
+    if (-not $Record.output.Contains("--- PASS: $test ")) { throw 'Guest result did not execute the requested validation scope' }
+}
 function Assert-NetFlowReleaseCurrent {
     & python scripts/build_inputs.py verify
     if ($LASTEXITCODE -ne 0) { throw 'Cannot validate stale, modified or unrecorded release artifacts.' }
@@ -96,6 +101,8 @@ function Assert-NetFlowPayloadCurrent {
     }
     $actualSigner = [IO.File]::ReadAllText((Join-Path $payload 'signer.txt'), [Text.Encoding]::ASCII)
     if ($actualSigner -cne $signer) { throw 'Guest signing policy changed during validation' }
+    $actualMode = [IO.File]::ReadAllText((Join-Path $payload 'test-mode.txt'), [Text.Encoding]::ASCII)
+    if ($actualMode -cne $validationMode) { throw 'Guest validation mode changed during validation' }
     if ($null -ne $requiredSigning) { Assert-NetFlowSignedFile $requiredSigning $copied }
 }
 function Ensure-NetFlowKVM {
@@ -121,10 +128,12 @@ if ($TestPolicyOnly) {
         $payload = $testDir
         $msi = Join-Path $testDir 'source.bin'
         $signer = ''
+        $validationMode = 'full'
         $hashes = [ordered]@{ 'NetFlow.exe' = 'a'; 'netflow-agent.exe' = 'b'; 'netflow-kernel-worker.exe' = 'c' }
         [IO.File]::WriteAllText($msi, 'synthetic')
         [IO.File]::WriteAllText((Join-Path $payload 'NetFlow.msi'), 'synthetic')
         [IO.File]::WriteAllText((Join-Path $payload 'signer.txt'), '')
+        [IO.File]::WriteAllText((Join-Path $payload 'test-mode.txt'), $validationMode)
         [IO.File]::WriteAllText((Join-Path $payload 'expected.json'), ($hashes | ConvertTo-Json -Compress))
         Assert-NetFlowPayloadCurrent
         [IO.File]::WriteAllText((Join-Path $payload 'NetFlow.msi'), 'modified')
@@ -137,6 +146,11 @@ if ($TestPolicyOnly) {
         try { Assert-NetFlowPayloadCurrent } catch { $rejected = $true }
         if (-not $rejected) { throw 'Changed signing policy was accepted' }
         [IO.File]::WriteAllText((Join-Path $payload 'signer.txt'), '')
+        [IO.File]::WriteAllText((Join-Path $payload 'test-mode.txt'), 'quick')
+        $rejected = $false
+        try { Assert-NetFlowPayloadCurrent } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Changed validation mode was accepted' }
+        [IO.File]::WriteAllText((Join-Path $payload 'test-mode.txt'), $validationMode)
         [IO.File]::WriteAllText((Join-Path $payload 'expected.json'), '{}')
         $rejected = $false
         try { Assert-NetFlowPayloadCurrent } catch { $rejected = $true }
@@ -164,6 +178,11 @@ if ($TestPolicyOnly) {
             (Test-NetFlowMissingCopy 'Error response from daemon: No such container' $testID) -or
             (Test-NetFlowMissingCopy 'Could not find the file /different in container test' $testID) -or
             (Test-NetFlowMissingCopy "Could not find the file /storage/netflow-results/$testID.json in container test" 'invalid')) { throw 'Unsafe missing-result classification' }
+        Assert-NetFlowValidationScope @{ output = "--- PASS: TestWindowsVMEndToEnd (1.0s)" } 'full'
+        Assert-NetFlowValidationScope @{ output = "--- PASS: TestWindowsVMQuick (1.0s)" } 'quick'
+        $rejected = $false
+        try { Assert-NetFlowValidationScope @{ output = "--- PASS: TestWindowsVMQuick (1.0s)" } 'full' } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Quick result was accepted as a full validation' }
         $pwshPath = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
         $command = Invoke-NetFlowBoundedProcess $pwshPath @('-NoProfile', '-Command', "[Console]::Out.Write('ok')") 10
         if ($command.ExitCode -ne 0 -or $command.Output -cne 'ok') { throw 'Validation subprocess output failed' }
@@ -251,6 +270,8 @@ try {
     [IO.File]::WriteAllText((Join-Path $payload 'expected.json'), ($hashes | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
     $signer = if ($null -ne $requiredSigning) { $requiredSigning.Thumbprint.ToLowerInvariant() } else { '' }
     [IO.File]::WriteAllText((Join-Path $payload 'signer.txt'), $signer, [Text.UTF8Encoding]::new($false))
+    $validationMode = if ($Quick) { 'quick' } else { 'full' }
+    [IO.File]::WriteAllText((Join-Path $payload 'test-mode.txt'), $validationMode, [Text.Encoding]::ASCII)
     [IO.File]::WriteAllText((Join-Path $payload 'ready'), 'ready', [Text.UTF8Encoding]::new($false))
     Assert-NetFlowReleaseCurrent
     Assert-NetFlowPayloadCurrent
@@ -295,9 +316,10 @@ try {
                 Remove-Item -LiteralPath $recovery -Force
                 $record.output
                 if (-not $record.ok) { throw "Windows validation failed: $($record.error)" }
+                Assert-NetFlowValidationScope $record $validationMode
                 Assert-NetFlowReleaseCurrent
                 Assert-NetFlowPayloadCurrent
-                Write-Output "Windows validation passed: $runID"
+                Write-Output "Windows $validationMode validation passed: $runID"
                 return
             }
             if (-not (Test-NetFlowMissingCopy $copy.Error $runID)) { throw 'Could not recover the stopped guest result' }
@@ -322,13 +344,14 @@ try {
             $record = Save-NetFlowValidationResult $result.Output $runID (Join-Path $repo "build/windows-vm-result-$runID.json")
             $record.output
             if (-not $record.ok) { throw "Windows validation failed: $($record.error)" }
+            Assert-NetFlowValidationScope $record $validationMode
             Assert-NetFlowReleaseCurrent
             Assert-NetFlowPayloadCurrent
             # Once a bootable disk has passed validation, the verified ISO is
             # no longer needed. Keep the virtual disk and all result records.
             $cleanup = Invoke-NetFlowBoundedProcess $dockerPath @('exec', $container, 'sh', '-c', 'if test -f /storage/windows.system || test -f /storage/windows.boot; then rm -f -- /storage/netflow-media/win10x64-enterprise-ltsc-eval.iso /storage/netflow-media/win10x64-enterprise-ltsc-eval.iso.aria2; fi')
             if ($cleanup.ExitCode -ne 0) { Write-Warning 'Could not remove cached installation media' }
-            Write-Output "Windows validation passed: $runID"
+            Write-Output "Windows $validationMode validation passed: $runID"
             return
         }
         Start-Sleep -Seconds 10

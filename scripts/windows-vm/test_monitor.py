@@ -29,6 +29,7 @@ with tempfile.TemporaryDirectory() as directory:
     (payload / "ready").write_text("ready")
     for name in ("netflow-app.test.exe", "NetFlow.msi"):
         (payload / name).write_bytes(name.encode())
+    (payload / "test-mode.txt").write_text("full")
     (payload / "expected.json").write_text(json.dumps({name: "a" * 64 for name in ("NetFlow.exe", "netflow-agent.exe", "netflow-kernel-worker.exe")}))
     manifest_scope = {"PAYLOAD": payload, "manifest": None, "files": {}, "FILES": ("netflow-app.test.exe", "NetFlow.msi"), "hashlib": hashlib, "json": json, "re": re, "RUN_ID": "b" * 32}
     exec(compile(ast.Module(body=manifest_fn, type_ignores=[]), str(source), "exec"), manifest_scope)
@@ -46,6 +47,21 @@ with tempfile.TemporaryDirectory() as directory:
             pass
         else:
             raise AssertionError("invalid signer policy was accepted")
+    (payload / "signer.txt").write_text("")
+    for mode in ("full", "quick"):
+        (payload / "test-mode.txt").write_text(mode)
+        manifest_scope["manifest"] = None
+        if json.loads(manifest_scope["load_manifest"]())["test_mode"] != mode:
+            raise AssertionError("test mode was not preserved")
+    for mode in ("", "FULL", "quick\n", "quick|full"):
+        (payload / "test-mode.txt").write_text(mode)
+        manifest_scope["manifest"] = None
+        try:
+            manifest_scope["load_manifest"]()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid test mode was accepted")
 if scope["drive_order"]("F") != "FEGDHIJKLMNOPQRSTUVWXYZ" or scope["drive_order"]("../bad") != "DEFGHIJKLMNOPQRSTUVWXYZ":
     raise AssertionError("invalid remembered media drive handling")
 

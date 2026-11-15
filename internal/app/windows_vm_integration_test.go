@@ -4321,25 +4321,8 @@ func vmGUIAutoStartTUN(t *testing.T, guiExe, agentExe, dir string) {
 	t.Log("stale TUN state was cleared for headless and GUI startup")
 }
 
-// This test exercises the shipped MSI and real Wintun only inside the isolated,
-// single-disk QEMU guest; it must never run against a workstation's routes.
-func TestWindowsVMEndToEnd(t *testing.T) {
-	requireDisposableVM(t)
-	vmAgentJunctionSafety(t)
-	closedListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closedAddress := closedListener.Addr().String()
-	if err := closedListener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	client := newSubscriptionClient("", 2*time.Second, false)
-	_, fetchErr := fetchProfileResponse("http://synthetic-user:synthetic-password@"+closedAddress+"/sub?token=synthetic-token", client, "")
-	client.CloseIdleConnections()
-	if fetchErr == nil || strings.Contains(fetchErr.Error(), "synthetic-") {
-		t.Fatalf("subscription network error exposed a credential: %v", fetchErr)
-	}
+func vmInstallAndVerify(t *testing.T) string {
+	t.Helper()
 	var expected map[string]string
 	if err := json.Unmarshal([]byte(os.Getenv("NETFLOW_VM_EXPECTED")), &expected); err != nil || len(expected) != 3 {
 		t.Fatal("invalid expected binary hashes")
@@ -4410,6 +4393,69 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		}
 	}
 	t.Logf("MSI installation, installed binary hashes and Windows icons verified; existing user data preserved (same build already installed: %t)", matching)
+	return install
+}
+
+// The quick path is a smoke test only; release acceptance still requires the
+// complete end-to-end test below on the same isolated single-disk guest.
+func TestWindowsVMQuick(t *testing.T) {
+	requireDisposableVM(t)
+	install := vmInstallAndVerify(t)
+	agentExe := filepath.Join(install, "netflow-agent.exe")
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	output, err := vmCommand(ctx, agentExe, "version").CombinedOutput()
+	cancel()
+	var version struct {
+		Version string `json:"version"`
+	}
+	if err != nil || json.Unmarshal(output, &version) != nil || version.Version != netflow.Version() {
+		t.Fatalf("quick CLI version mismatch: %s %v", output, err)
+	}
+	verge := t.TempDir()
+	if err := os.Mkdir(filepath.Join(verge, "profiles"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(verge, "profiles.yaml"), []byte("current: p1\nitems:\n  - {uid: p1, type: local, name: Quick, file: p1.yaml}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(verge, "profiles", "p1.yaml"), []byte("mixed-port: 0\nrules: ['MATCH,DIRECT']\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	for _, action := range []string{"migrate-preview", "migrate-import"} {
+		migrationCtx, done := context.WithTimeout(context.Background(), 40*time.Second)
+		data, err := vmCommand(migrationCtx, agentExe, "--config-dir", target, action, verge).CombinedOutput()
+		done()
+		var result map[string]any
+		if err != nil || json.Unmarshal(data, &result) != nil || (action == "migrate-import" && result["imported"] != float64(1)) {
+			t.Fatalf("quick Verge %s failed: %s %v", action, data, err)
+		}
+	}
+	vmGUIRestartCancellation(t, filepath.Join(install, "NetFlow.exe"))
+	vmHeadlessUncachedShutdown(t, agentExe, "mode", false, false, false)
+	t.Log("quick smoke validation passed; full end-to-end validation remains required for release")
+}
+
+// This test exercises the shipped MSI and real Wintun only inside the isolated,
+// single-disk QEMU guest; it must never run against a workstation's routes.
+func TestWindowsVMEndToEnd(t *testing.T) {
+	requireDisposableVM(t)
+	vmAgentJunctionSafety(t)
+	closedListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedAddress := closedListener.Addr().String()
+	if err := closedListener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	client := newSubscriptionClient("", 2*time.Second, false)
+	_, fetchErr := fetchProfileResponse("http://synthetic-user:synthetic-password@"+closedAddress+"/sub?token=synthetic-token", client, "")
+	client.CloseIdleConnections()
+	if fetchErr == nil || strings.Contains(fetchErr.Error(), "synthetic-") {
+		t.Fatalf("subscription network error exposed a credential: %v", fetchErr)
+	}
+	install := vmInstallAndVerify(t)
 	vmGUIRestartCancellation(t, filepath.Join(install, "NetFlow.exe"))
 	agentExe := filepath.Join(install, "netflow-agent.exe")
 	versionCtx, versionCancel := context.WithTimeout(context.Background(), 35*time.Second)

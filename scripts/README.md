@@ -47,6 +47,11 @@ Automatic memory selection uses 4 GB for a fresh Windows installation and
 3 GB for an existing guest; `-GuestMemory 3G` or `-GuestMemory 4G` overrides
 it. The container limit is 1 GB higher than the guest memory setting.
 
+`-Quick` runs a separate smoke scope covering installation, icons, Verge import,
+GUI cancellation and headless TUN recovery. It reuses the same owned disk and
+does not replace the default full regression required for release. Results are
+checked against the requested scope and labeled `quick` or `full`.
+
 The Windows background worker and Agent icons are generated from `resources/icon.ico`:
 `windres --input scripts/netflow-worker.rc --input-format rc --output-format coff --target pe-x86-64 --output cmd/netflow-kernel-worker/icon_windows_amd64.syso`.
 Copy that object to `cmd/netflow-agent/icon_windows_amd64.syso` after regenerating it.
