@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +15,62 @@ import (
 	"testing"
 	"time"
 )
+
+func TestBridgeBoundsRequestBodyWithoutTimingOutHandler(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	b, err := startBridge(t.TempDir(), func(ctx context.Context, method string, _ json.RawMessage) (any, error) {
+		if method == "slow" {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return map[string]bool{"ok": true}, nil
+	}, 200*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	conn, err := net.DialTimeout("tcp", b.listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := fmt.Fprintf(conn, "POST /rpc HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nContent-Length: 100\r\n\r\n{", b.listener.Addr(), b.token); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+			t.Fatal("incomplete request body was not closed")
+		}
+	} else if !strings.Contains(line, " 400 ") {
+		t.Fatalf("unexpected incomplete-request response: %q", line)
+	}
+	ep := endpoint{Address: b.listener.Addr().String(), Token: b.token}
+	result := make(chan error, 1)
+	go func() { result <- (Client{Timeout: 3 * time.Second}).call(context.Background(), ep, "slow", nil, nil) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("valid request did not reach handler")
+	}
+	time.Sleep(400 * time.Millisecond)
+	close(release)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("complete request timed out during its handler: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("completed request did not return")
+	}
+}
 
 func TestBridgeRequiresTokenAndRejectsBrowserOrigin(t *testing.T) {
 	dir := t.TempDir()

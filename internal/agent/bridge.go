@@ -65,6 +65,10 @@ type Bridge struct {
 // the current user's configuration directory. The handler must serialize app
 // mutations with the desktop event loop.
 func Start(dir string, handle Handler) (*Bridge, error) {
+	return startBridge(dir, handle, 15*time.Second)
+}
+
+func startBridge(dir string, handle Handler, readTimeout time.Duration) (*Bridge, error) {
 	if dir == "" || handle == nil {
 		return nil, errors.New("agent bridge is not configured")
 	}
@@ -120,7 +124,7 @@ func Start(dir string, handle Handler) (*Bridge, error) {
 	statuses := make(chan struct{}, 2)
 	shutdowns := make(chan struct{}, 2)
 	cancellations := make(chan struct{}, 2)
-	b.server = &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	b.server = &http.Server{ReadHeaderTimeout: 5 * time.Second, ReadTimeout: readTimeout, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != e.Address || r.Header.Get("Origin") != "" {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
