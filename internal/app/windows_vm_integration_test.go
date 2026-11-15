@@ -4259,13 +4259,35 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 			matching = false
 		}
 	}
-	if !matching {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		out, err := vmCommand(ctx, "msiexec.exe", "/i", msi, "/quiet", "/norestart").CombinedOutput()
-		cancel()
-		if err != nil {
-			t.Fatalf("MSI installation failed: %s: %v", out, err)
-		}
+	// Exercise both an upgrade and a repeated installation on subsequent runs.
+	// A uniquely named marker tests the default user data directory without
+	// replacing any existing configuration in the disposable guest.
+	configDir := filepath.Join(os.Getenv("APPDATA"), "NetFlow")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := os.CreateTemp(configDir, "msi-preservation-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerPath := marker.Name()
+	defer os.Remove(markerPath)
+	const markerContent = "netflow MSI user-data preservation test\n"
+	if _, err := marker.WriteString(markerContent); err != nil {
+		marker.Close()
+		t.Fatal(err)
+	}
+	if err := marker.Close(); err != nil {
+		t.Fatal(err)
+	}
+	installCtx, installCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	installOut, installErr := vmCommand(installCtx, "msiexec.exe", "/i", msi, "/quiet", "/norestart").CombinedOutput()
+	installCancel()
+	if installErr != nil {
+		t.Fatalf("MSI installation failed: %s: %v", installOut, installErr)
+	}
+	if data, err := os.ReadFile(markerPath); err != nil || string(data) != markerContent {
+		t.Fatalf("MSI changed user data: %v", err)
 	}
 	for _, name := range []string{"NetFlow.exe", "netflow-agent.exe", "netflow-kernel-worker.exe"} {
 		h, err := vmHash(filepath.Join(install, name))
@@ -4278,7 +4300,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 			}
 		}
 	}
-	t.Log("MSI installation and installed binary hashes verified")
+	t.Logf("MSI installation and installed binary hashes verified; existing user data preserved (same build already installed: %t)", matching)
 	vmGUIRestartCancellation(t, filepath.Join(install, "NetFlow.exe"))
 	agentExe := filepath.Join(install, "netflow-agent.exe")
 	versionCtx, versionCancel := context.WithTimeout(context.Background(), 35*time.Second)
