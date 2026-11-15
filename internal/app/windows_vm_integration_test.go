@@ -656,6 +656,27 @@ func vmAgentChainRoundTrip(t *testing.T, agentExe, dir string) {
 	if err != nil || json.Unmarshal(out, &state) != nil || !state.Active {
 		t.Fatalf("installed chain status: %s %v", out, err)
 	}
+	out, err = invoke("", "groups")
+	var groups agent.GroupsResult
+	if err != nil || json.Unmarshal(out, &groups) != nil {
+		t.Fatalf("installed chain groups: %s %v", out, err)
+	}
+	current := ""
+	for _, group := range groups.Groups {
+		if group.Name == "Select" {
+			current = group.Current
+		}
+	}
+	if current == "" {
+		t.Fatal("installed chain target has no current node")
+	}
+	if out, err = invoke("", "select", "Select", current); err == nil {
+		t.Fatalf("installed Agent changed chain target selection: %s", out)
+	}
+	out, err = invoke("", "chain-status")
+	if err != nil || json.Unmarshal(out, &state) != nil || !state.Active {
+		t.Fatalf("rejected selection changed installed chain: %s %v", out, err)
+	}
 	out, err = invoke("", "chain-disconnect")
 	if err != nil {
 		t.Fatalf("installed chain disconnect: %s %v", out, err)
@@ -664,7 +685,7 @@ func vmAgentChainRoundTrip(t *testing.T, agentExe, dir string) {
 	if err != nil || json.Unmarshal(out, &state) != nil || state.Configured {
 		t.Fatalf("installed chain did not disconnect: %s %v", out, err)
 	}
-	t.Log("installed CLI previewed, applied and disconnected a provider chain in the TUN worker")
+	t.Log("installed CLI previewed, applied and disconnected a provider chain; target selection was rejected in the TUN worker")
 }
 
 func vmLatencyRoundTrip(t *testing.T, agentExe, dir string) {

@@ -48,6 +48,7 @@ proxy-providers:
       - {name: exit, type: socks5, server: 127.0.0.1, port: 10}
 proxy-groups:
   - {name: TARGET, type: select, proxies: [DIRECT], use: [source]}
+  - {name: OTHER, type: select, proxies: [DIRECT, REJECT]}
 rules: ['MATCH,TARGET']
 `, freePort(t))
 	path := filepath.Join(dir, "config.yaml")
@@ -104,6 +105,12 @@ rules: ['MATCH,TARGET']
 	}
 	if err := a.SelectProxy("TARGET", "DIRECT"); err == nil {
 		t.Fatal("target selection bypassed chain")
+	}
+	if _, err := a.agentSelect(agent.SelectArgs{Group: "TARGET", Node: a.chain.Load().Exit}); err == nil {
+		t.Fatal("Agent selected the chain target while chain was active")
+	}
+	if result, err := a.agentSelect(agent.SelectArgs{Group: "OTHER", Node: "REJECT"}); err != nil || !result.OK {
+		t.Fatalf("Agent could not select an unrelated group: %+v %v", result, err)
 	}
 	next, err := a.agentPreview(change)
 	if err != nil {

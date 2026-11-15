@@ -1371,11 +1371,8 @@ func (a *App) SelectProxy(group, node string) error {
 	if a == nil {
 		return nil
 	}
-	if a.tunBusy {
-		return errors.New("虚拟网卡正在切换，请稍后重试")
-	}
-	if active := a.chain.Load(); active != nil && active.Spec.Target == group {
-		return errors.New("请先断开链式代理，再更换目标组节点")
+	if err := a.checkProxySelection(group); err != nil {
+		return err
 	}
 	actual := node
 	if a.core != nil && a.core.Status().Running {
@@ -1392,6 +1389,16 @@ func (a *App) SelectProxy(group, node string) error {
 	}
 	if actual != node && a.model != nil {
 		a.model.Notice = "已设置节点 " + node + "，当前实际使用 " + actual
+	}
+	return nil
+}
+
+func (a *App) checkProxySelection(group string) error {
+	if a.tunBusy {
+		return errors.New("虚拟网卡正在切换，请稍后重试")
+	}
+	if active := a.chain.Load(); active != nil && active.Spec.Target == group {
+		return errors.New("请先断开链式代理，再更换目标组节点")
 	}
 	return nil
 }

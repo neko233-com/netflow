@@ -198,6 +198,14 @@ func TestAgentControlsOperateOnRealCore(t *testing.T) {
 	if selected, err := a.core.Selected("TestGroup"); err != nil || selected != "REJECT" {
 		t.Fatalf("core choice %s %v", selected, err)
 	}
+	a.tunBusy = true
+	if _, err := a.agentCommand("select", json.RawMessage(`{"group":"TestGroup","node":"DIRECT"}`)); err == nil {
+		t.Fatal("Agent selected a node during a TUN transition")
+	}
+	a.tunBusy = false
+	if selected, err := a.core.Selected("TestGroup"); err != nil || selected != "REJECT" {
+		t.Fatalf("TUN transition changed selection: %s %v", selected, err)
+	}
 	if err := a.core.Select("TestGroup", "DIRECT"); err != nil {
 		t.Fatal(err)
 	}

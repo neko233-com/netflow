@@ -188,6 +188,9 @@ func (a *App) agentSelect(in agent.SelectArgs) (agent.ActionResult, error) {
 	if strings.TrimSpace(in.Group) == "" || strings.TrimSpace(in.Node) == "" {
 		return agent.ActionResult{}, errors.New("group and node are required")
 	}
+	if err := a.checkProxySelection(in.Group); err != nil {
+		return agent.ActionResult{}, err
+	}
 	if err := a.core.Select(in.Group, in.Node); err != nil {
 		return agent.ActionResult{}, err
 	}
