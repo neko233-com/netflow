@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -68,7 +69,7 @@ func (e *controlledChainReload) CancelActiveApply(ctx context.Context) (bool, er
 }
 
 func TestGUIChainTransactionsAreCancelableAndResponsive(t *testing.T) {
-	for _, scenario := range []string{"connect-cancel", "connect-success", "connect-restore-fails", "disconnect-cancel", "disconnect-success", "disconnect-restore-fails", "agent-connect-cancel", "agent-disconnect-cancel", "headless-agent-connect-cancel", "headless-agent-disconnect-cancel", "headless-agent-connect-quit", "headless-agent-disconnect-quit"} {
+	for _, scenario := range []string{"connect-cancel", "connect-success", "connect-restore-fails", "disconnect-cancel", "disconnect-success", "disconnect-restore-fails", "agent-connect-cancel", "agent-disconnect-cancel", "headless-agent-connect-cancel", "headless-agent-disconnect-cancel", "headless-agent-connect-quit", "headless-agent-disconnect-quit", "agent-connect-context", "agent-disconnect-context", "headless-agent-connect-context", "headless-agent-disconnect-context"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("CI", "1")
 			dir := t.TempDir()
@@ -97,8 +98,9 @@ rules: ['MATCH,TARGET']
 			underlying := a.core
 			defer underlying.Stop()
 			nodes := []ui.ProxyNode{{Name: "entry", Provider: "source", SourceGroup: "TARGET"}, {Name: "exit", Provider: "source", SourceGroup: "TARGET"}}
-			disconnect := scenario == "disconnect-cancel" || scenario == "disconnect-success" || scenario == "disconnect-restore-fails" || scenario == "agent-disconnect-cancel" || scenario == "headless-agent-disconnect-cancel" || scenario == "headless-agent-disconnect-quit"
-			agentCall := scenario == "agent-connect-cancel" || scenario == "agent-disconnect-cancel" || scenario == "headless-agent-connect-cancel" || scenario == "headless-agent-disconnect-cancel" || scenario == "headless-agent-connect-quit" || scenario == "headless-agent-disconnect-quit"
+			disconnect := strings.Contains(scenario, "disconnect-")
+			agentCall := strings.HasPrefix(scenario, "agent-") || strings.HasPrefix(scenario, "headless-agent-")
+			contextCancel := strings.HasSuffix(scenario, "-context")
 			var proposal agent.ChainPreview
 			if disconnect {
 				draft, err := a.prepareChain("TARGET", nodes)
@@ -123,9 +125,11 @@ rules: ['MATCH,TARGET']
 			a.core = engine
 			d := newSerialDispatcher()
 			a.dispatch = d.call
-			a.headless = scenario == "headless-agent-connect-cancel" || scenario == "headless-agent-disconnect-cancel" || scenario == "headless-agent-connect-quit" || scenario == "headless-agent-disconnect-quit"
+			a.headless = strings.HasPrefix(scenario, "headless-agent-")
 			defer d.close()
 			result := make(chan error, 1)
+			requestCtx, cancelRequest := context.WithCancel(context.Background())
+			defer cancelRequest()
 			if agentCall {
 				if err := a.startAgent(); err != nil {
 					t.Fatal(err)
@@ -134,9 +138,9 @@ rules: ['MATCH,TARGET']
 				client := agent.Client{Dir: dir, Timeout: 20 * time.Second}
 				go func() {
 					if disconnect {
-						result <- client.Call(context.Background(), "chain-disconnect", nil, nil)
+						result <- client.Call(requestCtx, "chain-disconnect", nil, nil)
 					} else {
-						result <- client.Call(context.Background(), "chain-apply", agent.ApplyArgs{ProposalID: proposal.ProposalID}, nil)
+						result <- client.Call(requestCtx, "chain-apply", agent.ApplyArgs{ProposalID: proposal.ProposalID}, nil)
 					}
 				}()
 			} else if disconnect {
@@ -170,6 +174,8 @@ rules: ['MATCH,TARGET']
 				close(engine.release)
 			} else if scenario == "headless-agent-connect-quit" || scenario == "headless-agent-disconnect-quit" {
 				d.call(func() { a.guiOperation.quit = true; a.cancelGUIConfigOperation(a.guiOperation) })
+			} else if contextCancel {
+				cancelRequest()
 			} else if agentCall {
 				client := agent.Client{Dir: dir, Timeout: 5 * time.Second}
 				var response agent.CancelApplyResult
@@ -187,6 +193,9 @@ rules: ['MATCH,TARGET']
 			}
 			if success != (err == nil) {
 				t.Fatalf("unexpected result: %v", err)
+			}
+			if contextCancel && !errors.Is(err, context.Canceled) {
+				t.Fatalf("request cancellation was not reported: %v", err)
 			}
 			select {
 			case <-gated:

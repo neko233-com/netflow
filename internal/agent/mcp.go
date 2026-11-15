@@ -400,7 +400,7 @@ func NewMCP(client Client) *mcp.Server {
 		err := client.Call(ctx, "rules", in, &out)
 		return nil, out, err
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "netflow_select_proxy", Description: "Select a member of a selectable proxy group; affects subsequent connections and persists the choice when possible."},
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_select_proxy", Description: "Select a member of a selectable proxy group; affects subsequent connections and persists the choice when possible. Selection is rejected during a TUN transition or for an active chain's target group."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SelectArgs) (*mcp.CallToolResult, ActionResult, error) {
 			var out ActionResult
 			err := client.Call(ctx, "select", in, &out)

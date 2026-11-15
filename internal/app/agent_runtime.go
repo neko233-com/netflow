@@ -124,6 +124,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			err   error
 		}
 		result := make(chan response, 1)
+		var operation *guiConfigOperation
 		executed := false
 		a.runOnMain(func() {
 			executed = true
@@ -131,6 +132,12 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 				result <- response{err: err}
 				return
 			}
+			previous := a.guiOperation
+			defer func() {
+				if a.guiOperation != previous {
+					operation = a.guiOperation
+				}
+			}()
 			if method == "chain-disconnect" {
 				a.disconnectChainAsync(func(err error) {
 					out := agent.ActionResult{OK: err == nil}
@@ -163,6 +170,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		case out := <-result:
 			return out.value, out.err
 		case <-ctx.Done():
+			a.cancelAgentConfigOperation(operation)
 			return nil, ctx.Err()
 		}
 	}
@@ -176,6 +184,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			err   error
 		}
 		result := make(chan response, 1)
+		var operation *guiConfigOperation
 		executed := false
 		a.runOnMain(func() {
 			executed = true
@@ -183,6 +192,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 				result <- response{err: err}
 				return
 			}
+			previous := a.guiOperation
 			a.startGUIConfigOperation("正在应用内核设置", func() (*guiConfigTransaction, error) {
 				next, err := a.agentKernelOptionCandidate(input)
 				if err != nil {
@@ -197,6 +207,9 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 				value, err := a.agentKernelOptions()
 				result <- response{value: value, err: err}
 			})
+			if a.guiOperation != previous {
+				operation = a.guiOperation
+			}
 		})
 		if !executed {
 			return nil, errors.New("application is shutting down")
@@ -205,6 +218,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		case out := <-result:
 			return out.value, out.err
 		case <-ctx.Done():
+			a.cancelAgentConfigOperation(operation)
 			return nil, ctx.Err()
 		}
 	}
@@ -218,6 +232,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			err   error
 		}
 		result := make(chan response, 1)
+		var operation *guiConfigOperation
 		executed := false
 		a.runOnMain(func() {
 			executed = true
@@ -225,7 +240,11 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 				result <- response{err: err}
 				return
 			}
+			previous := a.guiOperation
 			a.agentApplyAsync(input.ProposalID, func(value agent.ApplyResult, err error) { result <- response{value, err} })
+			if a.guiOperation != previous {
+				operation = a.guiOperation
+			}
 		})
 		if !executed {
 			return nil, errors.New("application is shutting down")
@@ -234,6 +253,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		case out := <-result:
 			return out.value, out.err
 		case <-ctx.Done():
+			a.cancelAgentConfigOperation(operation)
 			return nil, ctx.Err()
 		}
 	}
@@ -253,6 +273,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			start = func(done func(error)) { a.setModeAsync(input.Mode, done) }
 		}
 		result := make(chan error, 1)
+		var operation *guiConfigOperation
 		executed := false
 		a.runOnMain(func() {
 			executed = true
@@ -264,7 +285,11 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 				result <- errors.New("core is not running")
 				return
 			}
+			previous := a.guiOperation
 			start(func(err error) { result <- err })
+			if a.guiOperation != previous {
+				operation = a.guiOperation
+			}
 		})
 		if !executed {
 			return nil, errors.New("application is shutting down")
@@ -273,6 +298,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		case err := <-result:
 			return agent.ActionResult{OK: err == nil}, err
 		case <-ctx.Done():
+			a.cancelAgentConfigOperation(operation)
 			return nil, ctx.Err()
 		}
 	}
@@ -706,6 +732,14 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		return nil, errors.New("desktop application is shutting down")
 	}
 	return value, callErr
+}
+
+// Cancel only the transaction started by this request; the callback may run
+// after that transaction has completed and another has started.
+func (a *App) cancelAgentConfigOperation(operation *guiConfigOperation) {
+	if operation != nil {
+		go a.runOnMainUnrestricted(func() { a.cancelGUIConfigOperation(operation) })
+	}
 }
 
 // A status request must not hold an HTTP handler indefinitely when a kernel

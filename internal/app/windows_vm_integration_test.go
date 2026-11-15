@@ -3633,24 +3633,26 @@ func vmGUIStartupProvider(t *testing.T, appExe string) {
 	}
 }
 
-func vmHeadlessUncachedShutdown(t *testing.T, agentExe, operation string) {
+func vmHeadlessUncachedShutdown(t *testing.T, agentExe, operation string, cancelRequest bool) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
 	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	var enteredOnce, canceledOnce sync.Once
+	var enteredOnce, canceledOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		enteredOnce.Do(func() { close(entered) })
 		select {
 		case <-r.Context().Done():
 			canceledOnce.Do(func() { close(canceled) })
 		case <-release:
+			_, _ = io.WriteString(w, "proxies: [{name: fresh, type: direct}]\n")
 		}
 	}))
 	defer provider.Close()
-	defer close(release)
+	defer unblock()
 	dir := t.TempDir()
 	base := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
 	configPath := filepath.Join(dir, "config.yaml")
@@ -3706,7 +3708,9 @@ func vmHeadlessUncachedShutdown(t *testing.T, agentExe, operation string) {
 		t.Fatalf("unknown operation %q", operation)
 	}
 	operationDone := make(chan error, 1)
-	go func() { operationDone <- client.Call(context.Background(), operation, args, nil) }()
+	requestCtx, cancelCall := context.WithCancel(context.Background())
+	defer cancelCall()
+	go func() { operationDone <- client.Call(requestCtx, operation, args, nil) }()
 	select {
 	case <-entered:
 	case <-time.After(15 * time.Second):
@@ -3726,14 +3730,37 @@ func vmHeadlessUncachedShutdown(t *testing.T, agentExe, operation string) {
 	if time.Since(statusStarted) >= 2*time.Second {
 		t.Fatal("pending status was not coalesced")
 	}
-	var result agent.ActionResult
-	if err := client.Call(context.Background(), "shutdown", nil, &result); err != nil || !result.OK {
-		t.Fatalf("headless shutdown acknowledgement: %+v %v", result, err)
+	if cancelRequest {
+		cancelCall()
+	} else {
+		var result agent.ActionResult
+		if err := client.Call(context.Background(), "shutdown", nil, &result); err != nil || !result.OK {
+			t.Fatalf("headless shutdown acknowledgement: %+v %v", result, err)
+		}
 	}
 	select {
 	case <-canceled:
 	case <-time.After(15 * time.Second):
 		t.Fatal("headless shutdown did not cancel initial provider")
+	}
+	if cancelRequest {
+		unblock()
+		deadline = time.Now().Add(30 * time.Second)
+		restored := false
+		for time.Now().Before(deadline) {
+			if err := client.Call(context.Background(), "status", nil, &status); err == nil && status.TUN && !status.TUNPending {
+				restored = true
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if !restored {
+			t.Fatalf("request cancellation did not restore active TUN: %+v", status)
+		}
+		var result agent.ActionResult
+		if err := client.Call(context.Background(), "shutdown", nil, &result); err != nil || !result.OK {
+			t.Fatalf("headless shutdown after request cancellation: %+v %v", result, err)
+		}
 	}
 	select {
 	case err := <-finished:
@@ -3769,7 +3796,7 @@ func vmHeadlessUncachedShutdown(t *testing.T, agentExe, operation string) {
 	for time.Now().Before(deadline) {
 		routes, dns, err := vmNetworkSnapshot()
 		if err == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
-			t.Logf("headless %s shutdown canceled provider, rolled back state, and restored TUN networking", operation)
+			t.Logf("headless %s canceled provider and rolled back state (request canceled: %t); shutdown restored TUN networking", operation, cancelRequest)
 			return
 		}
 		time.Sleep(time.Second)
@@ -5025,9 +5052,10 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	vmHeadlessRoundTrip(t, agentExe, backupTarget)
 	t.Log("installed headless CLI activated TUN, applied a rewrite without visible windows, and restored networking on shutdown")
 	vmProviderBusyTUN(t, agentExe)
-	vmHeadlessUncachedShutdown(t, agentExe, "mode")
-	vmHeadlessUncachedShutdown(t, agentExe, "kernel-option")
-	vmHeadlessUncachedShutdown(t, agentExe, "apply")
+	vmHeadlessUncachedShutdown(t, agentExe, "mode", false)
+	vmHeadlessUncachedShutdown(t, agentExe, "kernel-option", false)
+	vmHeadlessUncachedShutdown(t, agentExe, "apply", false)
+	vmHeadlessUncachedShutdown(t, agentExe, "mode", true)
 	vmHeadlessVergeScriptShutdown(t, agentExe)
 	vmCancelProfileApply(t, agentExe)
 	vmGUIProfileSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), false)
