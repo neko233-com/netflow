@@ -16,8 +16,8 @@ if entry.count('waitForBoot "$pid" 120 &') != 1:
 
 source = Path("/opt/netflow/bridge.py")
 tree = ast.parse(source.read_text(encoding="utf-8"), str(source))
-functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {"monitor_command", "detach_setup_media", "desktop_ready", "start_media_from_desktop", "drive_order", "bootstrap_media_agent"}]
-if len(functions) != 6:
+functions = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {"monitor_command", "detach_setup_media", "desktop_ready", "start_media_from_desktop", "drive_order", "desktop_poll_interval", "bootstrap_media_agent"}]
+if len(functions) != 7:
     raise RuntimeError("setup-media monitor functions missing")
 scope = {"re": re, "socket": socket, "time": time, "Path": Path}
 exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), "exec"), scope)
@@ -64,6 +64,8 @@ with tempfile.TemporaryDirectory() as directory:
             raise AssertionError("invalid test mode was accepted")
 if scope["drive_order"]("F") != "FEGDHIJKLMNOPQRSTUVWXYZ" or scope["drive_order"]("../bad") != "DEFGHIJKLMNOPQRSTUVWXYZ":
     raise AssertionError("invalid remembered media drive handling")
+if scope["desktop_poll_interval"]("quick") != 3 or scope["desktop_poll_interval"]("full") != 15 or scope["desktop_poll_interval"]("invalid") != 15:
+    raise AssertionError("invalid desktop polling policy")
 
 # Verify desktop recognition and fixed keyboard input without a live guest.
 screen = Path("/tmp/netflow-desktop.ppm")
@@ -119,7 +121,7 @@ class FakeSocket:
 with tempfile.TemporaryDirectory(prefix="netflow-bootstrap-test-") as directory:
     base = Path(directory)
     fake_socket = type("FakeSocketModule", (), {"AF_UNIX": 1, "SOCK_STREAM": 1, "socket": staticmethod(lambda *_args: FakeSocket())})
-    scope.update({"Path": lambda value: base if value == "/storage/windows.boot" else Path(value), "RESULTS": base, "RUN_ID": "a" * 32, "os": os, "json": json, "socket": fake_socket, "desktop_ready": lambda _conn: True, "time": type("NoSleep", (), {"sleep": staticmethod(lambda _seconds: None)}), "print": lambda *_args, **_kwargs: None})
+    scope.update({"Path": lambda value: base if value == "/storage/windows.boot" else Path(value), "PAYLOAD": base, "RESULTS": base, "RUN_ID": "a" * 32, "os": os, "json": json, "socket": fake_socket, "desktop_ready": lambda _conn: True, "time": type("NoSleep", (), {"sleep": staticmethod(lambda _seconds: None)}), "print": lambda *_args, **_kwargs: None})
     attempted = []
     scope["media_started"] = ImmediateEvent()
     scope["start_media_from_desktop"] = lambda _conn, drive: attempted.append(drive)

@@ -300,6 +300,7 @@ try {
     $until = (Get-Date).AddMinutes($TimeoutMinutes)
     $bootAttempt = 1
     $dockerPath = (Get-Command docker -CommandType Application | Select-Object -First 1).Source
+    $pollSeconds = if ($Quick) { 2 } else { 10 }
     while ((Get-Date) -lt $until) {
         $inspection = Invoke-NetFlowBoundedProcess $dockerPath @('inspect', '--format', '{{.State.Running}}', $container)
         $state = $inspection.Output.Trim()
@@ -354,7 +355,7 @@ try {
             Write-Output "Windows $validationMode validation passed: $runID"
             return
         }
-        Start-Sleep -Seconds 10
+        Start-Sleep -Seconds $pollSeconds
     }
     $logs = Protect-NetFlowDiagnostic (docker logs --tail 100 $container 2>&1 | Out-String) @($guestPassword)
     $logPath = Join-Path $repo "build/windows-vm-timeout-$runID.log"

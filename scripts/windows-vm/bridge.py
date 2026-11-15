@@ -83,6 +83,11 @@ def drive_order(previous):
         return "".join(sorted(letters, key=lambda drive: (abs(letters.index(drive) - index), letters.index(drive))))
     return letters
 
+def desktop_poll_interval(mode):
+    # Keep the full-validation cadence unchanged; quick smoke checks benefit
+    # from noticing the already-booted desktop sooner on a reused disk.
+    return 3 if mode == "quick" else 15
+
 def bootstrap_media_agent():
     # Fresh installations complete their first-logon setup and reboot first.
     if not (Path("/storage/windows.boot").exists() or Path("/storage/windows.system").exists()):
@@ -97,6 +102,10 @@ def bootstrap_media_agent():
         previous = last_drive.read_text(encoding="ascii").strip()
     except (OSError, UnicodeError):
         previous = ""
+    try:
+        poll_interval = desktop_poll_interval((PAYLOAD / "test-mode.txt").read_text(encoding="ascii"))
+    except (OSError, UnicodeError):
+        poll_interval = desktop_poll_interval("")
     while not media_started.is_set():
         completed = True
         for drive in drive_order(previous):
@@ -135,7 +144,7 @@ def bootstrap_media_agent():
             tmp.write_text(json.dumps({"id": RUN_ID, "ok": False, "output": "", "error": "could not start the read-only media agent; check guest security history and optical media"}), encoding="utf-8")
             os.replace(tmp, RESULTS / (RUN_ID + ".json"))
             return
-        if media_started.wait(15):
+        if media_started.wait(poll_interval):
             return
 
 def detach_setup_media():
