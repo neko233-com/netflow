@@ -43,6 +43,16 @@ func TestMCPRequestsTUN(t *testing.T) {
 			}
 			return TunAutoStartResult{Enabled: true, AppliesTo: "gui"}, nil
 		}
+		if method == "auto-launch" {
+			return AutoLaunchResult{AppliesTo: "gui"}, nil
+		}
+		if method == "auto-launch-set" {
+			var in AutoLaunchArgs
+			if json.Unmarshal(args, &in) != nil || in.Enabled == nil || !*in.Enabled {
+				t.Error("incorrect login startup request")
+			}
+			return AutoLaunchResult{Enabled: true, AppliesTo: "gui"}, nil
+		}
 		if method == "rewrite-history" {
 			return RewriteHistory{}, nil
 		}
@@ -145,6 +155,8 @@ func TestMCPRequestsTUN(t *testing.T) {
 		{Name: "netflow_connections", Arguments: map[string]any{"offset": 2, "limit": 3}},
 		{Name: "netflow_tun_autostart", Arguments: map[string]any{}},
 		{Name: "netflow_set_tun_autostart", Arguments: map[string]any{"enabled": true}},
+		{Name: "netflow_auto_launch", Arguments: map[string]any{}},
+		{Name: "netflow_set_auto_launch", Arguments: map[string]any{"enabled": true}},
 		{Name: "netflow_rewrite_history", Arguments: map[string]any{}},
 		{Name: "netflow_preview_rules", Arguments: map[string]any{"proposal_id": "proposal", "stage": "after"}},
 		{Name: "netflow_cancel_preview", Arguments: map[string]any{"proposal_id": "proposal"}},

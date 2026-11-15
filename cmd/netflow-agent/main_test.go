@@ -407,6 +407,37 @@ func TestTUNAutoStartCLI(t *testing.T) {
 	}
 }
 
+func TestAutoLaunchCLI(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		switch method {
+		case "auto-launch":
+			return agent.AutoLaunchResult{AppliesTo: "gui"}, nil
+		case "auto-launch-set":
+			var in agent.AutoLaunchArgs
+			if json.Unmarshal(raw, &in) != nil || in.Enabled == nil {
+				return nil, errors.New("invalid login startup request")
+			}
+			return agent.AutoLaunchResult{Enabled: *in.Enabled, AppliesTo: "gui"}, nil
+		default:
+			return nil, errors.New("unexpected method")
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	for _, args := range [][]string{{"auto-launch"}, {"auto-launch", "on"}, {"auto-launch", "off"}} {
+		var output bytes.Buffer
+		if err := run(append([]string{"--config-dir", dir}, args...), strings.NewReader(""), &output); err != nil || !json.Valid(output.Bytes()) {
+			t.Fatalf("%v: %s %v", args, output.String(), err)
+		}
+	}
+	if err := run([]string{"--config-dir", dir, "auto-launch", "invalid"}, strings.NewReader(""), &bytes.Buffer{}); err == nil {
+		t.Fatal("invalid argument accepted")
+	}
+}
+
 func TestCancelApplyCLI(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := agent.Start(dir, func(_ context.Context, method string, _ json.RawMessage) (any, error) {

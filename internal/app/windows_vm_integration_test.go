@@ -192,6 +192,62 @@ func vmCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 	return c
 }
 
+// Run only in the disposable guest. Preserve unexpected entries and remove
+// only the two values this test is authorized to create.
+func vmAutoLaunchCLI(t *testing.T, agentExe string, call func(...string) ([]byte, error), expectTUN bool) {
+	t.Helper()
+	key, err := registry.OpenKey(registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer key.Close()
+	if _, _, err := key.GetStringValue("NetFlow"); !errors.Is(err, registry.ErrNotExist) {
+		t.Fatalf("refusing to replace an existing login startup entry: %v", err)
+	}
+	owned := syscall.EscapeArg(filepath.Join(filepath.Dir(agentExe), "NetFlow.exe"))
+	foreign := `C:\NetFlow-foreign\NetFlow.exe`
+	defer func() {
+		if value, _, err := key.GetStringValue("NetFlow"); err == nil && (value == owned || value == foreign) {
+			_ = key.DeleteValue("NetFlow")
+		}
+	}()
+	var result agent.AutoLaunchResult
+	if out, err := call("auto-launch"); err != nil || json.Unmarshal(out, &result) != nil || result.Enabled || result.AppliesTo != "gui" {
+		t.Fatalf("initial login startup: %s %v", out, err)
+	}
+	if out, err := call("auto-launch", "on"); err != nil || json.Unmarshal(out, &result) != nil || !result.Enabled {
+		t.Fatalf("enable login startup: %s %v", out, err)
+	}
+	if value, _, err := key.GetStringValue("NetFlow"); err != nil || value != owned {
+		t.Fatalf("login startup did not point at the installed GUI: %q %v", value, err)
+	}
+	if out, err := call("auto-launch", "off"); err != nil || json.Unmarshal(out, &result) != nil || result.Enabled {
+		t.Fatalf("disable login startup: %s %v", out, err)
+	}
+	if _, _, err := key.GetStringValue("NetFlow"); !errors.Is(err, registry.ErrNotExist) {
+		t.Fatalf("login startup entry remained: %v", err)
+	}
+	if err := key.SetStringValue("NetFlow", foreign); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{"on", "off"} {
+		if out, err := call("auto-launch", state); err == nil {
+			t.Fatalf("foreign login startup accepted %s: %s", state, out)
+		}
+		if value, _, err := key.GetStringValue("NetFlow"); err != nil || value != foreign {
+			t.Fatalf("foreign login startup was modified: %q %v", value, err)
+		}
+	}
+	if err := key.DeleteValue("NetFlow"); err != nil {
+		t.Fatal(err)
+	}
+	var status agent.Status
+	if out, err := call("status"); err != nil || json.Unmarshal(out, &status) != nil || status.TUN != expectTUN {
+		t.Fatalf("login startup changed current TUN: %s %v", out, err)
+	}
+	t.Log("installed CLI controlled GUI login startup and preserved a foreign startup entry")
+}
+
 func vmVerifyExecutableIcon(path string) error {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
@@ -1037,6 +1093,7 @@ func vmHeadlessRoundTrip(t *testing.T, agentExe, dir string) {
 	if !status.TUN || !status.Headless {
 		t.Fatalf("headless TUN did not start: %+v", status)
 	}
+	vmAutoLaunchCLI(t, agentExe, call, true)
 	var restart agent.ActionResult
 	if output, err := call("restart-core"); err != nil || json.Unmarshal(output, &restart) != nil || !restart.OK {
 		t.Fatalf("headless CLI restart failed: %s %v", output, err)
@@ -5478,6 +5535,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 		data, _ := os.ReadFile(filepath.Join(dir, "gui.log"))
 		t.Fatalf("installed GUI did not start agent: %v status=%+v log=%s", err, s, data)
 	}
+	vmAutoLaunchCLI(t, agentExe, call, false)
 	settingsBody, err = os.ReadFile(filepath.Join(dir, "settings.json"))
 	if err != nil || strings.Contains(string(settingsBody), "synthetic-vm-secret") || strings.Contains(string(settingsBody), "synthetic-url-secret") || strings.Contains(string(settingsBody), "synthetic-token") || strings.Contains(string(settingsBody), "synthetic-user") {
 		t.Fatal("legacy credential remained in the installed settings")

@@ -148,6 +148,18 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "tun-autostart-set", in, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_auto_launch", Description: "Read whether this installation owns the current user's GUI login startup entry. Does not control headless startup.", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, AutoLaunchResult, error) {
+			var out AutoLaunchResult
+			err := client.Call(ctx, "auto-launch", nil, &out)
+			return nil, out, err
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_set_auto_launch", Description: "Set the current user's GUI login startup entry; never overwrites an entry owned by another NetFlow installation. A future GUI launch may request TUN if its separate TUN startup preference is enabled."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in AutoLaunchArgs) (*mcp.CallToolResult, AutoLaunchResult, error) {
+			var out AutoLaunchResult
+			err := client.Call(ctx, "auto-launch-set", in, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_update_geodata", Description: "Download existing GeoData databases through the active local proxy. Poll netflow_status for geo_pending, geo_error and geo_restart_required; updates apply after restarting NetFlow."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, GeoResult, error) {
 			var out GeoResult

@@ -591,6 +591,9 @@ func (m *Model) setAutoLaunch(on bool) {
 			m.Notice = err.Error()
 			return
 		}
+		m.Prefs.AutoLaunch = on
+		m.Home.AutoLaunch = on
+		return
 	}
 	m.Prefs.AutoLaunch = on
 	m.Home.AutoLaunch = on

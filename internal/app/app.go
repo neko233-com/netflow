@@ -1361,7 +1361,20 @@ func (a *App) SetAutoLaunch(on bool) error {
 	if err := a.autostart.Set(on); err != nil {
 		return err
 	}
+	a.syncAutoLaunch(on)
 	return nil
+}
+
+func (a *App) syncAutoLaunch(on bool) {
+	if a.model == nil {
+		return
+	}
+	changed := a.model.Prefs.AutoLaunch != on || a.model.Home.AutoLaunch != on
+	a.model.Prefs.AutoLaunch = on
+	a.model.Home.AutoLaunch = on
+	if changed && a.win != nil {
+		a.win.Invalidate()
+	}
 }
 
 // SelectProxy writes the choice into mihomo's selector when the kernel is

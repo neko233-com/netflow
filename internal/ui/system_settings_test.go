@@ -23,6 +23,25 @@ func TestSystemSettingsRestoreSwitchAfterFailure(t *testing.T) {
 	}
 }
 
+func TestAutoLaunchUsesSystemStateWithoutSavingUnrelatedPreferences(t *testing.T) {
+	m := NewModel(HomeState{Running: true})
+	m.Hooks.SetAutoLaunch = func(on bool) error {
+		if !on {
+			t.Error("unexpected startup request")
+		}
+		return nil
+	}
+	m.Hooks.SavePrefs = func(Prefs) error { t.Error("login startup must not save unrelated preferences"); return nil }
+	m.Router.Replace("/settings")
+	tt := mygoui.NewTester(m.View, WindowWidth, WindowHeight)
+	if err := tt.Click("launch-row"); err != nil {
+		t.Fatal(err)
+	}
+	if !m.Prefs.AutoLaunch || !m.Home.AutoLaunch {
+		t.Fatal("successful system startup change was not reflected")
+	}
+}
+
 func TestTUNAutoStartPreferenceDoesNotToggleCurrentTUN(t *testing.T) {
 	m := NewModel(HomeState{Running: true, TUNAvailable: true})
 	tunCalls := 0

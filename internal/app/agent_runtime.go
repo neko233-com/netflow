@@ -922,6 +922,27 @@ func (a *App) agentCommand(method string, args json.RawMessage) (value any, call
 				value = agent.TunAutoStartResult{Enabled: *input.Enabled, AppliesTo: "gui"}
 			}
 		}
+	case "auto-launch":
+		var input agent.Empty
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if a.autostart == nil {
+				callErr = errors.New("login startup is unavailable")
+			} else if enabled, err := a.autostart.Current(); err != nil {
+				callErr = err
+			} else {
+				a.syncAutoLaunch(enabled)
+				value = agent.AutoLaunchResult{Enabled: enabled, AppliesTo: "gui"}
+			}
+		}
+	case "auto-launch-set":
+		var input agent.AutoLaunchArgs
+		if callErr = decodeStrict(args, &input); callErr == nil {
+			if input.Enabled == nil {
+				callErr = errors.New("enabled is required")
+			} else if callErr = a.SetAutoLaunch(*input.Enabled); callErr == nil {
+				value = agent.AutoLaunchResult{Enabled: *input.Enabled, AppliesTo: "gui"}
+			}
+		}
 	case "kernel-option":
 		var input agent.KernelOptionArgs
 		if callErr = decodeStrict(args, &input); callErr == nil {

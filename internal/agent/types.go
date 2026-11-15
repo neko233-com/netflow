@@ -505,6 +505,16 @@ type TunAutoStartResult struct {
 	AppliesTo string `json:"applies_to"`
 }
 
+// AutoLaunchArgs controls the current user's GUI login startup entry.
+type AutoLaunchArgs struct {
+	Enabled *bool `json:"enabled" jsonschema:"true to launch the GUI at login, false to remove the owned startup entry"`
+}
+
+type AutoLaunchResult struct {
+	Enabled   bool   `json:"enabled"`
+	AppliesTo string `json:"applies_to"`
+}
+
 type GeoResult struct {
 	Accepted bool `json:"accepted"`
 	Pending  bool `json:"pending"`

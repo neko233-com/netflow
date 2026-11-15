@@ -45,6 +45,8 @@ CLI 的 `netflow-agent restart-core` 和 MCP 的 `netflow_restart_core` 在 GUI 
 
 GUI 与无界面服务使用同一配置目录锁，不能同时操作同一个目录；如需独立实例，可在命令名前提供 `--config-dir <绝对路径>` 并确保网络端口、TUN 和路由不冲突。无界面模式不创建应用窗口；Agent MCP 的 `netflow_shutdown_headless` 可请求关闭。关闭时会取消正在下载的订阅，并等待正在应用的订阅事务尝试恢复磁盘配置。macOS 构建包含相同入口，但尚未在 Mac 上验证运行。
 
+Windows 上，`netflow-agent auto-launch` 查询当前安装是否拥有当前用户的 GUI 登录启动项，`auto-launch on` 或 `auto-launch off` 设置该项；对应 MCP 工具是 `netflow_auto_launch` 和 `netflow_set_auto_launch`。这些命令不设置 Headless 开机运行，也不改变当前 TUN。若另一个 NetFlow 安装已占用启动项，查询会返回 `false`，修改会失败并保留原值；未来启动的 GUI 若另外启用了“启动时请求虚拟网卡”，仍会执行冲突检查并可能请求管理员授权。其他平台当前不支持此启动项操作。
+
 ## 当前状态
 
 - 已接入 mihomo 内核、订阅 URL 导入、配置激活、代理组切换、节点测速、代理与规则集合更新、模式切换、规则和连接显示、日志与托盘界面。部分功能仍需更完整的真实环境回归。
