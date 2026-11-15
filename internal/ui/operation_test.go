@@ -2,7 +2,10 @@ package ui
 
 import (
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/neko233-com/netflow/internal/agent"
 )
 
 func TestProfileOperationCanBeCanceledFromBusyView(t *testing.T) {
@@ -38,5 +41,60 @@ func TestActivateProfileWaitsForAsyncResult(t *testing.T) {
 	finish(errors.New("synthetic failure"))
 	if m.Notice != "synthetic failure" {
 		t.Fatalf("failure notice: %q", m.Notice)
+	}
+}
+
+func TestModeSwitchRestoresDisplayedModeOnAsyncFailure(t *testing.T) {
+	m := DemoModel()
+	m.Home.Mode = "rule"
+	var finish func(error)
+	m.Hooks.SetModeAsync = func(mode string, done func(error)) {
+		if mode != "direct" {
+			t.Fatalf("mode: %q", mode)
+		}
+		finish = done
+	}
+	m.setMode("direct")
+	if finish == nil || m.Home.Mode != "direct" {
+		t.Fatal("mode operation was not started")
+	}
+	finish(errors.New("synthetic failure"))
+	if m.Home.Mode != "rule" || m.Notice != "synthetic failure" {
+		t.Fatal("failed mode did not restore the displayed state")
+	}
+}
+
+func TestRuleApplyWaitsForValidatedAsyncTransaction(t *testing.T) {
+	m := DemoModel()
+	m.RuleEditor = RuleEditor{Open: true, ProposalID: "preview-1"}
+	var finish func(agent.ApplyResult, error)
+	discarded := ""
+	m.Hooks.DiscardRewriteProposal = func(id string) { discarded = id }
+	m.Hooks.ApplyRewriteAsync = func(id string, done func(agent.ApplyResult, error)) {
+		if id != "preview-1" {
+			t.Fatalf("proposal: %q", id)
+		}
+		finish = done
+	}
+	m.applyRulePreview()
+	if finish == nil || !m.RuleEditor.Busy || !m.RuleEditor.Open {
+		t.Fatal("application did not wait for the transaction")
+	}
+	finish(agent.ApplyResult{}, errors.New("synthetic failure"))
+	if m.RuleEditor.Busy || !m.RuleEditor.Open || m.RuleEditor.ProposalID != "" || m.RuleEditor.Error != "synthetic failure" || discarded != "preview-1" {
+		t.Fatal("failed application did not clear the consumed proposal")
+	}
+}
+
+func TestRuleApplyAsyncReportsWarningsWithoutClosingNewEditor(t *testing.T) {
+	m := DemoModel()
+	m.RuleEditor = RuleEditor{Open: true, ProposalID: "preview-1"}
+	var finish func(agent.ApplyResult, error)
+	m.Hooks.ApplyRewriteAsync = func(_ string, done func(agent.ApplyResult, error)) { finish = done }
+	m.applyRulePreview()
+	m.RuleEditor = RuleEditor{Open: true, ProposalID: "preview-2"}
+	finish(agent.ApplyResult{Warnings: []string{"connection already closed"}}, nil)
+	if !m.RuleEditor.Open || m.RuleEditor.ProposalID != "preview-2" || !strings.Contains(m.Notice, "connection already closed") {
+		t.Fatal("a stale completion closed the new editor or lost its warning")
 	}
 }

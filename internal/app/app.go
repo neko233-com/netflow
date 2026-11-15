@@ -76,6 +76,7 @@ type App struct {
 	rewrites                *rewrite.Store
 	kernelOptions           *kernelopts.Store
 	chain                   atomic.Pointer[activeChain]
+	agentApplyGuard         atomic.Pointer[agentApplyGuard]
 	chainDisconnectWarning  string
 	agentBridge             *agent.Bridge
 	agentStatusInFlight     atomic.Bool
@@ -135,8 +136,8 @@ type App struct {
 	headless            bool
 	headlessRecovery    bool
 	headlessCancel      func()
-	guiOperation        *guiProfileOperation // event loop only
-	guiBarrier          atomic.Pointer[guiProfileOperation]
+	guiOperation        *guiConfigOperation // event loop only
+	guiBarrier          atomic.Pointer[guiConfigOperation]
 	guiQuit             func() // optional event-loop quit hook
 }
 

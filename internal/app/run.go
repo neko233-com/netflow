@@ -60,7 +60,7 @@ func (a *App) Run() error {
 		if op := a.guiOperation; op != nil {
 			e.PreventDefault()
 			op.quit = true
-			a.cancelGUIProfileOperation(op)
+			a.cancelGUIConfigOperation(op)
 			return
 		}
 		quitting = true
@@ -174,6 +174,8 @@ func (a *App) ready(quitting *bool) {
 		}
 	})
 	a.model.Hooks.SetTUNAsync = a.requestTUN
+	a.model.Hooks.SetModeAsync = a.setModeAsync
+	a.model.Hooks.ApplyRewriteAsync = a.agentApplyAsync
 	a.model.Hooks.UseProfileAsync = a.useProfileAsync
 	a.model.Hooks.ImportURLAsync = a.importURLAsync
 	a.model.Hooks.UpdateProfileAsync = a.updateProfileAsync
@@ -286,7 +288,7 @@ func (a *App) ready(quitting *bool) {
 }
 
 func (a *App) trayClick() {
-	if a.guiProfileBusy() {
+	if a.guiConfigBusy() {
 		if a.win != nil {
 			a.win.Show()
 		}
@@ -310,7 +312,7 @@ func (a *App) showMain() {
 	if a.win == nil {
 		return
 	}
-	if a.guiProfileBusy() {
+	if a.guiConfigBusy() {
 		a.win.Show()
 		return
 	}

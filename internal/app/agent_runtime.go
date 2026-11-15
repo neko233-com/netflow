@@ -81,10 +81,49 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		}
 		return agent.CancelApplyResult{Accepted: accepted}, nil
 	}
-	if method == "use-profile" && !a.headless {
-		var input agent.ProfileArgs
+	if method == "apply" && !a.headless {
+		var input agent.ApplyArgs
 		if err := decodeStrict(args, &input); err != nil {
 			return nil, err
+		}
+		type response struct {
+			value agent.ApplyResult
+			err   error
+		}
+		result := make(chan response, 1)
+		executed := false
+		a.runOnMain(func() {
+			executed = true
+			if err := ctx.Err(); err != nil {
+				result <- response{err: err}
+				return
+			}
+			a.agentApplyAsync(input.ProposalID, func(value agent.ApplyResult, err error) { result <- response{value, err} })
+		})
+		if !executed {
+			return nil, errors.New("desktop application is shutting down")
+		}
+		select {
+		case out := <-result:
+			return out.value, out.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if (method == "use-profile" || method == "mode") && !a.headless {
+		var start func(func(error))
+		if method == "use-profile" {
+			var input agent.ProfileArgs
+			if err := decodeStrict(args, &input); err != nil {
+				return nil, err
+			}
+			start = func(done func(error)) { a.useProfileAsync(input.ProfileID, done) }
+		} else {
+			var input agent.ModeArgs
+			if err := decodeStrict(args, &input); err != nil {
+				return nil, err
+			}
+			start = func(done func(error)) { a.setModeAsync(input.Mode, done) }
 		}
 		result := make(chan error, 1)
 		executed := false
@@ -98,7 +137,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 				result <- errors.New("core is not running")
 				return
 			}
-			a.useProfileAsync(input.ProfileID, func(err error) { result <- err })
+			start(func(err error) { result <- err })
 		})
 		if !executed {
 			return nil, errors.New("desktop application is shutting down")
@@ -441,6 +480,9 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			if err := decodeStrict(args, &rollback); err != nil {
 				return nil, err
 			}
+		}
+		if err := a.syncPreviewCaches(ctx); err != nil {
+			return nil, err
 		}
 		var draft previewDraft
 		var prepareErr error

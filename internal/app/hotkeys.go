@@ -90,7 +90,7 @@ func (a *App) releaseHotkeys() {
 }
 
 func (a *App) invokeHotkey(key string) {
-	if a.guiProfileBusy() {
+	if a.guiConfigBusy() {
 		a.showMain()
 		return
 	}
@@ -106,7 +106,14 @@ func (a *App) invokeHotkey(key string) {
 	case "dashboard":
 		a.showMain()
 	case "rule", "global", "direct":
-		err = a.SetMode(binding.action)
+		a.setModeAsync(binding.action, func(err error) {
+			if err != nil {
+				a.model.Notice = err.Error()
+			} else {
+				a.model.Notice = "快捷键操作已完成"
+			}
+		})
+		return
 	case "tun":
 		a.requestTUN(!a.settings.TUN, a.tunActionDone)
 		return

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,50 @@ import (
 	"github.com/neko233-com/netflow/internal/sysproxy"
 	"github.com/neko233-com/netflow/internal/tun"
 )
+
+type blockedPreviewSync struct {
+	coreEngine
+	started chan struct{}
+}
+
+func (b *blockedPreviewSync) SyncProviderCachesForPreview(ctx context.Context) error {
+	close(b.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestGUIRulePreviewCacheSyncIsCancelableAndResponsive(t *testing.T) {
+	dispatcher := newSerialDispatcher()
+	defer dispatcher.close()
+	engine := &blockedPreviewSync{started: make(chan struct{})}
+	a := &App{core: engine, dispatch: dispatcher.call}
+	done := make(chan error, 1)
+	var cancel func()
+	dispatcher.call(func() {
+		cancel = a.previewRewriteAsync(agent.Change{Scope: "global"}, func(_ agent.Preview, err error) { done <- err })
+	})
+	select {
+	case <-engine.started:
+	case <-time.After(time.Second):
+		t.Fatal("sync did not start")
+	}
+	pulse := make(chan struct{})
+	go dispatcher.call(func() { close(pulse) })
+	select {
+	case <-pulse:
+	case <-time.After(time.Second):
+		t.Fatal("sync blocked event loop")
+	}
+	dispatcher.call(cancel)
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sync did not cancel")
+	}
+}
 
 func TestGUIRulePreviewValidationDoesNotBlockEventLoop(t *testing.T) {
 	dir := t.TempDir()

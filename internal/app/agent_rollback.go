@@ -11,6 +11,9 @@ import (
 )
 
 func (a *App) agentRollbackPreview(in agent.RollbackArgs) (agent.Preview, error) {
+	if err := a.syncPreviewCaches(context.Background()); err != nil {
+		return agent.Preview{}, err
+	}
 	draft, err := a.prepareAgentRollback(in)
 	if err != nil {
 		return agent.Preview{}, err

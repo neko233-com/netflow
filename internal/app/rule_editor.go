@@ -6,6 +6,7 @@ import (
 
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/validation"
 )
 
 func (a *App) loadRewrite(scope, profileID string) (rewrite.Layer, error) {
@@ -31,15 +32,28 @@ func (a *App) loadRewrite(scope, profileID string) (rewrite.Layer, error) {
 
 // Preparation and final acceptance run on the UI thread; potentially slow
 // external validation runs in the background just as it does for Agent calls.
-func (a *App) previewDraftAsync(draft previewDraft, err error, done func(agent.Preview, error)) func() {
-	if err != nil {
-		done(agent.Preview{}, err)
-		return func() {}
-	}
+func (a *App) previewDraftAsync(prepare func() (previewDraft, error), done func(agent.Preview, error)) func() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		defer cancel()
-		checked, err := validateConfigurations(ctx, a.dir, draft.configs)
+		err := a.syncPreviewCaches(ctx)
+		var draft previewDraft
+		if err == nil {
+			executed := false
+			a.runOnMain(func() {
+				executed = true
+				if err = ctx.Err(); err == nil {
+					draft, err = prepare()
+				}
+			})
+			if !executed {
+				err = errors.New("desktop application is shutting down")
+			}
+		}
+		var checked validation.Result
+		if err == nil {
+			checked, err = validateConfigurations(ctx, a.dir, draft.configs)
+		}
 		if err == nil {
 			err = a.verifyDraftSources(draft, checked)
 		}
@@ -61,11 +75,9 @@ func (a *App) previewDraftAsync(draft previewDraft, err error, done func(agent.P
 }
 
 func (a *App) previewRewriteAsync(change agent.Change, done func(agent.Preview, error)) func() {
-	draft, err := a.prepareAgentPreview(change)
-	return a.previewDraftAsync(draft, err, done)
+	return a.previewDraftAsync(func() (previewDraft, error) { return a.prepareAgentPreview(change) }, done)
 }
 
 func (a *App) previewRollbackAsync(args agent.RollbackArgs, done func(agent.Preview, error)) func() {
-	draft, err := a.prepareAgentRollback(args)
-	return a.previewDraftAsync(draft, err, done)
+	return a.previewDraftAsync(func() (previewDraft, error) { return a.prepareAgentRollback(args) }, done)
 }

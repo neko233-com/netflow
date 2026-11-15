@@ -24,7 +24,7 @@ type RuleEditor struct {
 }
 
 func (m *Model) openRuleEditor(scope, profileID string) {
-	if m.Hooks.LoadRewrite == nil || (m.Hooks.PreviewRewrite == nil && m.Hooks.PreviewRewriteAsync == nil) || m.Hooks.ApplyRewrite == nil {
+	if m.Hooks.LoadRewrite == nil || (m.Hooks.PreviewRewrite == nil && m.Hooks.PreviewRewriteAsync == nil) || (m.Hooks.ApplyRewrite == nil && m.Hooks.ApplyRewriteAsync == nil) {
 		m.Notice = "规则覆写接口不可用"
 		return
 	}
@@ -48,6 +48,51 @@ func (m *Model) openRuleEditor(scope, profileID string) {
 		if len(m.RuleEditor.HistoryChoices) > 0 {
 			m.RuleEditor.HistorySelected = m.RuleEditor.HistoryChoices[0]
 		}
+	}
+}
+
+func (m *Model) applyRulePreview() {
+	e := &m.RuleEditor
+	if e.ProposalID == "" || e.Busy {
+		return
+	}
+	proposal := e.ProposalID
+	finish := func(result agent.ApplyResult, err error) {
+		if err != nil && m.Hooks.DiscardRewriteProposal != nil {
+			m.Hooks.DiscardRewriteProposal(proposal)
+		}
+		current := &m.RuleEditor
+		if current.ProposalID != proposal || !current.Open {
+			if err != nil {
+				m.Notice = err.Error()
+			} else {
+				m.Notice = "规则覆写已应用"
+				if len(result.Warnings) > 0 {
+					m.Notice += "；" + strings.Join(result.Warnings, "；")
+				}
+			}
+			return
+		}
+		current.Busy = false
+		if err != nil {
+			current.Error = err.Error()
+			current.ProposalID = ""
+			return
+		}
+		current.Open = false
+		m.Notice = "规则覆写已应用"
+		if len(result.Warnings) > 0 {
+			m.Notice += "；" + strings.Join(result.Warnings, "；")
+		}
+	}
+	if m.Hooks.ApplyRewriteAsync != nil {
+		e.Busy = true
+		m.Hooks.ApplyRewriteAsync(proposal, finish)
+		return
+	}
+	if m.Hooks.ApplyRewrite != nil {
+		result, err := m.Hooks.ApplyRewrite(proposal)
+		finish(result, err)
 	}
 }
 
@@ -272,18 +317,8 @@ func (m *Model) ruleEditorDialog(c *mygoui.Context, pal Palette) {
 				if filledButton(c, pal, "预览", "rewrite-preview", false) && !e.Busy {
 					m.previewRules()
 				}
-				if e.ProposalID != "" && filledButton(c, pal, "应用规则", "rewrite-apply", true) {
-					result, err := m.Hooks.ApplyRewrite(e.ProposalID)
-					if err != nil {
-						e.Error = err.Error()
-						e.ProposalID = ""
-					} else {
-						e.Open = false
-						m.Notice = "规则覆写已应用"
-						if len(result.Warnings) > 0 {
-							m.Notice += "；" + strings.Join(result.Warnings, "；")
-						}
-					}
+				if e.ProposalID != "" && !e.Busy && filledButton(c, pal, "应用规则", "rewrite-apply", true) {
+					m.applyRulePreview()
 				}
 			})
 		})

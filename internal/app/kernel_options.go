@@ -95,7 +95,9 @@ func (a *App) SetKernelPorts(p ui.PortSet) error {
 	return a.applyKernelOptions(next)
 }
 
-func (a *App) applyKernelOptions(next kernelopts.Options) error {
+// stageKernelOptions validates and persists the candidate on the app event
+// loop. A caller must subsequently reload the core or restore old.
+func (a *App) stageKernelOptions(next kernelopts.Options, old *kernelopts.Options) error {
 	if a.core == nil || !a.core.Status().Running {
 		return errors.New("内核未运行，无法应用设置")
 	}
@@ -155,10 +157,19 @@ func (a *App) applyKernelOptions(next kernelopts.Options) error {
 			used[port] = true
 		}
 	}
-	old := a.kernelOptions.Snapshot()
+	*old = a.kernelOptions.Snapshot()
 	if err = a.kernelOptions.Replace(next); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (a *App) applyKernelOptions(next kernelopts.Options) error {
+	var old kernelopts.Options
+	if err := a.stageKernelOptions(next, &old); err != nil {
+		return err
+	}
+	var err error
 	if err = a.core.Reload(); err != nil {
 		restoreErr := a.kernelOptions.Replace(old)
 		if restoreErr == nil {

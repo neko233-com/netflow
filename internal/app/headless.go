@@ -16,7 +16,7 @@ import (
 // callback to finish; it may decline work during shutdown.
 func (a *App) runOnMain(fn func()) {
 	for {
-		var blocked *guiProfileOperation
+		var blocked *guiConfigOperation
 		a.runOnMainUnrestricted(func() {
 			blocked = a.guiBarrier.Load()
 			if blocked == nil {

@@ -29,6 +29,7 @@ type Hooks struct {
 	SetTUNAsync                     func(on bool, done func(error))
 	SetTUNAutoStart                 func(on bool) error
 	SetMode                         func(mode string) error
+	SetModeAsync                    func(mode string, done func(error))
 	SelectProxy                     func(group, node string) error
 	UseProfile                      func(uid string) error
 	UseProfileAsync                 func(uid string, done func(error))
@@ -86,6 +87,7 @@ type Hooks struct {
 	VergeScriptPreviewConfig        func(agent.VergeScriptConfigArgs) (agent.VergeScriptConfigPage, error)
 	DiscardVergeScriptPreview       func(string)
 	ApplyRewrite                    func(id string) (agent.ApplyResult, error)
+	ApplyRewriteAsync               func(id string, done func(agent.ApplyResult, error))
 	SetKernelOption                 func(name string, value any) error
 	SetKernelPorts                  func(PortSet) error
 	SavePrefs                       func(Prefs) error
@@ -481,6 +483,15 @@ func (m *Model) setMode(mode string) {
 	}
 	prev := m.Home.Mode
 	m.Home.Mode = mode
+	if m.Hooks.SetModeAsync != nil {
+		m.Hooks.SetModeAsync(mode, func(err error) {
+			if err != nil {
+				m.Home.Mode = prev
+				m.Notice = err.Error()
+			}
+		})
+		return
+	}
 	if m.Hooks.SetMode != nil {
 		if err := m.Hooks.SetMode(mode); err != nil {
 			m.Home.Mode = prev

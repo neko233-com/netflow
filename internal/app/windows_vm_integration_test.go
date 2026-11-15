@@ -42,6 +42,7 @@ import (
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/migration"
 	"github.com/neko233-com/netflow/internal/profile"
+	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/scriptmeta"
 	"github.com/neko233-com/netflow/internal/tun"
@@ -235,6 +236,148 @@ func vmVisibleWindows(pid uint32) int {
 		return -1
 	}
 	return count
+}
+
+func vmClickOperationCancel(t *testing.T, hwnd uintptr, message string) {
+	t.Helper()
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	class, err := windows.UTF16PtrFromString("MyGoSurface")
+	if err != nil {
+		t.Fatal(err)
+	}
+	surface, _, _ := user32.NewProc("FindWindowExW").Call(hwnd, 0, uintptr(unsafe.Pointer(class)), 0)
+	if surface == 0 {
+		t.Fatal("native MyGo drawing surface not found")
+	}
+	type rect struct{ left, top, right, bottom int32 }
+	var bounds rect
+	if ok, _, _ := user32.NewProc("GetClientRect").Call(surface, uintptr(unsafe.Pointer(&bounds))); ok == 0 {
+		t.Fatal("surface size unavailable")
+	}
+	dpi, _, _ := user32.NewProc("GetDpiForWindow").Call(hwnd)
+	if dpi == 0 {
+		dpi = 96
+	}
+	model := ui.NewModel(ui.HomeState{})
+	model.OperationMessage = message
+	model.OperationCancel = func() {}
+	tester := mygoui.NewTester(model.View, int((bounds.right-bounds.left)*96/int32(dpi)), int((bounds.bottom-bounds.top)*96/int32(dpi)))
+	button, ok := tester.Find("取消并恢复")
+	if !ok {
+		t.Fatal("cancel control is absent from busy view")
+	}
+	x := uint32((button.X + button.W/2) * float32(dpi) / 96)
+	y := uint32((button.Y + button.H/2) * float32(dpi) / 96)
+	pos := uintptr((y << 16) | (x & 0xffff))
+	post := user32.NewProc("PostMessageW")
+	// Let the native view install its hit regions before sending pointer input.
+	time.Sleep(time.Second)
+	for _, msg := range []uintptr{0x0200, 0x0201, 0x0202} {
+		wp := uintptr(0)
+		if msg == 0x0201 {
+			wp = 1
+		}
+		if posted, _, err := post.Call(surface, msg, wp, pos); posted == 0 {
+			t.Fatalf("post native pointer input: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// A connection-scoped override matches future flows with the same destination,
+// source IP, port and network. It does not claim to reroute the existing TCP
+// connection, and closing that connection is an explicit separate choice.
+func vmVerifyConnectionRule(t *testing.T, client agent.Client, dir, fakeIP string) {
+	t.Helper()
+	held, err := net.DialTimeout("tcp", net.JoinHostPort(fakeIP, "18765"), 5*time.Second)
+	if err != nil {
+		t.Fatalf("open tracked connection: %v", err)
+	}
+	defer held.Close()
+	if _, err := io.WriteString(held, "GET /health HTTP/1.1\r\nHost: mode-alpha.netflow-test.example\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	sourcePort := strconv.Itoa(held.LocalAddr().(*net.TCPAddr).Port)
+	var connectionID string
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var page agent.ConnectionsResult
+		if err := client.Call(context.Background(), "connections", agent.ConnectionsArgs{Limit: 500}, &page); err == nil {
+			for _, item := range page.Connections {
+				if strings.EqualFold(item.Network, "tcp") && item.SourcePort == sourcePort && item.DestinationPort == "18765" {
+					connectionID = item.ID
+					break
+				}
+			}
+		}
+		if connectionID != "" {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if connectionID == "" {
+		t.Fatal("active TUN TCP connection not found")
+	}
+	change := agent.Change{Scope: "connection", Operation: "set", ConnectionID: connectionID, Policy: "REJECT", TTLSeconds: 60, CloseExisting: false}
+	sources := func() map[string]string {
+		result := map[string]string{}
+		for _, name := range []string{"config.yaml", "profiles.json", "kernel-options.json", "providers/gui-mode.yaml"} {
+			hash, err := vmHash(filepath.Join(dir, filepath.FromSlash(name)))
+			if err != nil {
+				result[name] = "unavailable"
+			} else {
+				result[name] = hash
+			}
+		}
+		return result
+	}
+	beforePreview := sources()
+	var preview agent.Preview
+	if err := client.Call(context.Background(), "preview", change, &preview); err != nil || preview.ProposalID == "" {
+		t.Fatalf("connection rule preview: %+v %v", preview, err)
+	}
+	var warning bool
+	for _, item := range preview.Warnings {
+		if strings.Contains(item, "Existing sockets are not rerouted") {
+			warning = true
+		}
+	}
+	if !warning {
+		t.Fatal("connection rule preview did not describe existing socket behavior")
+	}
+	afterPreview := sources()
+	var applied agent.ApplyResult
+	if err := client.Call(context.Background(), "apply", agent.ApplyArgs{ProposalID: preview.ProposalID}, &applied); err != nil || !applied.Active || applied.ClosedConnection {
+		t.Fatalf("connection rule apply: %+v %v; source hashes before preview=%v after preview=%v after apply=%v", applied, err, beforePreview, afterPreview, sources())
+	}
+	probe, dialErr := net.DialTimeout("tcp", net.JoinHostPort(fakeIP, "18765"), 5*time.Second)
+	if dialErr == nil {
+		_ = probe.SetDeadline(time.Now().Add(5 * time.Second))
+		_, _ = io.WriteString(probe, "GET /health HTTP/1.1\r\nHost: mode-alpha.netflow-test.example\r\nConnection: close\r\n\r\n")
+		var buf [512]byte
+		n, readErr := probe.Read(buf[:])
+		_ = probe.Close()
+		if n > 0 || readErr == nil {
+			t.Fatalf("matching new connection was not rejected: %q %v", buf[:n], readErr)
+		}
+		var networkErr net.Error
+		if errors.As(readErr, &networkErr) && networkErr.Timeout() {
+			t.Fatalf("matching new connection timed out instead of being rejected: %v", readErr)
+		}
+	} else {
+		var networkErr net.Error
+		if errors.As(dialErr, &networkErr) && networkErr.Timeout() {
+			t.Fatalf("matching new connection timed out instead of being rejected: %v", dialErr)
+		}
+	}
+	clear := agent.Change{Scope: "connection", Operation: "clear", ConnectionID: connectionID}
+	if err := client.Call(context.Background(), "preview", clear, &preview); err != nil || preview.ProposalID == "" {
+		t.Fatalf("connection rule clear preview: %+v %v", preview, err)
+	}
+	if err := client.Call(context.Background(), "apply", agent.ApplyArgs{ProposalID: preview.ProposalID}, &applied); err != nil || !applied.Active {
+		t.Fatalf("connection rule clear: %+v %v", applied, err)
+	}
+	t.Log("connection rule preview described its match scope, retained the close choice, rejected a new matching flow and cleared successfully")
 }
 
 func vmAgentJunctionSafety(t *testing.T) {
@@ -2032,48 +2175,7 @@ func vmGUIProfileSwitchCancellation(t *testing.T, guiExe string, quit bool) {
 			t.Fatalf("post quit menu command: %v", err)
 		}
 	} else {
-		class, err := windows.UTF16PtrFromString("MyGoSurface")
-		if err != nil {
-			t.Fatal(err)
-		}
-		surface, _, _ := user32.NewProc("FindWindowExW").Call(hwnd, 0, uintptr(unsafe.Pointer(class)), 0)
-		if surface == 0 {
-			t.Fatal("native MyGo drawing surface not found")
-		}
-		type rect struct{ left, top, right, bottom int32 }
-		var bounds rect
-		if ok, _, _ := user32.NewProc("GetClientRect").Call(surface, uintptr(unsafe.Pointer(&bounds))); ok == 0 {
-			t.Fatal("surface size unavailable")
-		}
-		dpi, _, _ := user32.NewProc("GetDpiForWindow").Call(hwnd)
-		if dpi == 0 {
-			dpi = 96
-		}
-		model := ui.NewModel(ui.HomeState{})
-		model.OperationMessage = "正在切换订阅"
-		model.OperationCancel = func() {}
-		tester := mygoui.NewTester(model.View, int((bounds.right-bounds.left)*96/int32(dpi)), int((bounds.bottom-bounds.top)*96/int32(dpi)))
-		button, ok := tester.Find("取消并恢复")
-		if !ok {
-			t.Fatal("cancel control is absent from busy view")
-		}
-		x := uint32((button.X + button.W/2) * float32(dpi) / 96)
-		y := uint32((button.Y + button.H/2) * float32(dpi) / 96)
-		pos := uintptr((y << 16) | (x & 0xffff))
-		post := user32.NewProc("PostMessageW")
-		// Wait for a frame to install the hit regions, then send native pointer
-		// messages to the actual MyGo surface, not the application's RPC bridge.
-		time.Sleep(time.Second)
-		for _, msg := range []uintptr{0x0200, 0x0201, 0x0202} {
-			wp := uintptr(0)
-			if msg == 0x0201 {
-				wp = 1
-			}
-			if posted, _, err := post.Call(surface, msg, wp, pos); posted == 0 {
-				t.Fatalf("post native pointer input: %v", err)
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
+		vmClickOperationCancel(t, hwnd, "正在切换订阅")
 	}
 	select {
 	case <-canceled:
@@ -2154,6 +2256,280 @@ func vmGUIProfileSwitchCancellation(t *testing.T, guiExe string, quit bool) {
 		t.Log("native GUI cancel interrupted a profile download, restored the old profile and retained TUN until disabled")
 	} else {
 		t.Log("native GUI quit canceled profile loading, restored the configuration and networking, and exited")
+	}
+}
+
+// A GUI mode change can also initialize uncached providers. Verify that its
+// native cancel control remains usable and restores the previous mode and TUN.
+func vmGUIConfigSwitchCancellation(t *testing.T, guiExe string, rules bool) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var count atomic.Int32
+	var canceledOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if count.Add(1) == 1 {
+			close(entered)
+			select {
+			case <-r.Context().Done():
+				canceledOnce.Do(func() { close(canceled) })
+				return
+			case <-release:
+			}
+		}
+		_, _ = io.WriteString(w, "proxies: [{name: fresh, type: direct}]\n")
+	}))
+	defer provider.Close()
+	defer unblock()
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsServer := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		answer := new(dns.Msg)
+		answer.SetReply(q)
+		for _, question := range q.Question {
+			if question.Name == "mode-alpha.netflow-test.example." && question.Qtype == dns.TypeA {
+				answer.Answer = append(answer.Answer, &dns.A{Hdr: dns.RR_Header{Name: question.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 30}, A: net.ParseIP("10.233.42.1").To4()})
+			}
+		}
+		_ = w.WriteMsg(answer)
+	})}
+	go func() { _ = dnsServer.ActivateAndServe() }()
+	defer dnsServer.Shutdown()
+	listener, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsAddress := listener.LocalAddr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	base := fmt.Sprintf("mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\nprofile: {store-fake-ip: false}\ndns: {enable: true, listen: '%s', enhanced-mode: fake-ip, nameserver: ['%s']}\nrules: ['MATCH,DIRECT']\n", dnsAddress, packet.LocalAddr().String())
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(base), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"prefs":"{\"AutoStartTUN\":true}"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	process := vmCommand(context.Background(), guiExe)
+	process.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000 | 0x00004000}
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(entry), "NETFLOW_CONFIG_DIR=") {
+			process.Env = append(process.Env, entry)
+		}
+	}
+	process.Env = append(process.Env, "NETFLOW_CONFIG_DIR="+dir, "GOMAXPROCS=1")
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- process.Wait() }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			_ = process.Process.Kill()
+			<-finished
+		}
+	}()
+	client := agent.Client{Dir: dir, Timeout: 30 * time.Second}
+	var status agent.Status
+	deadline := time.Now().Add(100 * time.Second)
+	for time.Now().Before(deadline) {
+		if client.Call(context.Background(), "status", nil, &status) == nil && status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if !status.TUN || status.Headless || status.Mode != "rule" {
+		t.Fatalf("GUI TUN startup: %+v", status)
+	}
+	device, err := net.InterfaceByName(tun.DeviceName())
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeRoutes, activeDNS, err := vmNetworkSnapshotExceptTUNLinkLocal(uint32(device.Index))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup := func() string {
+		t.Helper()
+		query := new(dns.Msg)
+		query.SetQuestion("mode-alpha.netflow-test.example.", dns.TypeA)
+		answer, _, err := (&dns.Client{Net: "udp", Timeout: 5 * time.Second}).Exchange(query, dnsAddress)
+		if err != nil || answer == nil || len(answer.Answer) == 0 {
+			t.Fatalf("fake-IP DNS: %+v %v", answer, err)
+		}
+		record, ok := answer.Answer[0].(*dns.A)
+		if !ok || !strings.HasPrefix(record.A.String(), "198.18.") {
+			t.Fatalf("invalid fake-IP response: %+v", answer.Answer)
+		}
+		return record.A.String()
+	}
+	checkForward := func(ip string) {
+		t.Helper()
+		transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(ip, "18765"))
+		}}
+		defer transport.CloseIdleConnections()
+		response, err := (&http.Client{Timeout: 6 * time.Second, Transport: transport}).Get("http://mode-alpha.netflow-test.example:18765/health")
+		if err != nil {
+			t.Fatalf("TUN forwarding: %v", err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil || string(body) != "OK" {
+			t.Fatalf("TUN response: %q %v", body, readErr)
+		}
+	}
+	fakeIP := lookup()
+	checkForward(fakeIP)
+	next := base + "proxy-providers:\n  slow: {type: http, url: '" + provider.URL + "', path: providers/gui-mode.yaml, interval: 3600, health-check: {enable: false}}\n"
+	if err := os.WriteFile(configPath, []byte(next), 0600); err != nil {
+		t.Fatal(err)
+	}
+	message := "正在切换模式"
+	var preview agent.Preview
+	if rules {
+		message = "正在应用规则"
+		change := agent.Change{Scope: "global", Operation: "set", Layer: rewrite.Layer{Prepend: []string{"DOMAIN,gui-rules.netflow-test.example,REJECT"}}}
+		if err := client.Call(context.Background(), "preview", change, &preview); err != nil || preview.ProposalID == "" {
+			t.Fatalf("GUI rule preview: %+v %v", preview, err)
+		}
+	}
+	result := make(chan error, 1)
+	go func() {
+		if rules {
+			result <- client.Call(context.Background(), "apply", agent.ApplyArgs{ProposalID: preview.ProposalID}, nil)
+			return
+		}
+		result <- client.Call(context.Background(), "mode", agent.ModeArgs{Mode: "direct"}, nil)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("GUI mode provider did not begin")
+	}
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	var hwnd uintptr
+	callback := syscall.NewCallback(func(window uintptr, _ uintptr) uintptr {
+		var owner uint32
+		user32.NewProc("GetWindowThreadProcessId").Call(window, uintptr(unsafe.Pointer(&owner)))
+		if owner == uint32(process.Process.Pid) {
+			var title [128]uint16
+			user32.NewProc("GetWindowTextW").Call(window, uintptr(unsafe.Pointer(&title[0])), uintptr(len(title)))
+			if windows.UTF16ToString(title[:]) == "NetFlow - "+message {
+				hwnd = window
+			}
+		}
+		return 1
+	})
+	user32.NewProc("EnumWindows").Call(callback, 0)
+	if hwnd == 0 {
+		t.Fatal("GUI did not expose its configuration operation window")
+	}
+	var ignored uintptr
+	if responded, _, _ := user32.NewProc("SendMessageTimeoutW").Call(hwnd, 0, 0, 0, 2, 2000, uintptr(unsafe.Pointer(&ignored))); responded == 0 {
+		t.Fatal("GUI event loop blocked during configuration change")
+	}
+	vmClickOperationCancel(t, hwnd, message)
+	select {
+	case <-canceled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("native cancel did not interrupt configuration provider")
+	}
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled GUI configuration change reported success")
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("GUI configuration rollback did not finish")
+	}
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if client.Call(context.Background(), "status", nil, &status) == nil && status.TUN && status.Mode == "rule" {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !status.TUN || status.Mode != "rule" {
+		t.Fatalf("GUI mode/TUN rollback: %+v", status)
+	}
+	options, err := kernelopts.Open(dir)
+	if err != nil || options.Snapshot().Mode != nil {
+		t.Fatalf("mode override was not restored: %v", err)
+	}
+	if rules {
+		store, err := rewrite.Open(dir)
+		if err != nil || len(store.Snapshot().Global.Prepend) != 0 {
+			t.Fatalf("global rule was not restored: %v", err)
+		}
+	}
+	current, err := os.ReadFile(configPath)
+	if err != nil || string(current) != next {
+		t.Fatalf("external subscription was overwritten: %v", err)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, servers, e := vmNetworkSnapshotExceptTUNLinkLocal(uint32(device.Index))
+		if e == nil && reflect.DeepEqual(routes, activeRoutes) && reflect.DeepEqual(servers, activeDNS) {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	routes, servers, err := vmNetworkSnapshotExceptTUNLinkLocal(uint32(device.Index))
+	if err != nil || !reflect.DeepEqual(routes, activeRoutes) || !reflect.DeepEqual(servers, activeDNS) {
+		t.Fatalf("mode cancellation changed active networking: %v", err)
+	}
+	if lookup() != fakeIP {
+		t.Fatal("mode cancellation lost the Fake-IP mapping")
+	}
+	checkForward(fakeIP)
+	if rules {
+		vmVerifyConnectionRule(t, client, dir, fakeIP)
+		checkForward(fakeIP)
+	}
+	off := false
+	var tunResult agent.TunResult
+	if err := client.Call(context.Background(), "tun", agent.TunArgs{Enabled: &off}, &tunResult); err != nil {
+		t.Fatalf("disable GUI TUN: %+v %v", tunResult, err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if client.Call(context.Background(), "status", nil, &status) == nil && !status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if status.TUN || status.TUNPending {
+		t.Fatalf("GUI TUN did not finish stopping: %+v", status)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, servers, e := vmNetworkSnapshot()
+		if e == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(servers, beforeDNS) {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	routes, servers, err = vmNetworkSnapshot()
+	if err != nil || !reflect.DeepEqual(routes, beforeRoutes) || !reflect.DeepEqual(servers, beforeDNS) {
+		t.Fatalf("GUI TUN did not restore networking: %v", err)
+	}
+	_ = process.Process.Kill()
+	<-finished
+	stopped = true
+	if rules {
+		t.Log("native GUI canceled validated rule application, restored rules and preserved live TUN fake-IP forwarding")
+	} else {
+		t.Log("native GUI canceled mode loading, restored mode and preserved live TUN fake-IP forwarding")
 	}
 }
 
@@ -3581,6 +3957,8 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	vmCancelProfileApply(t, agentExe)
 	vmGUIProfileSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), false)
 	vmGUIProfileSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), true)
+	vmGUIConfigSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), false)
+	vmGUIConfigSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), true)
 	vmHeadlessStartupCancellation(t, filepath.Join(install, "NetFlow.exe"))
 	vmGUIStartupProvider(t, filepath.Join(install, "NetFlow.exe"))
 	vmHeadlessParentExit(t, agentExe, backupTarget)

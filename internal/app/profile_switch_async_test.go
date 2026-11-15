@@ -79,7 +79,7 @@ func TestGUIProfileSwitchRemainsResponsiveAndRollsBack(t *testing.T) {
 				d.call(func() {
 					a.useProfileAsync(second.UID, func(err error) { result <- err })
 					if scenario == "cancel-before-start" {
-						a.cancelGUIProfileOperation(a.guiOperation)
+						a.cancelGUIConfigOperation(a.guiOperation)
 					}
 				})
 			}
@@ -107,7 +107,7 @@ func TestGUIProfileSwitchRemainsResponsiveAndRollsBack(t *testing.T) {
 				}
 				switch scenario {
 				case "cancel":
-					d.call(func() { a.cancelGUIProfileOperation(a.guiOperation) })
+					d.call(func() { a.cancelGUIConfigOperation(a.guiOperation) })
 					select {
 					case <-canceled:
 					case <-time.After(5 * time.Second):
@@ -236,7 +236,7 @@ func TestGUIProfileCancelCompletesBeforeRollbackStarts(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("reload did not start")
 	}
-	d.call(func() { a.cancelGUIProfileOperation(a.guiOperation) })
+	d.call(func() { a.cancelGUIConfigOperation(a.guiOperation) })
 	select {
 	case <-engine.cancelStarted:
 	case <-time.After(5 * time.Second):
@@ -323,7 +323,7 @@ func TestGUIProfileCancelRetriesUntilReloadRegisters(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("reload did not start")
 	}
-	d.call(func() { a.cancelGUIProfileOperation(a.guiOperation) })
+	d.call(func() { a.cancelGUIConfigOperation(a.guiOperation) })
 	select {
 	case <-engine.polled:
 	case <-time.After(5 * time.Second):
@@ -405,7 +405,7 @@ func TestGUIQuitCancelsOrSkipsStalledProfileRollback(t *testing.T) {
 			result := make(chan error, 1)
 			quitCalled := make(chan struct{})
 			a.guiQuit = func() { close(quitCalled) }
-			var operation *guiProfileOperation
+			var operation *guiConfigOperation
 			d.call(func() {
 				a.useProfileAsync(second.UID, func(err error) { result <- err })
 				operation = a.guiOperation
@@ -421,7 +421,7 @@ func TestGUIQuitCancelsOrSkipsStalledProfileRollback(t *testing.T) {
 				if !quitDuringRollback {
 					operation.quit = true
 				}
-				a.cancelGUIProfileOperation(operation)
+				a.cancelGUIConfigOperation(operation)
 			})
 			if quitDuringRollback {
 				select {
@@ -429,7 +429,7 @@ func TestGUIQuitCancelsOrSkipsStalledProfileRollback(t *testing.T) {
 				case <-time.After(5 * time.Second):
 					t.Fatal("rollback did not start")
 				}
-				d.call(func() { operation.quit = true; a.cancelGUIProfileOperation(operation) })
+				d.call(func() { operation.quit = true; a.cancelGUIConfigOperation(operation) })
 				select {
 				case <-engine.rollbackCanceled:
 				case <-time.After(5 * time.Second):

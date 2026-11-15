@@ -3,8 +3,10 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,6 +22,14 @@ import (
 // composeRuntime is shared by kernel application and chain preflight so an
 // externally changed profile extension cannot bypass the validated snapshot.
 func (a *App) composeRuntime(base []byte, profileID string) ([]byte, error) {
+	guard := a.agentApplyGuard.Load()
+	var originalHash [32]byte
+	if guard != nil {
+		originalHash = sha256.Sum256(base)
+		if err := a.checkAgentApplyGuard(guard, profileID, originalHash); err != nil {
+			return nil, err
+		}
+	}
 	var err error
 	base, err = a.applyProfileVergeExtensions(base, profileID)
 	if err != nil {
@@ -49,7 +59,36 @@ func (a *App) composeRuntime(base []byte, profileID string) ([]byte, error) {
 			return nil, err
 		}
 	}
-	return composeActiveChain(base, profileID, a.chain.Load())
+	base, err = composeActiveChain(base, profileID, a.chain.Load())
+	if err != nil {
+		return nil, err
+	}
+	if guard != nil {
+		if err := a.checkAgentApplyGuard(guard, profileID, originalHash); err != nil {
+			return nil, err
+		}
+	}
+	return base, nil
+}
+
+func (a *App) checkAgentApplyGuard(guard *agentApplyGuard, profileID string, originalHash [32]byte) error {
+	if guard.profileID != profileID {
+		return errors.New("active profile changed during rule application; preview again")
+	}
+	want, ok := guard.sources[filepath.Join(a.dir, "config.yaml")]
+	if !ok || want != originalHash {
+		return errors.New("active configuration changed during rule application; preview again")
+	}
+	if err := a.checkAgentSources(guard.sources); err != nil {
+		return err
+	}
+	if err := a.rewrites.CheckCurrent(); err != nil {
+		return err
+	}
+	if a.kernelOptions != nil {
+		return a.kernelOptions.CheckCurrent()
+	}
+	return nil
 }
 
 // activeChain is immutable. A process restart intentionally disconnects it.

@@ -293,12 +293,16 @@ func (a *App) trayActions() TrayActions {
 	return TrayActions{
 		Show: a.showMain,
 		SetMode: func(mode string) {
-			if !a.guiProfileBusy() {
-				_ = a.SetMode(mode)
+			if !a.guiConfigBusy() {
+				a.setModeAsync(mode, func(err error) {
+					if err != nil && a.model != nil {
+						a.model.Notice = err.Error()
+					}
+				})
 			}
 		},
 		SelectNode: func(group, node string) {
-			if a.guiProfileBusy() {
+			if a.guiConfigBusy() {
 				return
 			}
 			if err := a.SelectProxy(group, node); err != nil && a.model != nil {
@@ -306,7 +310,7 @@ func (a *App) trayActions() TrayActions {
 			}
 		},
 		SetProxy: func(on bool) {
-			if a.guiProfileBusy() {
+			if a.guiConfigBusy() {
 				return
 			}
 			if err := a.SetSystemProxy(on); err != nil && a.model != nil {
@@ -314,12 +318,12 @@ func (a *App) trayActions() TrayActions {
 			}
 		},
 		SetTUN: func(on bool) {
-			if !a.guiProfileBusy() {
+			if !a.guiConfigBusy() {
 				a.requestTUN(on, a.tunActionDone)
 			}
 		},
 		SetLite: func(on bool) {
-			if a.guiProfileBusy() {
+			if a.guiConfigBusy() {
 				return
 			}
 			if err := a.setLightweight(on); err != nil && a.model != nil {
@@ -328,7 +332,7 @@ func (a *App) trayActions() TrayActions {
 		},
 		OpenDir: a.openDir,
 		CopyEnv: func() {
-			if a.guiProfileBusy() {
+			if a.guiConfigBusy() {
 				return
 			}
 			format := "bash"
@@ -340,7 +344,7 @@ func (a *App) trayActions() TrayActions {
 			}
 		},
 		RestartCore: func() {
-			if !a.guiProfileBusy() {
+			if !a.guiConfigBusy() {
 				_ = a.restartCore()
 			}
 		},

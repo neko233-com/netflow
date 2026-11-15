@@ -19,7 +19,7 @@ type profileSwitch struct {
 
 // All fields other than done are owned by the app event loop. done is closed
 // only after the kernel operation and any cancellation request have ended.
-type guiProfileOperation struct {
+type guiConfigOperation struct {
 	done       chan struct{}
 	reloadDone chan struct{}
 	cancelDone chan struct{}
@@ -29,10 +29,34 @@ type guiProfileOperation struct {
 	finished   func(error)
 }
 
-// useProfileAsync is called on the GUI event loop. Schedule the actual start
-// for a later event so the current view frame has finished using the model.
+// The callbacks run on the app event loop. The only work moved off that loop
+// is the kernel reload, including the reload required to restore old state.
+type guiConfigTransaction struct {
+	commit   func() error
+	rollback func() (bool, error)
+	wrap     func(error, error) error
+	reload   bool
+}
+
 func (a *App) useProfileAsync(uid string, done func(error)) {
-	if a.guiProfileBusy() {
+	a.startGUIConfigOperation("正在切换订阅", func() (*guiConfigTransaction, error) {
+		tx, err := a.beginProfileSwitch(uid)
+		if err != nil {
+			return nil, err
+		}
+		return &guiConfigTransaction{
+			commit:   func() error { return a.commitProfileSwitch(tx) },
+			rollback: func() (bool, error) { return a.beginProfileSwitchRollback(tx) },
+			wrap:     profileSwitchError,
+			reload:   a.core != nil && a.core.Status().Running,
+		}, nil
+	}, done)
+}
+
+// startGUIConfigOperation is called on the GUI event loop. Schedule the start
+// for a later event so the current view frame has finished using the model.
+func (a *App) startGUIConfigOperation(message string, begin func() (*guiConfigTransaction, error), done func(error)) {
+	if a.guiConfigBusy() {
 		done(errors.New("配置正在应用，请稍后重试"))
 		return
 	}
@@ -40,41 +64,41 @@ func (a *App) useProfileAsync(uid string, done func(error)) {
 		done(errors.New("虚拟网卡正在切换，请稍后重试"))
 		return
 	}
-	op := &guiProfileOperation{done: make(chan struct{}), finished: done}
+	op := &guiConfigOperation{done: make(chan struct{}), finished: done}
 	a.guiOperation = op
 	if a.model != nil {
-		a.model.OperationMessage = "正在切换订阅"
-		a.model.OperationCancel = func() { a.cancelGUIProfileOperation(op) }
+		a.model.OperationMessage = message
+		a.model.OperationCancel = func() { a.cancelGUIConfigOperation(op) }
 	}
 	if a.win != nil {
-		a.win.SetTitle("NetFlow - 正在切换订阅")
+		a.win.SetTitle("NetFlow - " + message)
 		a.win.Invalidate()
 	}
 	go a.runOnMain(func() {
 		if op.canceled {
-			a.finishGUIProfileOperation(op, context.Canceled)
+			a.finishGUIConfigOperation(op, context.Canceled)
 			return
 		}
-		tx, err := a.beginProfileSwitch(uid)
+		tx, err := begin()
 		if err != nil {
-			a.finishGUIProfileOperation(op, err)
+			a.finishGUIConfigOperation(op, err)
 			return
 		}
 		a.guiBarrier.Store(op)
-		if a.core == nil || !a.core.Status().Running {
-			a.finishGUIProfileReload(op, tx, nil)
+		if !tx.reload {
+			a.finishGUIConfigReload(op, tx, nil)
 			return
 		}
 		op.reloadDone = make(chan struct{})
 		go func() {
 			err := a.core.Reload()
 			close(op.reloadDone)
-			a.runOnMainUnrestricted(func() { a.finishGUIProfileReload(op, tx, err) })
+			a.runOnMainUnrestricted(func() { a.finishGUIConfigReload(op, tx, err) })
 		}()
 	})
 }
 
-func (a *App) cancelGUIProfileOperation(op *guiProfileOperation) {
+func (a *App) cancelGUIConfigOperation(op *guiConfigOperation) {
 	if a.guiOperation != op {
 		return
 	}
@@ -82,7 +106,7 @@ func (a *App) cancelGUIProfileOperation(op *guiProfileOperation) {
 		// On an explicit quit, the restored on-disk configuration is already
 		// safe. Interrupt a stalled rollback so shutdown can stop the kernel.
 		if op.quit && op.cancelDone == nil {
-			a.requestGUIProfileCancellation(op)
+			a.requestGUIConfigCancellation(op)
 		}
 		return
 	}
@@ -100,10 +124,10 @@ func (a *App) cancelGUIProfileOperation(op *guiProfileOperation) {
 	if a.guiBarrier.Load() != op {
 		return
 	}
-	a.requestGUIProfileCancellation(op)
+	a.requestGUIConfigCancellation(op)
 }
 
-func (a *App) requestGUIProfileCancellation(op *guiProfileOperation) {
+func (a *App) requestGUIConfigCancellation(op *guiConfigOperation) {
 	op.cancelDone = make(chan struct{})
 	go func(done, reloadDone chan struct{}) {
 		defer close(done)
@@ -134,7 +158,7 @@ func (a *App) requestGUIProfileCancellation(op *guiProfileOperation) {
 	}(op.cancelDone, op.reloadDone)
 }
 
-func (a *App) finishGUIProfileReload(op *guiProfileOperation, tx *profileSwitch, reloadErr error) {
+func (a *App) finishGUIConfigReload(op *guiConfigOperation, tx *guiConfigTransaction, reloadErr error) {
 	// A late cancellation must finish before a rollback reload or a later
 	// transaction begins; otherwise it could cancel the wrong application.
 	if op.cancelDone != nil {
@@ -142,7 +166,7 @@ func (a *App) finishGUIProfileReload(op *guiProfileOperation, tx *profileSwitch,
 		op.cancelDone = nil
 		go func() {
 			<-done
-			a.runOnMainUnrestricted(func() { a.finishGUIProfileReload(op, tx, reloadErr) })
+			a.runOnMainUnrestricted(func() { a.finishGUIConfigReload(op, tx, reloadErr) })
 		}()
 		return
 	}
@@ -150,19 +174,19 @@ func (a *App) finishGUIProfileReload(op *guiProfileOperation, tx *profileSwitch,
 		reloadErr = context.Canceled
 	}
 	if reloadErr == nil {
-		reloadErr = a.commitProfileSwitch(tx)
+		reloadErr = tx.commit()
 	}
 	if reloadErr == nil {
-		a.finishGUIProfileOperation(op, nil)
+		a.finishGUIConfigOperation(op, nil)
 		return
 	}
 	op.rollback = true
-	needReload, restoreErr := a.beginProfileSwitchRollback(tx)
+	needReload, restoreErr := tx.rollback()
 	if op.quit && restoreErr != nil {
-		log.Print("profile configuration rollback failed during quit; inspect the configuration before restarting")
+		log.Print("configuration rollback failed during quit; inspect the configuration before restarting")
 	}
 	if restoreErr != nil || !needReload || op.quit {
-		a.finishGUIProfileOperation(op, profileSwitchError(reloadErr, restoreErr))
+		a.finishGUIConfigOperation(op, tx.wrap(reloadErr, restoreErr))
 		return
 	}
 	op.reloadDone = make(chan struct{})
@@ -170,25 +194,25 @@ func (a *App) finishGUIProfileReload(op *guiProfileOperation, tx *profileSwitch,
 		err := a.core.Reload()
 		close(op.reloadDone)
 		a.runOnMainUnrestricted(func() {
-			a.finishGUIProfileRollback(op, reloadErr, err)
+			a.finishGUIConfigRollback(op, tx, reloadErr, err)
 		})
 	}()
 }
 
-func (a *App) finishGUIProfileRollback(op *guiProfileOperation, cause, rollbackErr error) {
+func (a *App) finishGUIConfigRollback(op *guiConfigOperation, tx *guiConfigTransaction, cause, rollbackErr error) {
 	if op.cancelDone != nil {
 		done := op.cancelDone
 		op.cancelDone = nil
 		go func() {
 			<-done
-			a.runOnMainUnrestricted(func() { a.finishGUIProfileRollback(op, cause, rollbackErr) })
+			a.runOnMainUnrestricted(func() { a.finishGUIConfigRollback(op, tx, cause, rollbackErr) })
 		}()
 		return
 	}
-	a.finishGUIProfileOperation(op, profileSwitchError(cause, rollbackErr))
+	a.finishGUIConfigOperation(op, tx.wrap(cause, rollbackErr))
 }
 
-func (a *App) finishGUIProfileOperation(op *guiProfileOperation, err error) {
+func (a *App) finishGUIConfigOperation(op *guiConfigOperation, err error) {
 	if a.guiOperation != op {
 		return
 	}
@@ -227,6 +251,6 @@ func (a *App) releaseGUIBarrierAfterExit() {
 }
 
 // Called only on the GUI event loop.
-func (a *App) guiProfileBusy() bool {
+func (a *App) guiConfigBusy() bool {
 	return a.guiOperation != nil || a.guiBarrier.Load() != nil
 }

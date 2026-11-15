@@ -1,6 +1,7 @@
 package coreipc
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -61,6 +62,32 @@ func (c *Client) syncProviderCaches() error {
 }
 
 func (c *Client) syncProviderCachesWithTimeout(timeout time.Duration) error {
+	return c.syncProviderCachesUntil(context.Background(), timeout)
+}
+
+// SyncProviderCachesForPreview brings the unprivileged snapshot up to date
+// before offline validation. It never waits behind another kernel operation.
+func (c *Client) SyncProviderCachesForPreview(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("preview context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !c.applyMu.TryLock() {
+		return ErrKernelBusy
+	}
+	defer c.applyMu.Unlock()
+	if c.isStopping() {
+		return errors.New("kernel is stopping")
+	}
+	return c.syncProviderCachesUntil(ctx, 3*time.Second)
+}
+
+func (c *Client) syncProviderCachesUntil(ctx context.Context, timeout time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !c.caches.running || !c.caches.isolated {
 		return nil
 	}
@@ -71,12 +98,19 @@ func (c *Client) syncProviderCachesWithTimeout(timeout time.Duration) error {
 	if pending {
 		return errors.New("provider cache snapshot interrupted by reload")
 	}
-	result, err := c.readProviderCachesUntil(c.cacheQuery(), timeout, stop, reload)
+	result, err := c.readProviderCachesUntil(c.cacheQuery(), timeout, stop, reload, ctx.Done())
 	if err != nil {
-		c.setCacheWarning(err)
+		if ctx.Err() == nil {
+			c.setCacheWarning(err)
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	}
 	select {
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-stop:
 		return errors.New("provider cache snapshot interrupted by shutdown")
 	case <-reload:
@@ -89,11 +123,13 @@ func (c *Client) syncProviderCachesWithTimeout(timeout time.Duration) error {
 // A slow read-only cache snapshot must not tear down a healthy TUN. Keep at
 // most one abandoned read in flight; its eventual result is discarded.
 func (c *Client) readProviderCaches(query ProviderCacheQuery, timeout time.Duration) (ProviderCaches, error) {
-	return c.readProviderCachesUntil(query, timeout, nil, nil)
+	return c.readProviderCachesUntil(query, timeout, nil, nil, nil)
 }
 
-func (c *Client) readProviderCachesUntil(query ProviderCacheQuery, timeout time.Duration, stop, reload <-chan struct{}) (ProviderCaches, error) {
+func (c *Client) readProviderCachesUntil(query ProviderCacheQuery, timeout time.Duration, stop, reload, canceled <-chan struct{}) (ProviderCaches, error) {
 	select {
+	case <-canceled:
+		return ProviderCaches{}, errors.New("provider cache snapshot canceled")
 	case <-stop:
 		return ProviderCaches{}, errors.New("provider cache snapshot interrupted by shutdown")
 	case <-reload:
@@ -125,6 +161,9 @@ func (c *Client) readProviderCachesUntil(query ProviderCacheQuery, timeout time.
 	case <-reload:
 		go func() { <-done; clear() }()
 		return ProviderCaches{}, errors.New("provider cache snapshot interrupted by reload")
+	case <-canceled:
+		go func() { <-done; clear() }()
+		return ProviderCaches{}, errors.New("provider cache snapshot canceled")
 	}
 }
 

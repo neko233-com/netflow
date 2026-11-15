@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -33,6 +34,7 @@ type agentProposal struct {
 	revision      uint64
 	activeProfile string
 	sources       map[string][32]byte
+	commitSources map[string][32]byte
 	expires       time.Time
 	tunEnabled    bool
 	tunSetting    bool
@@ -182,12 +184,16 @@ type previewDraft struct {
 	options        *kernelopts.Options
 	before, after  []string
 	hashes         map[string][32]byte
+	commitHashes   map[string][32]byte
 	warnings       []string
 	configs        []validation.Config
 	chain          *activeChain
 }
 
 func (a *App) agentPreview(change agent.Change) (agent.Preview, error) {
+	if err := a.syncPreviewCaches(context.Background()); err != nil {
+		return agent.Preview{}, err
+	}
 	draft, err := a.prepareAgentPreview(change)
 	if err != nil {
 		return agent.Preview{}, err
@@ -321,7 +327,7 @@ func (a *App) prepareAgentPreview(change agent.Change) (previewDraft, error) {
 	if err != nil {
 		return previewDraft{}, err
 	}
-	return previewDraft{change: change, state: state, revision: revision, active: active, target: target, status: status, tunSetting: a.settings.TUN, options: options, before: before, after: after, hashes: hashes, warnings: warnings, configs: configs, chain: chain}, nil
+	return previewDraft{change: change, state: state, revision: revision, active: active, target: target, status: status, tunSetting: a.settings.TUN, options: options, before: before, after: after, hashes: hashes, commitHashes: maps.Clone(hashes), warnings: warnings, configs: configs, chain: chain}, nil
 }
 
 func (a *App) verifyDraftSources(draft previewDraft, checked validation.Result) error {
@@ -400,7 +406,7 @@ func (a *App) finishAgentPreview(draft previewDraft, checked validation.Result) 
 			expires = c.ExpiresAt
 		}
 	}
-	a.agentProposals[id] = agentProposal{change: draft.change, state: draft.state, revision: draft.revision, activeProfile: draft.active, sources: draft.hashes, expires: expires, tunEnabled: status.TUN, tunSetting: draft.tunSetting, mode: status.Mode, options: draft.options, before: draft.before, after: draft.after, ruleBytes: ruleBytes, chain: draft.chain}
+	a.agentProposals[id] = agentProposal{change: draft.change, state: draft.state, revision: draft.revision, activeProfile: draft.active, sources: draft.hashes, commitSources: draft.commitHashes, expires: expires, tunEnabled: status.TUN, tunSetting: draft.tunSetting, mode: status.Mode, options: draft.options, before: draft.before, after: draft.after, ruleBytes: ruleBytes, chain: draft.chain}
 	return agent.Preview{ProposalID: id, Revision: draft.revision, ActiveProfile: draft.active, TargetProfile: draft.target, RulesBefore: before.Rules, RulesAfter: after.Rules, RulesBeforeTotal: before.Total, RulesAfterTotal: after.Total, RulesBeforeTruncated: before.NextOffset < before.Total, RulesAfterTruncated: after.NextOffset < after.Total, Warnings: draft.warnings, ExpiresAt: expires}, nil
 }
 
@@ -542,32 +548,70 @@ func (a *App) checkAgentSources(sources map[string][32]byte) error {
 }
 
 func (a *App) agentApply(id string) (agent.ApplyResult, error) {
+	tx, err := a.beginAgentApply(id)
+	if err != nil {
+		return agent.ApplyResult{}, err
+	}
+	if tx.active {
+		err = a.core.Reload()
+	}
+	var result agent.ApplyResult
+	if err == nil {
+		result, err = a.finishAgentApply(tx)
+	}
+	if err == nil {
+		return result, nil
+	}
+	needReload, restoreErr := a.rollbackAgentApply(tx)
+	if restoreErr == nil && needReload {
+		restoreErr = a.core.Reload()
+	}
+	return agent.ApplyResult{}, agentApplyError(err, restoreErr)
+}
+
+type agentApplyTransaction struct {
+	proposal     agentProposal
+	old          rewrite.State
+	saved        rewrite.State
+	active       bool
+	unsafeReload bool
+	guard        *agentApplyGuard
+}
+
+// Immutable after publication. The kernel transformer checks these sources
+// before and after composing the exact bytes that will be applied.
+type agentApplyGuard struct {
+	profileID string
+	sources   map[string][32]byte
+}
+
+func (a *App) beginAgentApply(id string) (*agentApplyTransaction, error) {
 	p, ok := a.agentProposals[id]
 	if !ok || !p.expires.After(time.Now()) {
 		delete(a.agentProposals, id)
-		return agent.ApplyResult{}, errors.New("proposal missing or expired; preview again")
+		return nil, errors.New("proposal missing or expired; preview again")
 	}
 	delete(a.agentProposals, id)
 	if a.core.ProfileID() != p.activeProfile || a.rewrites.Snapshot().Revision != p.revision || a.chain.Load() != p.chain {
-		return agent.ApplyResult{}, errors.New("configuration changed; preview again")
+		return nil, errors.New("configuration changed; preview again")
 	}
 	status := a.core.Status()
 	if !status.Running {
-		return agent.ApplyResult{}, errors.New("core is not running")
+		return nil, errors.New("core is not running")
 	}
 	if a.tunBusy || status.TUN != p.tunEnabled || status.Mode != p.mode || a.settings.TUN != p.tunSetting {
-		return agent.ApplyResult{}, errors.New("network state changed; preview again")
+		return nil, errors.New("network state changed; preview again")
 	}
 	if (a.kernelOptions == nil) != (p.options == nil) || (p.options != nil && !reflect.DeepEqual(a.kernelOptions.Snapshot(), *p.options)) {
-		return agent.ApplyResult{}, errors.New("kernel options changed; preview again")
+		return nil, errors.New("kernel options changed; preview again")
 	}
 	if a.kernelOptions != nil {
 		if err := a.kernelOptions.CheckCurrent(); err != nil {
-			return agent.ApplyResult{}, err
+			return nil, err
 		}
 	}
 	if err := a.checkAgentSources(p.sources); err != nil {
-		return agent.ApplyResult{}, err
+		return nil, err
 	}
 	if p.change.Scope == "connection" && p.change.Operation == "set" {
 		items, _, _ := a.core.Connections()
@@ -578,7 +622,7 @@ func (a *App) agentApply(id string) (agent.ApplyResult, error) {
 			}
 			rule, err := connectionRule(item, p.change.Policy)
 			if err != nil {
-				return agent.ApplyResult{}, err
+				return nil, err
 			}
 			for _, candidate := range p.state.Connections {
 				if candidate.ID == item.ID && candidate.Rule == rule {
@@ -587,25 +631,79 @@ func (a *App) agentApply(id string) (agent.ApplyResult, error) {
 			}
 		}
 		if !found {
-			return agent.ApplyResult{}, errors.New("connection changed or closed; preview again")
+			return nil, errors.New("connection changed or closed; preview again")
 		}
 	}
 	old := a.rewrites.Snapshot()
 	saved, err := a.rewrites.Replace(p.state, p.revision)
 	if err != nil {
-		return agent.ApplyResult{}, err
+		return nil, err
 	}
 	active := p.change.Scope != "profile" || p.change.ProfileID == p.activeProfile
+	tx := &agentApplyTransaction{proposal: p, old: old, saved: saved, active: active}
 	if active {
-		if err = a.core.Reload(); err != nil {
+		tx.guard = &agentApplyGuard{profileID: p.activeProfile, sources: p.sources}
+		if !a.agentApplyGuard.CompareAndSwap(nil, tx.guard) {
 			_, restoreErr := a.rewrites.Replace(old, saved.Revision)
-			if restoreErr == nil {
-				restoreErr = a.core.Reload()
-			}
-			if restoreErr != nil {
-				return agent.ApplyResult{}, errors.Join(err, fmt.Errorf("restore previous rules: %w", restoreErr))
-			}
+			return nil, agentApplyError(errors.New("another rule application is active"), restoreErr)
+		}
+	}
+	return tx, nil
+}
+
+func (a *App) rollbackAgentApply(tx *agentApplyTransaction) (bool, error) {
+	a.releaseAgentApplyGuard(tx)
+	if tx.active {
+		if a.checkAgentSources(tx.proposal.sources) != nil {
+			tx.unsafeReload = true
+		}
+		if a.kernelOptions != nil && a.kernelOptions.CheckCurrent() != nil {
+			tx.unsafeReload = true
+		}
+	}
+	_, err := a.rewrites.Replace(tx.old, tx.saved.Revision)
+	if err == nil && tx.active && tx.unsafeReload {
+		return false, errors.New("previous rules were restored on disk, but the runtime may retain the applied rules; source changed, inspect and restart")
+	}
+	return err == nil && tx.active, err
+}
+
+func (a *App) releaseAgentApplyGuard(tx *agentApplyTransaction) {
+	if tx.guard != nil {
+		a.agentApplyGuard.CompareAndSwap(tx.guard, nil)
+	}
+}
+
+func agentApplyError(cause, restoreErr error) error {
+	if restoreErr != nil {
+		return errors.Join(cause, fmt.Errorf("restore previous rules: %w", restoreErr))
+	}
+	return cause
+}
+
+func (a *App) finishAgentApply(tx *agentApplyTransaction) (agent.ApplyResult, error) {
+	a.releaseAgentApplyGuard(tx)
+	p, saved, active := tx.proposal, tx.saved, tx.active
+	if err := a.rewrites.CheckCurrent(); err != nil {
+		return agent.ApplyResult{}, err
+	}
+	if a.kernelOptions != nil {
+		if err := a.kernelOptions.CheckCurrent(); err != nil {
+			tx.unsafeReload = true
 			return agent.ApplyResult{}, err
+		}
+	}
+	// Provider caches may legitimately appear during reload, so recheck the
+	// original preview inputs rather than the validator's dynamic cache set.
+	if err := a.checkAgentSources(p.commitSources); err != nil {
+		tx.unsafeReload = true
+		return agent.ApplyResult{}, err
+	}
+	if p.change.Scope == "connection" && p.change.Operation == "set" {
+		for _, item := range saved.Connections {
+			if item.ID == p.change.ConnectionID && !item.ExpiresAt.After(time.Now()) {
+				return agent.ApplyResult{}, errors.New("connection rule expired during application; preview again")
+			}
 		}
 	}
 	result := agent.ApplyResult{Revision: saved.Revision, Active: active}

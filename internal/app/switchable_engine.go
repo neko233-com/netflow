@@ -40,6 +40,24 @@ type stoppedHandoff struct {
 
 var errHandoffBusy = errors.New("内核正忙，请等待网络操作完成后重试")
 
+func (s *switchableEngine) SyncProviderCachesForPreview(ctx context.Context) error {
+	if !s.mu.TryRLock() {
+		return errHandoffBusy
+	}
+	defer s.mu.RUnlock()
+	if syncer, ok := s.active.(interface{ SyncProviderCachesForPreview(context.Context) error }); ok {
+		return syncer.SyncProviderCachesForPreview(ctx)
+	}
+	return ctx.Err()
+}
+
+func (a *App) syncPreviewCaches(ctx context.Context) error {
+	if syncer, ok := a.core.(interface{ SyncProviderCachesForPreview(context.Context) error }); ok {
+		return syncer.SyncProviderCachesForPreview(ctx)
+	}
+	return ctx.Err()
+}
+
 func (s *switchableEngine) handoffSnapshot() stoppedHandoff {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
