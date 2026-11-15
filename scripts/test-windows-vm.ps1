@@ -68,8 +68,10 @@ function Save-NetFlowValidationResult([string]$Json, [string]$RunID, [string]$Pa
     } finally { $stream.Dispose() }
     return $record
 }
-function Test-NetFlowMissingCopy([string]$ErrorText) {
-    return $ErrorText -match '(?i)(could not find the file|no such file or directory)'
+function Test-NetFlowMissingCopy([string]$ErrorText, [string]$RunID) {
+    if ($RunID -cnotmatch '^[0-9a-f]{32}$') { return $false }
+    $source = [regex]::Escape("/storage/netflow-results/$RunID.json")
+    return $ErrorText -match "(?i)could not find the file $source in container\b"
 }
 function Assert-NetFlowReleaseCurrent {
     & python scripts/build_inputs.py verify
@@ -157,7 +159,11 @@ if ($TestPolicyOnly) {
             try { Save-NetFlowValidationResult $invalid $testID (Join-Path $testDir 'invalid.json') | Out-Null } catch { $rejected = $true }
             if (-not $rejected) { throw 'Unsafe validation result accepted' }
         }
-        if (-not (Test-NetFlowMissingCopy 'Could not find the file /missing in container') -or (Test-NetFlowMissingCopy 'daemon unavailable')) { throw 'Unsafe missing-result classification' }
+        if (-not (Test-NetFlowMissingCopy "Error response from daemon: Could not find the file /storage/netflow-results/$testID.json in container test" $testID) -or
+            (Test-NetFlowMissingCopy 'no such file or directory' $testID) -or
+            (Test-NetFlowMissingCopy 'Error response from daemon: No such container' $testID) -or
+            (Test-NetFlowMissingCopy 'Could not find the file /different in container test' $testID) -or
+            (Test-NetFlowMissingCopy "Could not find the file /storage/netflow-results/$testID.json in container test" 'invalid')) { throw 'Unsafe missing-result classification' }
         $pwshPath = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
         $command = Invoke-NetFlowBoundedProcess $pwshPath @('-NoProfile', '-Command', "[Console]::Out.Write('ok')") 10
         if ($command.ExitCode -ne 0 -or $command.Output -cne 'ok') { throw 'Validation subprocess output failed' }
@@ -294,7 +300,7 @@ try {
                 Write-Output "Windows validation passed: $runID"
                 return
             }
-            if (-not (Test-NetFlowMissingCopy $copy.Error)) { throw 'Could not recover the stopped guest result' }
+            if (-not (Test-NetFlowMissingCopy $copy.Error $runID)) { throw 'Could not recover the stopped guest result' }
             $logs = Protect-NetFlowDiagnostic (docker logs --tail 100 $container 2>&1 | Out-String) @($guestPassword)
             $logPath = Join-Path $repo "build/windows-vm-boot-$runID-attempt-$bootAttempt.log"
             [IO.File]::WriteAllText($logPath, $logs, [Text.UTF8Encoding]::new($false))
