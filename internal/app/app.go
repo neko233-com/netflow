@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -100,6 +101,8 @@ type App struct {
 	profileAutoRetry    map[string]time.Time
 	profileAutoReview   map[string]bool
 	profileUpdates      map[string]bool
+	profileContext      context.Context
+	profileWorkers      sync.WaitGroup
 	shortcuts           shortcutRegistrar
 	hotkeys             map[string]hotkeyBinding
 	privilegedTUN       bool
@@ -136,6 +139,7 @@ type App struct {
 	headless            bool
 	headlessRecovery    bool
 	headlessCancel      func()
+	headlessStopping    atomic.Bool
 	guiOperation        *guiConfigOperation // event loop only
 	guiBarrier          atomic.Pointer[guiConfigOperation]
 	guiQuit             func() // optional event-loop quit hook

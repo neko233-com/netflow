@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -15,13 +16,23 @@ import (
 	"github.com/neko233-com/netflow/internal/ui"
 )
 
+func (a *App) profileRequestContext() context.Context {
+	if a.profileContext != nil {
+		return a.profileContext
+	}
+	return context.Background()
+}
+
 // Only network I/O runs in a worker; catalog/core/model changes remain on
 // the native UI thread so concurrent user and Agent actions stay serialized.
 func (a *App) importURLAsync(raw string, done func(error)) {
+	ctx := a.profileRequestContext()
+	a.profileWorkers.Add(1)
 	go func() {
+		defer a.profileWorkers.Done()
 		client := newSubscriptionClient("", 20*time.Second, false)
 		defer client.CloseIdleConnections()
-		result, err := fetchProfileResponse(raw, client, "")
+		result, err := fetchProfileResponseContext(ctx, raw, client, "")
 		a.runOnMain(func() {
 			if err == nil {
 				err = a.importURLData(raw, result.body, result.headers)
@@ -115,22 +126,31 @@ func (a *App) updateProfileWithOptionsAsync(uid string, forceProxy bool, done fu
 		a.profileUpdates = make(map[string]bool)
 	}
 	a.profileUpdates[uid] = true
+	ctx := a.profileRequestContext()
+	a.profileWorkers.Add(1)
 	go func() {
+		defer a.profileWorkers.Done()
 		defer client.CloseIdleConnections()
 		source, err := a.snapshotProfileSource(item.File)
 		var result subscriptionResponse
 		if err == nil {
-			result, err = fetchProfileResponse(item.URL, client, item.Option.UserAgent)
+			result, err = fetchProfileResponseContext(ctx, item.URL, client, item.Option.UserAgent)
 		}
 		a.runOnMain(func() {
-			if err == nil {
-				err = a.updateProfileDataWithSource(uid, item.URL, item.URL, result.body, result.headers, &source)
+			finish := func(err error) {
+				delete(a.profileUpdates, uid)
+				done(err)
+				if a.win != nil {
+					a.win.Invalidate()
+				}
 			}
-			delete(a.profileUpdates, uid)
-			done(err)
-			if a.win != nil {
-				a.win.Invalidate()
+			if err != nil {
+				finish(err)
+				return
 			}
+			a.startGUIConfigOperation("正在更新订阅", func() (*guiConfigTransaction, error) {
+				return a.beginProfileUpdate(uid, item.URL, item.URL, result.body, result.headers, &source)
+			}, finish)
 		})
 	}()
 }
@@ -169,22 +189,31 @@ func (a *App) changeProfileURLAsync(uid, raw string, done func(error)) {
 		a.profileUpdates = make(map[string]bool)
 	}
 	a.profileUpdates[uid] = true
+	ctx := a.profileRequestContext()
+	a.profileWorkers.Add(1)
 	go func() {
+		defer a.profileWorkers.Done()
 		defer client.CloseIdleConnections()
 		source, err := a.snapshotProfileSource(item.File)
 		var result subscriptionResponse
 		if err == nil {
-			result, err = fetchProfileResponse(raw, client, item.Option.UserAgent)
+			result, err = fetchProfileResponseContext(ctx, raw, client, item.Option.UserAgent)
 		}
 		a.runOnMain(func() {
-			if err == nil {
-				err = a.updateProfileDataWithSource(uid, item.URL, raw, result.body, result.headers, &source)
+			finish := func(err error) {
+				delete(a.profileUpdates, uid)
+				done(err)
+				if a.win != nil {
+					a.win.Invalidate()
+				}
 			}
-			delete(a.profileUpdates, uid)
-			done(err)
-			if a.win != nil {
-				a.win.Invalidate()
+			if err != nil {
+				finish(err)
+				return
 			}
+			a.startGUIConfigOperation("正在更新订阅", func() (*guiConfigTransaction, error) {
+				return a.beginProfileUpdate(uid, item.URL, raw, result.body, result.headers, &source)
+			}, finish)
 		})
 	}()
 }
@@ -221,9 +250,12 @@ func (a *App) createProfileWithResult(form ui.ProfileForm, done func(string, err
 		done("", err)
 		return
 	}
+	ctx := a.profileRequestContext()
+	a.profileWorkers.Add(1)
 	go func() {
+		defer a.profileWorkers.Done()
 		defer client.CloseIdleConnections()
-		result, err := fetchProfileResponse(raw, client, options.UserAgent)
+		result, err := fetchProfileResponseContext(ctx, raw, client, options.UserAgent)
 		a.runOnMain(func() {
 			uid := ""
 			if err == nil {

@@ -102,16 +102,16 @@ func (a *App) updateProfileDataWithURL(uid, expectedURL, nextURL string, body []
 
 var errScriptUpdateReviewRequired = errors.New("已启用的 Verge 脚本绑定当前订阅；请在脚本对话框预览订阅更新并应用，或先关闭脚本再更新")
 
-func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body []byte, headers http.Header, source *profileSourceSnapshot) error {
+func (a *App) beginProfileUpdate(uid, expectedURL, nextURL string, body []byte, headers http.Header, source *profileSourceSnapshot) (*guiConfigTransaction, error) {
 	if a.tunBusy {
-		return errors.New("虚拟网卡正在切换，请稍后重试")
+		return nil, errors.New("虚拟网卡正在切换，请稍后重试")
 	}
 	if !profile.ValidURL(nextURL) {
-		return profile.ErrInvalidURL
+		return nil, profile.ErrInvalidURL
 	}
 	f, snapshot, err := a.profiles.LoadForUpdate()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	index := -1
 	for i := range f.Items {
@@ -121,15 +121,15 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 		}
 	}
 	if index < 0 || f.Items[index].URL == "" || f.Items[index].URL != expectedURL {
-		return errors.New("订阅已删除或链接已变化，请重新更新")
+		return nil, errors.New("订阅已删除或链接已变化，请重新更新")
 	}
 	rel := f.Items[index].File
 	oldFile, _, err := readProfileFile(a.dir, rel)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if source != nil && (source.file != rel || source.hash != sha256.Sum256(oldFile)) {
-		return errors.New("订阅文件在下载期间已变化，请检查后重试")
+		return nil, errors.New("订阅文件在下载期间已变化，请检查后重试")
 	}
 	// Script approvals bind the exact subscription and profile name. Updating
 	// an inactive profile used to bypass effective-config validation and leave
@@ -137,29 +137,29 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 	// normalize the name, so it needs the same protection even for equal bytes.
 	if f.Items[index].Option.VergeScriptApproval != nil && (!bytes.Equal(body, oldFile) || nextURL != expectedURL) {
 		if nextURL != expectedURL {
-			return errors.New("已启用的 Verge 脚本绑定当前订阅；请预览新链接并单独应用")
+			return nil, errors.New("已启用的 Verge 脚本绑定当前订阅；请预览新链接并单独应用")
 		}
-		return errScriptUpdateReviewRequired
+		return nil, errScriptUpdateReviewRequired
 	}
 	// A disabled script can still be the previous rollback target. Preserve
 	// its original subscription and metadata before updating that file.
 	if !bytes.Equal(body, oldFile) || nextURL != expectedURL {
 		if err := profile.PreserveScriptHistory(&f.Items[index]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	shared, err := a.profiles.SharedProfileFile(f, uid)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	active := f.Current == uid
 	rawErr := validateProfile(body)
 	if rawErr != nil {
 		if !f.Items[index].Option.VergeExtensions {
-			return rawErr
+			return nil, rawErr
 		}
 		if err := validateProfileShape(body); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	// A Verge data extension can define groups/providers referenced by the
@@ -167,7 +167,7 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 	// configuration even for an inactive profile before replacing its file.
 	if active || rawErr != nil {
 		if err = a.validateEffectiveProfile(body, uid); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	var oldConfig []byte
@@ -176,7 +176,7 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 	if active {
 		oldConfig, err = safepath.ReadFile(a.dir, "config.yaml")
 		if err != nil {
-			return err
+			return nil, err
 		}
 		nextConfig = profile.EnsureMixedPort(body, 7897)
 	}
@@ -185,19 +185,25 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 	if shared {
 		var nonce [16]byte
 		if _, err = rand.Read(nonce[:]); err != nil {
-			return err
+			return nil, err
 		}
 		writeRel = filepath.Join("profiles", "netflow-"+hex.EncodeToString(nonce[:])+".yaml")
 		var createErr error
 		created, createErr = safepath.CreateExclusive(a.dir, writeRel, body, false)
 		if createErr != nil {
-			return createErr
+			return nil, createErr
 		}
-		defer created.Close()
 	} else if err = safepath.CompareAndWrite(a.dir, rel, oldFile, body); err != nil {
-		return err
+		return nil, err
 	}
-	rollback := func(cause error) error {
+	cleanup := func() {
+		if created != nil {
+			_ = created.Close()
+		}
+	}
+	running := active && a.core != nil && a.core.Status().Running
+	rollback := func() (bool, error) {
+		defer cleanup()
 		var failures []error
 		var e error
 		if shared {
@@ -212,52 +218,76 @@ func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body
 			if e := safepath.CompareAndWrite(a.dir, "config.yaml", nextConfig, oldConfig); e != nil {
 				failures = append(failures, e)
 			}
-			if a.core != nil && a.core.Status().Running {
-				if e := a.core.Reload(); e != nil {
-					failures = append(failures, e)
-				}
-			}
 		}
 		if len(failures) > 0 {
-			return errors.Join(cause, fmt.Errorf("恢复旧配置失败: %w", errors.Join(failures...)))
+			return false, errors.Join(failures...)
+		}
+		return configUpdated && running, nil
+	}
+	wrap := func(cause, restoreErr error) error {
+		if restoreErr != nil {
+			return errors.Join(cause, fmt.Errorf("恢复旧配置失败，请检查运行中的内核: %w", restoreErr))
 		}
 		return cause
 	}
 	if active {
 		if err = safepath.CompareAndWrite(a.dir, "config.yaml", oldConfig, nextConfig); err != nil {
-			return rollback(err)
+			_, restoreErr := rollback()
+			return nil, wrap(err, restoreErr)
 		}
 		configUpdated = true
-		if a.core != nil && a.core.Status().Running {
-			if err = a.core.Reload(); err != nil {
-				return rollback(err)
+	}
+	return &guiConfigTransaction{
+		reload: running,
+		commit: func() error {
+			if shared {
+				current, _, readErr := readProfileFile(a.dir, rel)
+				if readErr != nil || !bytes.Equal(current, oldFile) {
+					return errors.New("共享订阅文件已变化，请重试")
+				}
 			}
-		}
+			f.Items[index].File = writeRel
+			if nextURL != expectedURL {
+				f.Items[index].Name = profile.SafeDisplayName(f.Items[index])
+			}
+			f.Items[index].URL = nextURL
+			f.Items[index].Updated = time.Now().UTC().Truncate(time.Second)
+			profile.ApplySubscriptionUserInfo(&f.Items[index], headers)
+			if err := a.profiles.SaveIfUnchanged(f, snapshot); err != nil {
+				return err
+			}
+			cleanup()
+			delete(a.profileAutoRetry, uid)
+			delete(a.profileAutoReview, uid)
+			a.loadProfiles()
+			if active {
+				a.loadGroups()
+				a.refreshHome()
+			}
+			return nil
+		},
+		rollback: rollback,
+		wrap:     wrap,
+	}, nil
+}
+
+func (a *App) updateProfileDataWithSource(uid, expectedURL, nextURL string, body []byte, headers http.Header, source *profileSourceSnapshot) error {
+	tx, err := a.beginProfileUpdate(uid, expectedURL, nextURL, body, headers, source)
+	if err != nil {
+		return err
 	}
-	if shared {
-		current, _, readErr := readProfileFile(a.dir, rel)
-		if readErr != nil || !bytes.Equal(current, oldFile) {
-			return rollback(errors.New("共享订阅文件已变化，请重试"))
-		}
+	if tx.reload {
+		err = a.core.Reload()
 	}
-	f.Items[index].File = writeRel
-	// An older release could derive a name containing the old URL's secrets.
-	// Normalize that legacy default before changing the URL used to recognize it.
-	if nextURL != expectedURL {
-		f.Items[index].Name = profile.SafeDisplayName(f.Items[index])
+	if err == nil {
+		err = tx.commit()
 	}
-	f.Items[index].URL = nextURL
-	f.Items[index].Updated = time.Now().UTC().Truncate(time.Second)
-	profile.ApplySubscriptionUserInfo(&f.Items[index], headers)
-	if err = a.profiles.SaveIfUnchanged(f, snapshot); err != nil {
-		return rollback(err)
+	if err == nil {
+		return nil
 	}
-	delete(a.profileAutoRetry, uid)
-	delete(a.profileAutoReview, uid)
-	a.loadProfiles()
-	if active {
-		a.loadGroups()
-		a.refreshHome()
+	needReload, restoreErr := tx.rollback()
+	if restoreErr == nil && needReload {
+		restoreErr = a.core.Reload()
 	}
-	return nil
+	return tx.wrap(err, restoreErr)
 }

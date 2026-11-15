@@ -56,6 +56,10 @@ func (a *App) useProfileAsync(uid string, done func(error)) {
 // startGUIConfigOperation is called on the GUI event loop. Schedule the start
 // for a later event so the current view frame has finished using the model.
 func (a *App) startGUIConfigOperation(message string, begin func() (*guiConfigTransaction, error), done func(error)) {
+	if a.headlessStopping.Load() {
+		done(errors.New("application is shutting down"))
+		return
+	}
 	if a.guiConfigBusy() {
 		done(errors.New("配置正在应用，请稍后重试"))
 		return
@@ -66,6 +70,9 @@ func (a *App) startGUIConfigOperation(message string, begin func() (*guiConfigTr
 	}
 	op := &guiConfigOperation{done: make(chan struct{}), finished: done}
 	a.guiOperation = op
+	// Block other actor mutations immediately, including the interval before
+	// the deferred begin callback runs. Begin itself uses the unrestricted path.
+	a.guiBarrier.Store(op)
 	if a.model != nil {
 		a.model.OperationMessage = message
 		a.model.OperationCancel = func() { a.cancelGUIConfigOperation(op) }
@@ -74,7 +81,7 @@ func (a *App) startGUIConfigOperation(message string, begin func() (*guiConfigTr
 		a.win.SetTitle("NetFlow - " + message)
 		a.win.Invalidate()
 	}
-	go a.runOnMain(func() {
+	go a.runOnMainUnrestricted(func() {
 		if op.canceled {
 			a.finishGUIConfigOperation(op, context.Canceled)
 			return
@@ -84,7 +91,6 @@ func (a *App) startGUIConfigOperation(message string, begin func() (*guiConfigTr
 			a.finishGUIConfigOperation(op, err)
 			return
 		}
-		a.guiBarrier.Store(op)
 		if !tx.reload {
 			a.finishGUIConfigReload(op, tx, nil)
 			return
@@ -121,7 +127,7 @@ func (a *App) cancelGUIConfigOperation(op *guiConfigOperation) {
 	if a.win != nil {
 		a.win.Invalidate()
 	}
-	if a.guiBarrier.Load() != op {
+	if a.guiBarrier.Load() != op || op.reloadDone == nil {
 		return
 	}
 	a.requestGUIConfigCancellation(op)
@@ -221,6 +227,11 @@ func (a *App) finishGUIConfigOperation(op *guiConfigOperation, err error) {
 		op.finished(err)
 	}
 	if op.quit {
+		if a.headless {
+			a.guiBarrier.CompareAndSwap(op, nil)
+			close(op.done)
+			return
+		}
 		// Keep queued mutations behind the barrier until the event loop has
 		// actually stopped. The kernel may be only partly restored while the
 		// quit sequence is about to stop it.

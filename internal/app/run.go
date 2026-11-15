@@ -46,6 +46,7 @@ func (a *App) Run() error {
 	defer lock.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	a.profileContext = ctx
 	if err := a.prepareInitial(ctx); err != nil {
 		return err
 	}

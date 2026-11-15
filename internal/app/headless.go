@@ -16,8 +16,14 @@ import (
 // callback to finish; it may decline work during shutdown.
 func (a *App) runOnMain(fn func()) {
 	for {
+		if a.headlessStopping.Load() {
+			return
+		}
 		var blocked *guiConfigOperation
 		a.runOnMainUnrestricted(func() {
+			if a.headlessStopping.Load() {
+				return
+			}
 			blocked = a.guiBarrier.Load()
 			if blocked == nil {
 				fn()
@@ -113,6 +119,7 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	a.profileContext = ctx
 	a.headlessCancel = cancel
 	dir, err := a.dirs.ConfigDir()
 	if err != nil {
@@ -124,6 +131,7 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 	}
 	defer lock.Close()
 	a.headless = true
+	a.headlessStopping.Store(false)
 	a.headlessRecovery = opt.AllowStopped
 	if err := a.prepare(ctx); err != nil {
 		_ = a.core.Stop()
@@ -153,19 +161,35 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 		a.startProfileAuto()
 	}
 	defer func() {
-		// Reject new callbacks immediately. Stop the kernel concurrently so it
-		// can cancel a blocked provider initialization; wait for the active
-		// transaction to finish its rollback before closing the other services.
-		dispatcher.stopAccepting()
+		cancel()
+		// Reject external mutations but keep the event loop alive long enough
+		// for an asynchronous transaction to restore its staged files.
+		a.headlessStopping.Store(true)
 		coreStopped := make(chan error, 1)
 		go func() { coreStopped <- a.core.Stop() }()
+		var operation *guiConfigOperation
+		dispatcher.call(func() {
+			operation = a.guiOperation
+			if operation != nil {
+				operation.quit = true
+				a.cancelGUIConfigOperation(operation)
+			}
+		})
+		if operation != nil {
+			<-operation.done
+		}
+		a.profileWorkers.Wait()
+		dispatcher.call(func() { a.profileUpdates = nil })
+		dispatcher.stopAccepting()
 		dispatcher.close()
 		a.stopBackup()
 		if a.profileAutoStop != nil {
 			close(a.profileAutoStop)
+			a.profileAutoStop = nil
 		}
 		if a.probeStop != nil {
 			close(a.probeStop)
+			a.probeStop = nil
 		}
 		a.stopAgent()
 		if err := <-coreStopped; err != nil {

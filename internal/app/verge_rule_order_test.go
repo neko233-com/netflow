@@ -243,22 +243,26 @@ func TestImportedVergeRulesRunBeforeScriptsAndRemainSeparateFromAgent(t *testing
 					t.Fatal(err)
 				}
 				a.profileAutoRetry = make(map[string]time.Time)
-				queue := make(chan func(), 1)
-				a.dispatch = func(fn func()) {
-					done := make(chan struct{})
-					queue <- func() { defer close(done); fn() }
-					<-done
+				dispatcher.call(func() { a.autoUpdateOne(time.Now()) })
+				deadline := time.Now().Add(10 * time.Second)
+				var busy bool
+				for time.Now().Before(deadline) {
+					dispatcher.call(func() { busy = a.model.ProfileBusy })
+					if !busy {
+						break
+					}
+					time.Sleep(20 * time.Millisecond)
 				}
-				a.autoUpdateOne(time.Now())
-				select {
-				case fn := <-queue:
-					fn()
-				case <-time.After(10 * time.Second):
+				if busy {
 					t.Fatal("automatic update did not finish")
 				}
-				a.dispatch = dispatcher.call
-				list, err := a.agentProfiles()
-				if err != nil || len(list.Profiles) != 1 || !list.Profiles[0].VergeAutoUpdateReview || len(a.model.Profiles) != 1 || !a.model.Profiles[0].Option.VergeAutoUpdateReview {
+				var list agent.ProfileList
+				var displayed bool
+				dispatcher.call(func() {
+					list, err = a.agentProfiles()
+					displayed = len(a.model.Profiles) == 1 && a.model.Profiles[0].Option.VergeAutoUpdateReview
+				})
+				if err != nil || len(list.Profiles) != 1 || !list.Profiles[0].VergeAutoUpdateReview || !displayed {
 					t.Fatal("automatic update review was not exposed", err)
 				}
 				effective, err = a.core.EffectiveConfig()
