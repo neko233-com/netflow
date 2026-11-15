@@ -295,6 +295,70 @@ func vmClickModelControl(t *testing.T, hwnd uintptr, model *ui.Model, label stri
 	}
 }
 
+// vmInvokeAccessible uses the real window's UI Automation provider rather
+// than estimating GPU layout from the headless renderer's font metrics.
+func vmInvokeAccessible(t *testing.T, hwnd uintptr, label string) {
+	t.Helper()
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	class, err := windows.UTF16PtrFromString("MyGoSurface")
+	if err != nil {
+		t.Fatal(err)
+	}
+	surface, _, _ := user32.NewProc("FindWindowExW").Call(hwnd, 0, uintptr(unsafe.Pointer(class)), 0)
+	if surface == 0 {
+		t.Fatal("native MyGo surface not found")
+	}
+	// Ask Windows to deliver a native paint even when the disposable guest's
+	// virtual display considers the window occluded.
+	user32.NewProc("RedrawWindow").Call(surface, 0, 0, 0x0181)
+	dir := t.TempDir()
+	source := filepath.Join(dir, "invoke.cs")
+	program := `using System;
+using System.Threading;
+using System.Windows.Automation;
+class Program {
+  static int Main(string[] args) {
+    string diagnostic = "no tree";
+    for (int i = 0; i < 80; i++) {
+      try {
+        var root = AutomationElement.FromHandle(new IntPtr(long.Parse(args[0])));
+        var nodes = root.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+        diagnostic = "root=" + root.Current.Name + " nodes=" + nodes.Count;
+        foreach (AutomationElement node in nodes) {
+          object pattern;
+          if (node.Current.Name == args[1] && node.TryGetCurrentPattern(InvokePattern.Pattern, out pattern)) {
+            ((InvokePattern)pattern).Invoke();
+            return 0;
+          }
+          if (diagnostic.Length < 2000) diagnostic += " | " + node.Current.Name + " " + node.Current.ControlType.ProgrammaticName;
+        }
+      } catch (Exception e) { diagnostic = e.GetType().FullName; }
+      Thread.Sleep(100);
+    }
+    Console.Error.WriteLine("UI Automation control was unavailable: " + diagnostic);
+    return 1;
+  }
+}`
+	if err := os.WriteFile(source, []byte(program), 0600); err != nil {
+		t.Fatal(err)
+	}
+	framework := filepath.Join(os.Getenv("WINDIR"), "Microsoft.NET", "Framework64", "v4.0.30319")
+	exe := filepath.Join(dir, "invoke.exe")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	compile := vmCommand(ctx, filepath.Join(framework, "csc.exe"), "/nologo", "/target:exe", "/out:"+exe,
+		"/reference:"+filepath.Join(framework, "WPF", "UIAutomationClient.dll"),
+		"/reference:"+filepath.Join(framework, "WPF", "UIAutomationTypes.dll"),
+		"/reference:"+filepath.Join(framework, "WPF", "WindowsBase.dll"), source)
+	if out, err := compile.CombinedOutput(); err != nil {
+		t.Fatalf("compile UI Automation helper: %s %v", out, err)
+	}
+	invoke := vmCommand(ctx, exe, fmt.Sprint(surface), label)
+	if out, err := invoke.CombinedOutput(); err != nil {
+		t.Fatalf("invoke native control: %s %v", out, err)
+	}
+}
+
 // A connection-scoped override matches future flows with the same destination,
 // source IP, port and network. It does not claim to reroute the existing TCP
 // connection, and closing that connection is an explicit separate choice.
@@ -2868,13 +2932,14 @@ func vmGUIRestartCancellation(t *testing.T, appExe string) {
 	}
 	user32 := windows.NewLazySystemDLL("user32.dll")
 	var hwnd uintptr
+	wantedTitle := "NetFlow"
 	callback := syscall.NewCallback(func(window uintptr, _ uintptr) uintptr {
 		var owner uint32
 		user32.NewProc("GetWindowThreadProcessId").Call(window, uintptr(unsafe.Pointer(&owner)))
 		if owner == uint32(process.Process.Pid) {
 			var title [128]uint16
 			user32.NewProc("GetWindowTextW").Call(window, uintptr(unsafe.Pointer(&title[0])), uintptr(len(title)))
-			if windows.UTF16ToString(title[:]) == "NetFlow" {
+			if windows.UTF16ToString(title[:]) == wantedTitle {
 				hwnd = window
 			}
 		}
@@ -2903,14 +2968,22 @@ func vmGUIRestartCancellation(t *testing.T, appExe string) {
 		statusErr := client.Call(context.Background(), "status", nil, &status)
 		t.Fatalf("restart provider did not start: title=%q running=%t tun=%t status=%v", windows.UTF16ToString(title[:]), status.Running, status.TUN, statusErr)
 	}
+	wantedTitle = "NetFlow - 正在重启内核"
+	hwnd = 0
+	user32.NewProc("EnumWindows").Call(callback, 0)
+	if hwnd == 0 {
+		t.Fatal("restart operation window missing")
+	}
+	user32.NewProc("ShowWindow").Call(hwnd, 5)
+	user32.NewProc("SetForegroundWindow").Call(hwnd)
+	visible, _, _ := user32.NewProc("IsWindowVisible").Call(hwnd)
+	minimized, _, _ := user32.NewProc("IsIconic").Call(hwnd)
+	t.Logf("restart window visible=%t minimized=%t", visible != 0, minimized != 0)
 	var ignored uintptr
 	if ok, _, _ := user32.NewProc("SendMessageTimeoutW").Call(hwnd, 0, 0, 0, 2, 2000, uintptr(unsafe.Pointer(&ignored))); ok == 0 {
 		t.Fatal("restart blocked GUI")
 	}
-	var response agent.CancelApplyResult
-	if err := client.Call(context.Background(), "cancel-apply", nil, &response); err != nil || !response.Accepted {
-		t.Fatalf("Agent did not accept restart cancellation: %+v %v", response, err)
-	}
+	vmInvokeAccessible(t, hwnd, "取消重启")
 	select {
 	case <-canceled:
 	case <-time.After(15 * time.Second):
@@ -2938,7 +3011,7 @@ func vmGUIRestartCancellation(t *testing.T, appExe string) {
 	for time.Now().Before(deadline) {
 		routes, dns, e := vmNetworkSnapshot()
 		if e == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
-			t.Log("GUI remained responsive; Agent canceled restart and restored TUN networking")
+			t.Log("native GUI Automation canceled restart and restored TUN networking")
 			return
 		}
 		time.Sleep(250 * time.Millisecond)
