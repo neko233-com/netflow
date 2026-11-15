@@ -61,6 +61,7 @@ type ProviderPause struct {
 	Token    string
 	Deadline int64
 }
+type ApplyCancellation struct{ Deadline int64 }
 type Connections struct {
 	Items            []conn.Item
 	Upload, Download int64
@@ -370,6 +371,16 @@ func (w *Worker) InterruptForStop(_ Empty, _ *Empty) error {
 		return errors.New("kernel transport closed")
 	}
 	return w.kernel.Stop()
+}
+
+// CancelApply does not acquire the configuration lock: the operation being
+// canceled may be waiting for an uncached provider under that lock.
+func (w *Worker) CancelApply(in ApplyCancellation, out *BoolResult) error {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Unix(0, in.Deadline))
+	defer cancel()
+	accepted, err := w.kernel.CancelActiveApply(ctx)
+	out.Value = accepted
+	return err
 }
 func (w *Worker) Status(_ Empty, out *core.Status) error {
 	w.applyMu.Lock()

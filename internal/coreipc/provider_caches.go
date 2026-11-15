@@ -136,6 +136,12 @@ func collectProviderCaches(dir string, providers []providerSnapshot, in Provider
 				return errors.New("multiple providers share one cache path")
 			}
 			seen[key] = true
+			// An interrupted or failed first load has never published provider
+			// contents. There is no completed cache to synchronize, and trying
+			// to read its absent or unvalidated file would block rollback.
+			if !hash.IsValid() {
+				return nil
+			}
 			version := hash.String()
 			if in.Known[key] == version {
 				return nil

@@ -91,7 +91,7 @@ func TestBridgeBoundsBusyOperationsAndReservesStatusAndShutdown(t *testing.T) {
 	if err := client.call(context.Background(), ep, "blocked", nil, nil); err == nil || !strings.Contains(err.Error(), "busy") {
 		t.Fatalf("overflow request: %v", err)
 	}
-	for _, method := range []string{"status", "shutdown"} {
+	for _, method := range []string{"status", "shutdown", "cancel-apply"} {
 		var result map[string]bool
 		if err := client.call(context.Background(), ep, method, nil, &result); err != nil || !result["ok"] {
 			t.Fatalf("reserved %s: %v %v", method, result, err)

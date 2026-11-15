@@ -61,6 +61,26 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 	if method == "status" {
 		return a.dispatchAgentStatus(ctx)
 	}
+	if method == "cancel-apply" {
+		var in agent.Empty
+		if err := decodeStrict(args, &in); err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		engine, ok := a.core.(interface {
+			CancelActiveApply(context.Context) (bool, error)
+		})
+		if !ok {
+			return nil, errors.New("kernel does not support canceling configuration application")
+		}
+		accepted, err := engine.CancelActiveApply(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return agent.CancelApplyResult{Accepted: accepted}, nil
+	}
 	if method == "verge-script-cache-prune" {
 		var in agent.Empty
 		if err := decodeStrict(args, &in); err != nil {

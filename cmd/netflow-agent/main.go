@@ -28,6 +28,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	flags.Usage = func() {
 		fmt.Fprintln(output, "netflow-agent [--config-dir PATH] [--pid PID] <command>\nCommands: serve [--tun=false], shutdown, version, status, diagnostics, kernel-options, kernel-option NAME VALUE|inherit, update-geo, tun on|off, profiles, profile-settings ID, profile-settings-set|profile-url-set (JSON stdin), import-profile, update-profile ID, delete-profile ID, profile-job-status ID, groups, providers, update-provider KIND NAME, provider-job-status ID, delay-test (JSON stdin), delay-job-status ID, rules [OFFSET [LIMIT]], select GROUP NODE, mode MODE, use-profile ID, close-connection ID, rewrite-history, clear-rewrite-history, preview|rollback-preview (JSON stdin), chain-status, chain-preview (JSON stdin), chain-apply ID, chain-cancel-preview ID, chain-disconnect, preview-rules ID before|after [OFFSET [LIMIT]], cancel-preview ID, apply ID, mcp, migrate-preview PATH, migrate-import PATH, migrate-export PATH, backup-create PATH, restore-create ARCHIVE DIRECTORY, backup-job-status ID, backup-schedule, backup-schedule-set off|on DIRECTORY HOURS, backup-on-change on|off, backup-webdav on|off, webdav-config, webdav-clear, webdav-save|webdav-list|webdav-upload|webdav-restore (JSON stdin), backup-export PATH, backup-restore PATH")
 		fmt.Fprintln(output, "tun-autostart [on|off] sets the GUI startup preference; connections, profiles and groups accept [OFFSET [LIMIT]]; group-nodes GROUP and provider-page proxy|rule accept [OFFSET [LIMIT]]")
+		fmt.Fprintln(output, "cancel-apply requests cancellation of the current configuration application; wait for its rollback before changing settings")
 		fmt.Fprintln(output, "verge-script-preview (JSON stdin), verge-script-update-preview PROFILE, verge-script-url-preview (JSON stdin), verge-script-rollback-preview PROFILE, verge-script-apply ID, verge-script-preview-rules|verge-script-preview-config ID before|after [OFFSET [LIMIT]], verge-script-preview-cancel ID, verge-script-cache-prune; config contains private data")
 	}
 	dir := flags.String("config-dir", "", "absolute NetFlow config directory")
@@ -447,6 +448,15 @@ func run(args []string, input io.Reader, output io.Writer) error {
 		}
 		var out agent.Status
 		if err := client.Call(ctx, "status", nil, &out); err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(out)
+	case "cancel-apply":
+		if flags.NArg() != 1 {
+			return errors.New("cancel-apply takes no additional arguments")
+		}
+		var out agent.CancelApplyResult
+		if err := client.Call(ctx, "cancel-apply", nil, &out); err != nil {
 			return err
 		}
 		return json.NewEncoder(output).Encode(out)

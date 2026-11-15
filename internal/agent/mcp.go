@@ -114,6 +114,12 @@ func NewMCP(client Client) *mcp.Server {
 			err := client.Call(ctx, "shutdown", nil, &out)
 			return nil, out, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_cancel_apply", Description: "Request cancellation of the configuration application active when this request reaches the kernel. Accepted means cancellation was requested, not that rollback is complete; wait for the original operation and inspect status. Does not intentionally disable TUN."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, CancelApplyResult, error) {
+			var out CancelApplyResult
+			err := client.Call(ctx, "cancel-apply", nil, &out)
+			return nil, out, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "netflow_set_tun", Description: "Request TUN on or off; enabling may show a Windows administrator consent prompt. If pending, poll netflow_status for tun_pending and tun_error."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in TunArgs) (*mcp.CallToolResult, TunResult, error) {
 			var out TunResult

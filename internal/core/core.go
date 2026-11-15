@@ -87,11 +87,29 @@ func (c *Core) SetInterruptCheck(check func() bool) { c.interruptCheck = check }
 // InterruptApply cancels network reads made by providers being initialized.
 // It does not wait for the core's configuration lock or tear down a TUN.
 func (c *Core) InterruptApply() {
+	_, _ = c.cancelActiveApply(context.Background())
+}
+
+// CancelActiveApply requests cancellation of the operation active at the
+// instant this method executes. Its caller must wait for the original
+// transaction to finish its rollback before assuming the configuration.
+func (c *Core) CancelActiveApply(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return c.cancelActiveApply(ctx)
+}
+
+func (c *Core) cancelActiveApply(ctx context.Context) (bool, error) {
 	c.applyStateMu.Lock()
-	op := c.applying
-	if op == nil {
+	if err := ctx.Err(); err != nil {
 		c.applyStateMu.Unlock()
-		return
+		return false, err
+	}
+	op := c.applying
+	if op == nil || op.interrupted {
+		c.applyStateMu.Unlock()
+		return false, nil
 	}
 	op.interrupted = true
 	providers := append([]applyProvider(nil), op.providers...)
@@ -99,6 +117,7 @@ func (c *Core) InterruptApply() {
 	for _, p := range providers {
 		p.PauseUpdates()
 	}
+	return true, nil
 }
 
 // interruptApplyIfCurrent prevents a late cancellation from affecting a later

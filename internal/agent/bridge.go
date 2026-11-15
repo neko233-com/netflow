@@ -119,6 +119,7 @@ func Start(dir string, handle Handler) (*Bridge, error) {
 	operations := make(chan struct{}, maxBridgeOperations)
 	statuses := make(chan struct{}, 2)
 	shutdowns := make(chan struct{}, 2)
+	cancellations := make(chan struct{}, 2)
 	b.server = &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != e.Address || r.Header.Get("Origin") != "" {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -163,6 +164,8 @@ func Start(dir string, handle Handler) (*Bridge, error) {
 			slots = statuses
 		case "shutdown":
 			slots = shutdowns
+		case "cancel-apply":
+			slots = cancellations
 		}
 		select {
 		case slots <- struct{}{}:

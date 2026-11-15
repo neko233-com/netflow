@@ -465,6 +465,9 @@ type ActionResult struct {
 	OK       bool     `json:"ok"`
 	Warnings []string `json:"warnings,omitempty"`
 }
+type CancelApplyResult struct {
+	Accepted bool `json:"accepted"`
+}
 type CloseResult struct {
 	Closed bool `json:"closed"`
 }

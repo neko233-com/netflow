@@ -25,6 +25,41 @@ type testSnapshot struct {
 	data []byte
 }
 
+type uninitializedSnapshot struct{ path string }
+
+func (*uninitializedSnapshot) VehicleType() P.VehicleType { return P.HTTP }
+func (s *uninitializedSnapshot) WithSnapshot(fn func(P.Vehicle, utils.HashType) error) error {
+	return fn(resource.NewHTTPVehicle("https://example.invalid", s.path, "", nil, time.Second, 0), utils.HashType{})
+}
+
+func TestUninitializedProviderDoesNotBlockCacheSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "providers", "new.yaml")
+	provider := &uninitializedSnapshot{path: path}
+	for _, existing := range []bool{false, true} {
+		if existing {
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("unvalidated"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var out ProviderCaches
+		if err := collectProviderCaches(dir, []providerSnapshot{provider}, ProviderCacheQuery{}, &out); err != nil || out.Warning != "" || len(out.Items) != 0 {
+			t.Fatalf("uninitialized cache (exists=%v): %+v %v", existing, out, err)
+		}
+	}
+	var duplicate ProviderCaches
+	if err := collectProviderCaches(dir, []providerSnapshot{provider, provider}, ProviderCacheQuery{}, &duplicate); err != nil || duplicate.Warning == "" {
+		t.Fatalf("duplicate path accepted: %+v %v", duplicate, err)
+	}
+	var protected ProviderCaches
+	if err := collectProviderCaches(dir, []providerSnapshot{&uninitializedSnapshot{path: filepath.Join(dir, "config.yaml")}}, ProviderCacheQuery{}, &protected); err != nil || protected.Warning == "" {
+		t.Fatalf("protected path accepted: %+v %v", protected, err)
+	}
+}
+
 func (*testSnapshot) VehicleType() P.VehicleType { return P.HTTP }
 func (s *testSnapshot) WithSnapshot(fn func(P.Vehicle, utils.HashType) error) error {
 	return fn(resource.NewHTTPVehicle("https://example.invalid", s.path, "", nil, time.Second, 0), utils.MakeHash(s.data))

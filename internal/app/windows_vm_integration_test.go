@@ -1677,6 +1677,149 @@ func vmProviderBusyTUN(t *testing.T, agentExe string) {
 	t.Fatal("busy-provider test did not restore networking")
 }
 
+func vmCancelProfileApply(t *testing.T, agentExe string) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var enteredOnce, canceledOnce sync.Once
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enteredOnce.Do(func() { close(entered) })
+		select {
+		case <-r.Context().Done():
+			canceledOnce.Do(func() { close(canceled) })
+		case <-release:
+		}
+	}))
+	defer provider.Close()
+	defer close(release)
+	dir := t.TempDir()
+	base := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	next := base + "proxy-providers:\n  uncached: {type: http, url: '" + provider.URL + "', path: providers/cancel-vm.yaml, interval: 3600, health-check: {enable: false}}\n"
+	store := profile.NewStore(dir)
+	first, err := store.ImportLocal("first.yaml", []byte(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.ImportLocal("second.yaml", []byte(next))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	process := vmCommand(ctx, agentExe, "--config-dir", dir, "serve")
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- process.Wait() }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			_ = process.Process.Kill()
+			<-finished
+		}
+	}()
+	client := agent.Client{Dir: dir, Timeout: 5 * time.Second}
+	deadline := time.Now().Add(90 * time.Second)
+	var status agent.Status
+	for time.Now().Before(deadline) {
+		if err := client.Call(context.Background(), "status", nil, &status); err == nil && status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if !status.TUN || status.ActiveProfile != first.UID {
+		t.Fatalf("initial TUN/profile: %+v", status)
+	}
+	activeRoutes, activeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	configBefore, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	switched := make(chan error, 1)
+	go func() {
+		switched <- client.Call(context.Background(), "use-profile", agent.ProfileArgs{ProfileID: second.UID}, nil)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(15 * time.Second):
+		t.Fatal("profile provider did not start")
+	}
+	commandCtx, commandCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	output, err := vmCommand(commandCtx, agentExe, "--config-dir", dir, "cancel-apply").CombinedOutput()
+	commandCancel()
+	var result agent.CancelApplyResult
+	if err != nil || json.Unmarshal(output, &result) != nil || !result.Accepted {
+		t.Fatalf("cancel-apply CLI: %s %v", output, err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("profile provider was not canceled")
+	}
+	select {
+	case err := <-switched:
+		if err == nil {
+			t.Fatal("canceled profile switch reported success")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("profile rollback timed out")
+	}
+	deadline = time.Now().Add(15 * time.Second)
+	var statusErr error
+	for time.Now().Before(deadline) {
+		statusErr = client.Call(context.Background(), "status", nil, &status)
+		if statusErr == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if statusErr != nil || !status.Running || !status.TUN || status.ActiveProfile != first.UID {
+		t.Fatalf("profile/TUN after cancellation: %+v %v", status, statusErr)
+	}
+	configAfter, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if err != nil || !bytes.Equal(configBefore, configAfter) {
+		t.Fatalf("profile config rollback: %v", err)
+	}
+	catalog, err := store.Load()
+	if err != nil || catalog.Current != first.UID {
+		t.Fatalf("profile catalog rollback: %+v %v", catalog, err)
+	}
+	routes, dns, err := vmNetworkSnapshot()
+	if err != nil || !reflect.DeepEqual(routes, activeRoutes) || !reflect.DeepEqual(dns, activeDNS) {
+		t.Fatalf("cancel changed active TUN network: %v", err)
+	}
+	var shutdown agent.ActionResult
+	if err := client.Call(context.Background(), "shutdown", nil, &shutdown); err != nil || !shutdown.OK {
+		t.Fatalf("shutdown: %+v %v", shutdown, err)
+	}
+	select {
+	case err := <-finished:
+		stopped = true
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("shutdown timed out")
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, dns, err := vmNetworkSnapshot()
+		if err == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
+			t.Log("installed CLI canceled profile application, restored previous profile, and kept TUN active")
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatal("cancel-profile test did not restore networking after shutdown")
+}
+
 func vmHeadlessStartupCancellation(t *testing.T, appExe string) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -2961,6 +3104,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	t.Log("installed headless CLI activated TUN, applied a rewrite without visible windows, and restored networking on shutdown")
 	vmProviderBusyTUN(t, agentExe)
 	vmHeadlessUncachedShutdown(t, agentExe)
+	vmCancelProfileApply(t, agentExe)
 	vmHeadlessStartupCancellation(t, filepath.Join(install, "NetFlow.exe"))
 	vmHeadlessParentExit(t, agentExe, backupTarget)
 	t.Log("headless child restored networking after its CLI launcher was forcibly terminated")

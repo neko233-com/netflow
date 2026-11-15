@@ -100,6 +100,17 @@ func (s *switchableEngine) TryReload() error {
 	return s.active.Reload()
 }
 func (s *switchableEngine) Stop() error { s.mu.RLock(); defer s.mu.RUnlock(); return s.active.Stop() }
+func (s *switchableEngine) CancelActiveApply(ctx context.Context) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	engine, ok := s.active.(interface {
+		CancelActiveApply(context.Context) (bool, error)
+	})
+	if !ok {
+		return false, errors.New("kernel does not support canceling configuration application")
+	}
+	return engine.CancelActiveApply(ctx)
+}
 func (s *switchableEngine) CacheWarning() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

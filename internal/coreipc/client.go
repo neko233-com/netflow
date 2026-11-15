@@ -140,6 +140,31 @@ func (c *Client) providerPauseCall(method string, in any, timeout time.Duration)
 		return fmt.Errorf("kernel %s timed out", method)
 	}
 }
+
+// CancelActiveApply is independent of applyMu so it can interrupt a reload
+// that is itself waiting for a provider. A timeout does not close the TUN
+// transport; the worker rejects a request that arrives after its deadline.
+func (c *Client) CancelActiveApply(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	var out BoolResult
+	done := c.rpc.Go("Kernel.CancelApply", ApplyCancellation{Deadline: deadline.UnixNano()}, &out, make(chan *rpc.Call, 1)).Done
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case call := <-done:
+		return out.Value, call.Error
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-timer.C:
+		return false, errors.New("kernel apply cancellation timed out")
+	}
+}
 func (c *Client) SetTransformer(fn func([]byte, string) ([]byte, error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

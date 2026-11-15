@@ -407,6 +407,31 @@ func TestTUNAutoStartCLI(t *testing.T) {
 	}
 }
 
+func TestCancelApplyCLI(t *testing.T) {
+	dir := t.TempDir()
+	bridge, err := agent.Start(dir, func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method != "cancel-apply" {
+			return nil, errors.New("unexpected method")
+		}
+		return agent.CancelApplyResult{Accepted: true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bridge.Close()
+	var output bytes.Buffer
+	if err := run([]string{"--config-dir", dir, "cancel-apply"}, strings.NewReader(""), &output); err != nil {
+		t.Fatal(err)
+	}
+	var result agent.CancelApplyResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil || !result.Accepted {
+		t.Fatalf("response: %s %v", output.String(), err)
+	}
+	if err := run([]string{"--config-dir", dir, "cancel-apply", "extra"}, strings.NewReader(""), &bytes.Buffer{}); err == nil {
+		t.Fatal("extra argument accepted")
+	}
+}
+
 func TestDiagnosticsCommandUsesBridge(t *testing.T) {
 	dir := t.TempDir()
 	bridge, err := agent.Start(dir, func(_ context.Context, method string, _ json.RawMessage) (any, error) {
