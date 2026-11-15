@@ -14,12 +14,14 @@ import (
 	"testing"
 	"time"
 
+	mygoui "github.com/egoist/mygo/ui"
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appconfig"
 	"github.com/neko233-com/netflow/internal/appdir"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/sysproxy"
 	"github.com/neko233-com/netflow/internal/tun"
+	"github.com/neko233-com/netflow/internal/ui"
 )
 
 type failRestartStop struct{ coreEngine }
@@ -93,9 +95,17 @@ func TestRestartRemainsResponsiveAndCanBeCanceled(t *testing.T) {
 		t.Fatal("event loop blocked")
 	}
 	var label string
-	d.call(func() { label = a.model.OperationCancelLabel; a.cancelGUIConfigOperation(a.guiOperation) })
+	var clickErr error
+	d.call(func() {
+		label = a.model.OperationCancelLabel
+		tester := mygoui.NewTester(a.model.View, ui.WindowWidth, ui.WindowHeight)
+		clickErr = tester.Click("取消重启")
+	})
 	if label != "取消重启" {
 		t.Fatal("restart cancellation misrepresented")
+	}
+	if clickErr != nil {
+		t.Fatalf("restart cancel control: %v", clickErr)
 	}
 	select {
 	case err := <-result:
