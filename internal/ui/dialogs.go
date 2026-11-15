@@ -1081,22 +1081,29 @@ func (m *Model) portsBody(c *mygoui.Context, pal Palette) {
 			m.Notice = err
 			return
 		}
-		if m.Hooks.SetKernelPorts != nil {
-			if applyErr := m.Hooks.SetKernelPorts(ports); applyErr != nil {
+		finish := func(applyErr error) {
+			if applyErr != nil {
 				m.Notice = applyErr.Error()
 				return
 			}
+			if m.Hooks.SetKernelPorts == nil && m.Hooks.SetKernelPortsAsync == nil {
+				m.Prefs.MixedPort = ports.Mixed
+				m.Prefs.SocksPort = ports.Socks
+				m.Prefs.SocksOn = ports.SocksOn
+				m.Prefs.HTTPPort = ports.HTTP
+				m.Prefs.HTTPOn = ports.HTTPOn
+			}
+			m.Home.MixedPort = ports.Mixed
+			m.Notice = "端口设置已保存"
+			m.Dialogs.Ports = false
 		}
-		if m.Hooks.SetKernelPorts == nil {
-			m.Prefs.MixedPort = p.MixedPort
-			m.Prefs.SocksPort = p.SocksPort
-			m.Prefs.SocksOn = p.SocksOn
-			m.Prefs.HTTPPort = p.HTTPPort
-			m.Prefs.HTTPOn = p.HTTPOn
+		if m.Hooks.SetKernelPortsAsync != nil {
+			m.Hooks.SetKernelPortsAsync(ports, finish)
+		} else if m.Hooks.SetKernelPorts != nil {
+			finish(m.Hooks.SetKernelPorts(ports))
+		} else {
+			finish(nil)
 		}
-		m.Home.MixedPort = p.MixedPort
-		m.Notice = "端口设置已保存"
-		m.Dialogs.Ports = false
 	}
 	_ = pal
 }
@@ -1141,14 +1148,18 @@ func (m *Model) tunBody(c *mygoui.Context, pal Palette) {
 	}
 	if mygoui.Select(c, &m.TunStack, stacks).Label("tun-stack").Changed() {
 		values := map[string]string{"跟随订阅": "", "System": "system", "gVisor": "gvisor", "Mixed": "mixed", "Mips": "mips"}
-		if m.Hooks.SetKernelOption == nil {
+		if m.Hooks.SetKernelOption == nil && m.Hooks.SetKernelOptionAsync == nil {
 			m.TunStack = previous
 			m.Notice = "内核设置不可用"
-		} else if err := m.Hooks.SetKernelOption("tun-stack", values[m.TunStack]); err != nil {
-			m.TunStack = previous
-			m.Notice = err.Error()
 		} else {
-			m.Notice = "TUN 协议栈已保存"
+			m.applyKernelOption("tun-stack", values[m.TunStack], func(err error) {
+				if err != nil {
+					m.TunStack = previous
+					m.Notice = err.Error()
+				} else {
+					m.Notice = "TUN 协议栈已保存"
+				}
+			})
 		}
 	}
 	if !features.WithGVisor {

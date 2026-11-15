@@ -175,6 +175,8 @@ func (a *App) ready(quitting *bool) {
 	})
 	a.model.Hooks.SetTUNAsync = a.requestTUN
 	a.model.Hooks.SetModeAsync = a.setModeAsync
+	a.model.Hooks.SetKernelOptionAsync = a.setKernelOptionAsync
+	a.model.Hooks.SetKernelPortsAsync = a.setKernelPortsAsync
 	a.model.Hooks.ApplyRewriteAsync = a.agentApplyAsync
 	a.model.Hooks.UseProfileAsync = a.useProfileAsync
 	a.model.Hooks.ImportURLAsync = a.importURLAsync

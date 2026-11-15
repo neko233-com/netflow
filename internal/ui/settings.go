@@ -127,12 +127,12 @@ func (m *Model) clashSettings(c *mygoui.Context, pal Palette) {
 			mygoui.Text(c, "日志等级").FontSize(14).Grow(1)
 			previous := m.Prefs.LogLevel
 			if mygoui.Select(c, &m.Prefs.LogLevel, []string{"debug", "info", "warning", "error", "silent"}).Width(120).Label("log-level").Changed() {
-				if m.Hooks.SetKernelOption != nil {
-					if err := m.Hooks.SetKernelOption("log-level", m.Prefs.LogLevel); err != nil {
+				m.applyKernelOption("log-level", m.Prefs.LogLevel, func(err error) {
+					if err != nil {
 						m.Prefs.LogLevel = previous
 						m.Notice = err.Error()
 					}
-				}
+				})
 			}
 		})
 		clickRow(c, pal, "端口设置", "ports", m.Busy == "ports", func() { m.Dialogs.Ports = true }, func() {
@@ -161,12 +161,24 @@ func (m *Model) clashSettings(c *mygoui.Context, pal Palette) {
 }
 
 func (m *Model) setKernelBool(name string, field *bool, on bool) {
-	if m.Hooks.SetKernelOption != nil {
-		if err := m.Hooks.SetKernelOption(name, on); err != nil {
+	m.applyKernelOption(name, on, func(err error) {
+		if err != nil {
 			*field = !on
 			m.Notice = err.Error()
 		}
+	})
+}
+
+func (m *Model) applyKernelOption(name string, value any, done func(error)) {
+	if m.Hooks.SetKernelOptionAsync != nil {
+		m.Hooks.SetKernelOptionAsync(name, value, done)
+		return
 	}
+	if m.Hooks.SetKernelOption != nil {
+		done(m.Hooks.SetKernelOption(name, value))
+		return
+	}
+	done(nil)
 }
 
 func (m *Model) vergeBasic(c *mygoui.Context, pal Palette) {

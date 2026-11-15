@@ -81,6 +81,48 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		}
 		return agent.CancelApplyResult{Accepted: accepted}, nil
 	}
+	if method == "kernel-option" && !a.headless {
+		var input agent.KernelOptionArgs
+		if err := decodeStrict(args, &input); err != nil {
+			return nil, err
+		}
+		type response struct {
+			value agent.KernelOptionsResult
+			err   error
+		}
+		result := make(chan response, 1)
+		executed := false
+		a.runOnMain(func() {
+			executed = true
+			if err := ctx.Err(); err != nil {
+				result <- response{err: err}
+				return
+			}
+			a.startGUIConfigOperation("正在应用内核设置", func() (*guiConfigTransaction, error) {
+				next, err := a.agentKernelOptionCandidate(input)
+				if err != nil {
+					return nil, err
+				}
+				return a.beginGUIKernelOptions(next, false)
+			}, func(err error) {
+				if err != nil {
+					result <- response{err: err}
+					return
+				}
+				value, err := a.agentKernelOptions()
+				result <- response{value: value, err: err}
+			})
+		})
+		if !executed {
+			return nil, errors.New("desktop application is shutting down")
+		}
+		select {
+		case out := <-result:
+			return out.value, out.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if method == "apply" && !a.headless {
 		var input agent.ApplyArgs
 		if err := decodeStrict(args, &input); err != nil {

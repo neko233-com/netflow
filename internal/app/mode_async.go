@@ -7,6 +7,7 @@ import (
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/profile"
 	"github.com/neko233-com/netflow/internal/safepath"
+	"github.com/neko233-com/netflow/internal/ui"
 )
 
 func (a *App) setModeAsync(mode string, done func(error)) {
@@ -23,29 +24,7 @@ func (a *App) setModeAsync(mode string, done func(error)) {
 		if a.kernelOptions != nil {
 			next := a.kernelOptions.Snapshot()
 			next.Mode = &mode
-			var old kernelopts.Options
-			if err := a.stageKernelOptions(next, &old); err != nil {
-				return nil, err
-			}
-			return &guiConfigTransaction{
-				reload: true,
-				commit: func() error {
-					a.refreshHome()
-					a.loadGroups()
-					a.refreshHome()
-					return nil
-				},
-				rollback: func() (bool, error) {
-					err := a.kernelOptions.Replace(old)
-					return err == nil, err
-				},
-				wrap: func(cause, restoreErr error) error {
-					if restoreErr != nil {
-						return errors.Join(cause, fmt.Errorf("恢复原设置失败: %w", restoreErr))
-					}
-					return cause
-				},
-			}, nil
+			return a.beginGUIKernelOptions(next, true)
 		}
 		if a.dir == "" {
 			return &guiConfigTransaction{commit: func() error { return nil }, rollback: func() (bool, error) { return false, nil }, wrap: func(err, _ error) error { return err }}, nil
@@ -78,5 +57,50 @@ func (a *App) setModeAsync(mode string, done func(error)) {
 				return cause
 			},
 		}, nil
+	}, done)
+}
+
+func (a *App) beginGUIKernelOptions(next kernelopts.Options, refreshGroups bool) (*guiConfigTransaction, error) {
+	var old kernelopts.Options
+	if err := a.stageKernelOptions(next, &old); err != nil {
+		return nil, err
+	}
+	return &guiConfigTransaction{
+		reload: true,
+		commit: func() error {
+			a.refreshHome()
+			if refreshGroups {
+				a.loadGroups()
+				a.refreshHome()
+			}
+			return nil
+		},
+		rollback: func() (bool, error) { err := a.kernelOptions.Replace(old); return err == nil, err },
+		wrap: func(cause, restoreErr error) error {
+			if restoreErr != nil {
+				return errors.Join(cause, fmt.Errorf("恢复原设置失败: %w", restoreErr))
+			}
+			return cause
+		},
+	}, nil
+}
+
+func (a *App) setKernelOptionAsync(name string, value any, done func(error)) {
+	a.startGUIConfigOperation("正在应用内核设置", func() (*guiConfigTransaction, error) {
+		next, err := a.kernelOptionCandidate(name, value)
+		if err != nil {
+			return nil, err
+		}
+		return a.beginGUIKernelOptions(next, false)
+	}, done)
+}
+
+func (a *App) setKernelPortsAsync(ports ui.PortSet, done func(error)) {
+	a.startGUIConfigOperation("正在应用端口设置", func() (*guiConfigTransaction, error) {
+		next, err := a.kernelPortsCandidate(ports)
+		if err != nil {
+			return nil, err
+		}
+		return a.beginGUIKernelOptions(next, false)
 	}, done)
 }

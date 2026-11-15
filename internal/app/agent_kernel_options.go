@@ -6,6 +6,7 @@ import (
 
 	"github.com/metacubex/mihomo/constant/features"
 	"github.com/neko233-com/netflow/internal/agent"
+	"github.com/neko233-com/netflow/internal/kernelopts"
 )
 
 func (a *App) agentKernelOptions() (agent.KernelOptionsResult, error) {
@@ -26,9 +27,20 @@ func (a *App) agentKernelOptions() (agent.KernelOptionsResult, error) {
 }
 
 func (a *App) agentSetKernelOption(input agent.KernelOptionArgs) (agent.KernelOptionsResult, error) {
-	current, err := a.agentKernelOptions()
+	next, err := a.agentKernelOptionCandidate(input)
 	if err != nil {
 		return agent.KernelOptionsResult{}, err
+	}
+	if err = a.applyKernelOptions(next); err != nil {
+		return agent.KernelOptionsResult{}, err
+	}
+	return a.agentKernelOptions()
+}
+
+func (a *App) agentKernelOptionCandidate(input agent.KernelOptionArgs) (kernelopts.Options, error) {
+	current, err := a.agentKernelOptions()
+	if err != nil {
+		return kernelopts.Options{}, err
 	}
 	count := 0
 	if input.BoolValue != nil {
@@ -41,13 +53,13 @@ func (a *App) agentSetKernelOption(input agent.KernelOptionArgs) (agent.KernelOp
 		count++
 	}
 	if (input.Inherit && count != 0) || (!input.Inherit && count != 1) {
-		return agent.KernelOptionsResult{}, errors.New("specify inherit or exactly one typed option value")
+		return kernelopts.Options{}, errors.New("specify inherit or exactly one typed option value")
 	}
 	next := current.Overrides
 	switch input.Name {
 	case "allow-lan", "ipv6", "unified-delay":
 		if !input.Inherit && input.BoolValue == nil {
-			return agent.KernelOptionsResult{}, errors.New("boolean value required")
+			return kernelopts.Options{}, errors.New("boolean value required")
 		}
 		switch input.Name {
 		case "allow-lan":
@@ -59,24 +71,24 @@ func (a *App) agentSetKernelOption(input agent.KernelOptionArgs) (agent.KernelOp
 		}
 	case "log-level", "tun-stack":
 		if !input.Inherit && input.StringValue == nil {
-			return agent.KernelOptionsResult{}, errors.New("string value required")
+			return kernelopts.Options{}, errors.New("string value required")
 		}
 		if input.Name == "log-level" {
 			next.LogLevel = input.StringValue
 		} else {
 			if input.StringValue != nil && (*input.StringValue == "mixed" || *input.StringValue == "gvisor") && !features.WithGVisor {
-				return agent.KernelOptionsResult{}, errors.New("this build does not include gVisor")
+				return kernelopts.Options{}, errors.New("this build does not include gVisor")
 			}
 			next.TUNStack = input.StringValue
 		}
 	case "mixed-port", "socks-port", "http-port":
 		if !input.Inherit && input.PortValue == nil {
-			return agent.KernelOptionsResult{}, errors.New("port value required")
+			return kernelopts.Options{}, errors.New("port value required")
 		}
 		switch input.Name {
 		case "mixed-port":
 			if a.settings.SystemProxy {
-				return agent.KernelOptionsResult{}, errors.New("restore the legacy system proxy before changing its port")
+				return kernelopts.Options{}, errors.New("restore the legacy system proxy before changing its port")
 			}
 			next.MixedPort = input.PortValue
 		case "socks-port":
@@ -85,10 +97,7 @@ func (a *App) agentSetKernelOption(input agent.KernelOptionArgs) (agent.KernelOp
 			next.HTTPPort = input.PortValue
 		}
 	default:
-		return agent.KernelOptionsResult{}, fmt.Errorf("unknown kernel option %q", input.Name)
+		return kernelopts.Options{}, fmt.Errorf("unknown kernel option %q", input.Name)
 	}
-	if err := a.applyKernelOptions(next); err != nil {
-		return agent.KernelOptionsResult{}, err
-	}
-	return a.agentKernelOptions()
+	return next, nil
 }

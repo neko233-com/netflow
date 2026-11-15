@@ -90,6 +90,8 @@ type Hooks struct {
 	ApplyRewriteAsync               func(id string, done func(agent.ApplyResult, error))
 	SetKernelOption                 func(name string, value any) error
 	SetKernelPorts                  func(PortSet) error
+	SetKernelOptionAsync            func(name string, value any, done func(error))
+	SetKernelPortsAsync             func(PortSet, func(error))
 	SavePrefs                       func(Prefs) error
 	ClearWebDAVSecret               func() error
 	SaveWebDAVConfig                func(agent.WebDAVConfigArgs) error

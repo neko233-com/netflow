@@ -2261,8 +2261,9 @@ func vmGUIProfileSwitchCancellation(t *testing.T, guiExe string, quit bool) {
 
 // A GUI mode change can also initialize uncached providers. Verify that its
 // native cancel control remains usable and restores the previous mode and TUN.
-func vmGUIConfigSwitchCancellation(t *testing.T, guiExe string, rules bool) {
+func vmGUIConfigSwitchCancellation(t *testing.T, guiExe string, scenario string) {
 	t.Helper()
+	rules := scenario == "rules"
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
 	if err != nil {
 		t.Fatal(err)
@@ -2395,6 +2396,9 @@ func vmGUIConfigSwitchCancellation(t *testing.T, guiExe string, rules bool) {
 		t.Fatal(err)
 	}
 	message := "正在切换模式"
+	if scenario == "option" {
+		message = "正在应用内核设置"
+	}
 	var preview agent.Preview
 	if rules {
 		message = "正在应用规则"
@@ -2407,6 +2411,11 @@ func vmGUIConfigSwitchCancellation(t *testing.T, guiExe string, rules bool) {
 	go func() {
 		if rules {
 			result <- client.Call(context.Background(), "apply", agent.ApplyArgs{ProposalID: preview.ProposalID}, nil)
+			return
+		}
+		if scenario == "option" {
+			enabled := true
+			result <- client.Call(context.Background(), "kernel-option", agent.KernelOptionArgs{Name: "ipv6", BoolValue: &enabled}, nil)
 			return
 		}
 		result <- client.Call(context.Background(), "mode", agent.ModeArgs{Mode: "direct"}, nil)
@@ -2465,6 +2474,9 @@ func vmGUIConfigSwitchCancellation(t *testing.T, guiExe string, rules bool) {
 	options, err := kernelopts.Open(dir)
 	if err != nil || options.Snapshot().Mode != nil {
 		t.Fatalf("mode override was not restored: %v", err)
+	}
+	if scenario == "option" && options.Snapshot().IPv6 != nil {
+		t.Fatal("kernel option override was not restored")
 	}
 	if rules {
 		store, err := rewrite.Open(dir)
@@ -2528,6 +2540,8 @@ func vmGUIConfigSwitchCancellation(t *testing.T, guiExe string, rules bool) {
 	stopped = true
 	if rules {
 		t.Log("native GUI canceled validated rule application, restored rules and preserved live TUN fake-IP forwarding")
+	} else if scenario == "option" {
+		t.Log("native GUI canceled Agent kernel option, restored settings and preserved live TUN fake-IP forwarding")
 	} else {
 		t.Log("native GUI canceled mode loading, restored mode and preserved live TUN fake-IP forwarding")
 	}
@@ -3957,8 +3971,9 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	vmCancelProfileApply(t, agentExe)
 	vmGUIProfileSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), false)
 	vmGUIProfileSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), true)
-	vmGUIConfigSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), false)
-	vmGUIConfigSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), true)
+	vmGUIConfigSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), "mode")
+	vmGUIConfigSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), "rules")
+	vmGUIConfigSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), "option")
 	vmHeadlessStartupCancellation(t, filepath.Join(install, "NetFlow.exe"))
 	vmGUIStartupProvider(t, filepath.Join(install, "NetFlow.exe"))
 	vmHeadlessParentExit(t, agentExe, backupTarget)

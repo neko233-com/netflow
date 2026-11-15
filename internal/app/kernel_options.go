@@ -15,15 +15,23 @@ import (
 )
 
 func (a *App) SetKernelOption(name string, value any) error {
+	next, err := a.kernelOptionCandidate(name, value)
+	if err != nil {
+		return err
+	}
+	return a.applyKernelOptions(next)
+}
+
+func (a *App) kernelOptionCandidate(name string, value any) (kernelopts.Options, error) {
 	if a == nil || a.kernelOptions == nil {
-		return errors.New("内核选项尚未就绪")
+		return kernelopts.Options{}, errors.New("内核选项尚未就绪")
 	}
 	next := a.kernelOptions.Snapshot()
 	switch name {
 	case "allow-lan", "ipv6", "unified-delay":
 		v, ok := value.(bool)
 		if !ok {
-			return errors.New("选项类型无效")
+			return kernelopts.Options{}, errors.New("选项类型无效")
 		}
 		switch name {
 		case "allow-lan":
@@ -36,10 +44,10 @@ func (a *App) SetKernelOption(name string, value any) error {
 	case "tun-stack":
 		v, ok := value.(string)
 		if !ok {
-			return errors.New("TUN 协议栈类型无效")
+			return kernelopts.Options{}, errors.New("TUN 协议栈类型无效")
 		}
 		if (v == "mixed" || v == "gvisor") && !features.WithGVisor {
-			return errors.New("当前构建未包含 gVisor，无法使用此协议栈")
+			return kernelopts.Options{}, errors.New("当前构建未包含 gVisor，无法使用此协议栈")
 		}
 		if v == "" {
 			next.TUNStack = nil
@@ -49,24 +57,32 @@ func (a *App) SetKernelOption(name string, value any) error {
 	case "log-level":
 		v, ok := value.(string)
 		if !ok {
-			return errors.New("日志等级类型无效")
+			return kernelopts.Options{}, errors.New("日志等级类型无效")
 		}
 		next.LogLevel = &v
 	default:
-		return errors.New("未知的内核选项")
+		return kernelopts.Options{}, errors.New("未知的内核选项")
+	}
+	return next, nil
+}
+
+func (a *App) SetKernelPorts(p ui.PortSet) error {
+	next, err := a.kernelPortsCandidate(p)
+	if err != nil {
+		return err
 	}
 	return a.applyKernelOptions(next)
 }
 
-func (a *App) SetKernelPorts(p ui.PortSet) error {
+func (a *App) kernelPortsCandidate(p ui.PortSet) (kernelopts.Options, error) {
 	if a == nil || a.kernelOptions == nil {
-		return errors.New("内核选项尚未就绪")
+		return kernelopts.Options{}, errors.New("内核选项尚未就绪")
 	}
 	if err := ui.ValidatePorts(p); err != "" {
-		return errors.New(err)
+		return kernelopts.Options{}, errors.New(err)
 	}
 	if a.settings.SystemProxy && a.core != nil && p.Mixed != a.core.Status().MixedPort {
-		return errors.New("请先关闭系统代理，再修改混合代理端口")
+		return kernelopts.Options{}, errors.New("请先关闭系统代理，再修改混合代理端口")
 	}
 	next := a.kernelOptions.Snapshot()
 	mixed, socks, http, redir, tproxy := p.Mixed, 0, 0, 0, 0
@@ -92,7 +108,7 @@ func (a *App) SetKernelPorts(p ui.PortSet) error {
 	if p.ShowTProxy {
 		next.TProxyPort = &tproxy
 	}
-	return a.applyKernelOptions(next)
+	return next, nil
 }
 
 // stageKernelOptions validates and persists the candidate on the app event

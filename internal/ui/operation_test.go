@@ -64,6 +64,54 @@ func TestModeSwitchRestoresDisplayedModeOnAsyncFailure(t *testing.T) {
 	}
 }
 
+func TestKernelOptionRestoresDisplayedValueOnAsyncFailure(t *testing.T) {
+	m := DemoModel()
+	var finish func(error)
+	m.Hooks.SetKernelOptionAsync = func(name string, value any, done func(error)) {
+		if name != "ipv6" || value != true {
+			t.Fatalf("option: %s %v", name, value)
+		}
+		finish = done
+	}
+	m.Prefs.IPv6 = true
+	m.setKernelBool("ipv6", &m.Prefs.IPv6, true)
+	if finish == nil || !m.Prefs.IPv6 {
+		t.Fatal("operation did not start")
+	}
+	finish(errors.New("canceled"))
+	if m.Prefs.IPv6 || m.Notice != "canceled" {
+		t.Fatal("failure did not restore displayed value")
+	}
+}
+
+func TestPortsDialogWaitsForAsyncApply(t *testing.T) {
+	m := DemoModel()
+	m.Router.Replace("/settings")
+	var finish func(error)
+	m.Hooks.SetKernelPortsAsync = func(_ PortSet, done func(error)) { finish = done }
+	tt := renderModel(m, WindowWidth, 1600, false)
+	if err := tt.Click("ports"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("ports-save"); err != nil {
+		t.Fatal(err)
+	}
+	if finish == nil || !m.Dialogs.Ports {
+		t.Fatal("dialog closed before the operation finished")
+	}
+	finish(errors.New("canceled"))
+	if !m.Dialogs.Ports || m.Notice != "canceled" {
+		t.Fatal("failure did not keep the dialog open")
+	}
+	if err := tt.Click("ports-save"); err != nil {
+		t.Fatal(err)
+	}
+	finish(nil)
+	if m.Dialogs.Ports || m.Notice != "端口设置已保存" {
+		t.Fatal("success did not close the dialog")
+	}
+}
+
 func TestRuleApplyWaitsForValidatedAsyncTransaction(t *testing.T) {
 	m := DemoModel()
 	m.RuleEditor = RuleEditor{Open: true, ProposalID: "preview-1"}
