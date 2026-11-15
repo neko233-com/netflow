@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/neko233-com/netflow/internal/conn"
@@ -39,3 +40,15 @@ type coreEngine interface {
 
 var _ coreEngine = (*core.Core)(nil)
 var _ coreEngine = (*coreipc.Client)(nil)
+
+// stopCore retains failures so callers can distinguish a completed shutdown
+// from an unsuccessful attempt to stop the privileged kernel.
+func (a *App) stopCore() error {
+	if a.core == nil {
+		return nil
+	}
+	if err := a.core.Stop(); err != nil {
+		return fmt.Errorf("stop core: %w", err)
+	}
+	return nil
+}

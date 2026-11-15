@@ -56,6 +56,7 @@ func (a *App) Run() error {
 	var loading *mygo.Window
 	var startupStarted bool
 	var startupErr error
+	var shutdownErr error
 	startupDone := make(chan struct{})
 	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
 		if op := a.guiOperation; op != nil {
@@ -101,8 +102,9 @@ func (a *App) Run() error {
 		if a.tray != nil {
 			a.tray.Destroy()
 		}
-		if err := a.core.Stop(); err != nil {
-			log.Printf("stop kernel during shutdown: %v", err)
+		shutdownErr = a.stopCore()
+		if shutdownErr != nil {
+			log.Printf("kernel shutdown failed: %v", shutdownErr)
 		}
 	})
 	mygo.App.OnActivate(func(hasVisible bool) {
@@ -155,7 +157,7 @@ func (a *App) Run() error {
 	if startupStarted {
 		<-startupDone
 	}
-	return errors.Join(runErr, startupErr)
+	return errors.Join(runErr, startupErr, shutdownErr)
 }
 
 func (a *App) ready(quitting *bool) {

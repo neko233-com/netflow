@@ -36,6 +36,7 @@ import (
 	"github.com/neko233-com/netflow"
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/appconfig"
+	"github.com/neko233-com/netflow/internal/appdir"
 	"github.com/neko233-com/netflow/internal/core"
 	"github.com/neko233-com/netflow/internal/coreipc"
 	"github.com/neko233-com/netflow/internal/geoupdate"
@@ -45,6 +46,7 @@ import (
 	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/scriptmeta"
+	"github.com/neko233-com/netflow/internal/sysproxy"
 	"github.com/neko233-com/netflow/internal/tun"
 	"github.com/neko233-com/netflow/internal/ui"
 	"github.com/neko233-com/netflow/internal/validation"
@@ -65,6 +67,104 @@ func TestWindowsVMRunner(t *testing.T) {
 		t.Skip("requires explicit optical-media verifier invocation")
 	}
 	vmverify.Run()
+}
+
+var vmShutdownStopError = errors.New("injected shutdown stop failure")
+
+type vmShutdownFailureCore struct{ coreEngine }
+
+func (e *vmShutdownFailureCore) StartContext(ctx context.Context, dir string) error {
+	return e.coreEngine.(interface {
+		StartContext(context.Context, string) error
+	}).StartContext(ctx, dir)
+}
+
+func (e *vmShutdownFailureCore) Stop() error {
+	return errors.Join(e.coreEngine.Stop(), vmShutdownStopError)
+}
+
+// This helper is launched only by the isolated VM verifier. It exercises the
+// native event-loop exit path with a failed kernel stop and no TUN changes.
+func TestWindowsVMGUIShutdownFailureChild(t *testing.T) {
+	if os.Getenv("NETFLOW_VM_SHUTDOWN_FAILURE_CHILD") != "1" {
+		t.Skip("requires the isolated VM verifier")
+	}
+	requireDisposableVM(t)
+	dir := os.Getenv("NETFLOW_VM_SHUTDOWN_FAILURE_DIR")
+	if !filepath.IsAbs(dir) {
+		t.Fatal("missing isolated test directory")
+	}
+	a := New(Options{Dirs: appdir.Fixed(dir), Store: appconfig.NewMemory(dir), Proxy: sysproxy.NewMemory(), TUN: tun.NewMemory()})
+	a.core = newSwitchableEngine(&vmShutdownFailureCore{core.New()})
+	if err := a.Run(); !errors.Is(err, vmShutdownStopError) {
+		t.Fatalf("GUI did not report the kernel stop failure: %v", err)
+	}
+}
+
+func vmGUIShutdownFailure(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	config := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\ntun: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	cmd := vmCommand(ctx, exe, "-test.v", "-test.run=^TestWindowsVMGUIShutdownFailureChild$")
+	cmd.Env = append(os.Environ(), "CI=1", "GOMAXPROCS=1", "NETFLOW_VM_SHUTDOWN_FAILURE_CHILD=1", "NETFLOW_VM_SHUTDOWN_FAILURE_DIR="+dir)
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	defer func() { _ = cmd.Process.Kill() }()
+	user := windows.NewLazySystemDLL("user32.dll")
+	var hwnd uintptr
+	callback := syscall.NewCallback(func(window uintptr, _ uintptr) uintptr {
+		var owner uint32
+		user.NewProc("GetWindowThreadProcessId").Call(window, uintptr(unsafe.Pointer(&owner)))
+		if owner == uint32(cmd.Process.Pid) {
+			var title [128]uint16
+			user.NewProc("GetWindowTextW").Call(window, uintptr(unsafe.Pointer(&title[0])), uintptr(len(title)))
+			if windows.UTF16ToString(title[:]) == "NetFlow" {
+				hwnd = window
+			}
+		}
+		return 1
+	})
+	deadline := time.Now().Add(30 * time.Second)
+	for hwnd == 0 && time.Now().Before(deadline) {
+		user.NewProc("EnumWindows").Call(callback, 0)
+		if hwnd == 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if hwnd == 0 {
+		t.Fatal("shutdown-failure GUI window did not appear")
+	}
+	menu, _, _ := user.NewProc("GetMenu").Call(hwnd)
+	fileMenu, _, _ := user.NewProc("GetSubMenu").Call(menu, 0)
+	count, _, _ := user.NewProc("GetMenuItemCount").Call(fileMenu)
+	if menu == 0 || fileMenu == 0 || count == 0 || int32(count) < 0 {
+		t.Fatal("shutdown-failure GUI file menu unavailable")
+	}
+	quitID, _, _ := user.NewProc("GetMenuItemID").Call(fileMenu, count-1)
+	if quitID == 0 || quitID == 0xffffffff {
+		t.Fatal("shutdown-failure GUI quit command unavailable")
+	}
+	if posted, _, err := user.NewProc("PostMessageW").Call(hwnd, 0x0111, quitID, 0); posted == 0 {
+		t.Fatalf("post GUI quit command: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("GUI shutdown failure test: %v\n%s", err, output.String())
+	}
+	t.Log("native GUI returned the injected kernel shutdown failure")
 }
 
 func vmCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
@@ -4457,6 +4557,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	}
 	install := vmInstallAndVerify(t)
 	vmGUIRestartCancellation(t, filepath.Join(install, "NetFlow.exe"))
+	vmGUIShutdownFailure(t)
 	agentExe := filepath.Join(install, "netflow-agent.exe")
 	versionCtx, versionCancel := context.WithTimeout(context.Background(), 35*time.Second)
 	versionOutput, versionErr := vmCommand(versionCtx, agentExe, "version").CombinedOutput()

@@ -144,24 +144,21 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 	a.headlessStopping.Store(false)
 	a.headlessRecovery = opt.AllowStopped
 	if err := a.prepare(ctx); err != nil {
-		_ = a.core.Stop()
-		if ctx.Err() != nil {
-			return nil
+		stopErr := a.stopCore()
+		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+			return stopErr
 		}
-		return err
+		return errors.Join(err, stopErr)
 	}
 	if ctx.Err() != nil {
-		_ = a.core.Stop()
-		return nil
+		return a.stopCore()
 	}
 	if a.core == nil || (!a.core.Status().Running && !opt.AllowStopped) {
-		if a.core != nil {
-			_ = a.core.Stop()
-		}
+		stopErr := a.stopCore()
 		if a.model != nil && a.model.Home.Error != "" {
-			return fmt.Errorf("core startup failed: %s", a.model.Home.Error)
+			return errors.Join(fmt.Errorf("core startup failed: %s", a.model.Home.Error), stopErr)
 		}
-		return errors.New("core startup failed")
+		return errors.Join(errors.New("core startup failed"), stopErr)
 	}
 	dispatcher := newSerialDispatcher()
 	a.dispatch = dispatcher.call
@@ -176,7 +173,7 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 		// for an asynchronous transaction to restore its staged files.
 		a.headlessStopping.Store(true)
 		coreStopped := make(chan error, 1)
-		go func() { coreStopped <- a.core.Stop() }()
+		go func() { coreStopped <- a.stopCore() }()
 		var operation *guiConfigOperation
 		dispatcher.call(func() {
 			operation = a.guiOperation
@@ -202,9 +199,7 @@ func (a *App) RunHeadless(ctx context.Context, opt HeadlessOptions) (resultErr e
 			a.probeStop = nil
 		}
 		a.stopAgent()
-		if err := <-coreStopped; err != nil {
-			resultErr = errors.Join(resultErr, fmt.Errorf("stop core: %w", err))
-		}
+		resultErr = errors.Join(resultErr, <-coreStopped)
 	}()
 	if err := a.startAgent(); err != nil {
 		return fmt.Errorf("start Agent bridge: %w", err)
