@@ -493,6 +493,29 @@ func vmVerifyRuleExpiryWhileGUIBlocked(t *testing.T, client agent.Client, dir, f
 		t.Fatal(err)
 	}
 	resumed = true
+	cleaned := false
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); {
+		var status agent.Status
+		if client.Call(context.Background(), "status", nil, &status) == nil {
+			current, err := rewrite.Open(dir)
+			if err == nil {
+				present := false
+				for _, item := range current.Snapshot().Connections {
+					if item.ID == id {
+						present = true
+					}
+				}
+				if !present {
+					cleaned = true
+					break
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !cleaned {
+		t.Fatal("expired rule cleanup did not finish after GUI resumed")
+	}
 	t.Log("connection rule expired for new TUN traffic while GUI cleanup was suspended")
 }
 
@@ -2664,6 +2687,124 @@ func vmGUIConfigSwitchCancellation(t *testing.T, guiExe string, scenario string)
 	}
 }
 
+func vmHeadlessExpiryShutdown(t *testing.T, appExe string) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var enteredOnce, canceledOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enteredOnce.Do(func() { close(entered) })
+		select {
+		case <-r.Context().Done():
+			canceledOnce.Do(func() { close(canceled) })
+			return
+		case <-release:
+		}
+		_, _ = io.WriteString(w, "proxies: [{name: fresh, type: direct}]\n")
+	}))
+	defer provider.Close()
+	defer unblock()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	base := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	if err := os.WriteFile(path, []byte(base), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := rewrite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := store.Snapshot()
+	state.Connections = []rewrite.Connection{{ID: "expiry-fixture", Rule: "DOMAIN,expiry-vm.test,REJECT", ExpiresAt: time.Now().Add(20 * time.Second)}}
+	if _, err := store.Replace(state, state.Revision); err != nil {
+		t.Fatal(err)
+	}
+	process := vmCommand(context.Background(), appExe, "--headless", "--tun=true")
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(strings.ToUpper(entry), "NETFLOW_CONFIG_DIR=") {
+			process.Env = append(process.Env, entry)
+		}
+	}
+	process.Env = append(process.Env, "NETFLOW_CONFIG_DIR="+dir, "GOMAXPROCS=1")
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- process.Wait() }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			_ = process.Process.Kill()
+			<-finished
+		}
+	}()
+	client := agent.Client{Dir: dir, Timeout: 10 * time.Second}
+	var status agent.Status
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		if client.Call(context.Background(), "status", nil, &status) == nil && status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if !status.TUN || !status.Headless {
+		t.Fatalf("expiry headless TUN startup: %+v", status)
+	}
+	if time.Until(state.Connections[0].ExpiresAt) < 3*time.Second {
+		t.Fatal("expiry fixture elapsed before TUN startup")
+	}
+	next := base + "proxy-providers:\n  slow: {type: http, url: '" + provider.URL + "', path: providers/expiry-cleanup.yaml, interval: 3600, health-check: {enable: false}}\n"
+	if err := os.WriteFile(path, []byte(next), 0600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("expiry cleanup did not begin loading provider")
+	}
+	started := time.Now()
+	var shutdown agent.ActionResult
+	if err := client.Call(context.Background(), "shutdown", nil, &shutdown); err != nil || !shutdown.OK || time.Since(started) > 5*time.Second {
+		t.Fatalf("expiry shutdown: %+v %v", shutdown, err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("expiry provider not canceled")
+	}
+	unblock()
+	select {
+	case err := <-finished:
+		stopped = true
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("expiry shutdown stalled")
+	}
+	stored, err := rewrite.Open(dir)
+	if err != nil || len(stored.Snapshot().Connections) != 1 {
+		t.Fatal("expired state was not restored for later cleanup", err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != next {
+		t.Fatal("outside config was changed", err)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, servers, e := vmNetworkSnapshot()
+		if e == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(servers, beforeDNS) {
+			t.Log("headless expired-rule cleanup canceled on shutdown and restored TUN networking")
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatal("expiry shutdown did not restore networking")
+}
+
 func vmProfileUpdateCancellation(t *testing.T, appExe string, headless bool) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -4284,6 +4425,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	vmGUIConfigSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), "option")
 	vmProfileUpdateCancellation(t, filepath.Join(install, "NetFlow.exe"), false)
 	vmProfileUpdateCancellation(t, filepath.Join(install, "NetFlow.exe"), true)
+	vmHeadlessExpiryShutdown(t, filepath.Join(install, "NetFlow.exe"))
 	vmHeadlessStartupCancellation(t, filepath.Join(install, "NetFlow.exe"))
 	vmGUIStartupProvider(t, filepath.Join(install, "NetFlow.exe"))
 	vmHeadlessParentExit(t, agentExe, backupTarget)

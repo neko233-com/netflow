@@ -14,6 +14,7 @@ import (
 	"github.com/neko233-com/netflow/internal/agent"
 	"github.com/neko233-com/netflow/internal/migration"
 	"github.com/neko233-com/netflow/internal/profile"
+	"github.com/neko233-com/netflow/internal/rewrite"
 	"github.com/neko233-com/netflow/internal/scriptapproval"
 	"github.com/neko233-com/netflow/internal/scriptmeta"
 	"github.com/neko233-com/netflow/internal/scriptpreview"
@@ -1225,26 +1226,88 @@ func (a *App) expiryLoop(stop <-chan struct{}) {
 				}
 				// The handoff is composing a stopped kernel. Retry expiration on
 				// the next tick instead of mutating its rule snapshot mid-switch.
-				if !expired || a.tunBusy {
+				if !expired || a.tunBusy || a.guiConfigBusy() {
 					return
 				}
-				if err := a.expireRules(time.Now()); err != nil {
-					a.rewriteWarning = "Temporary rule cleanup failed; inspect the rules file and application logs."
-					if a.model != nil {
-						a.model.Notice = "Agent 临时规则清理失败: " + err.Error()
-						if a.win != nil {
-							a.win.Invalidate()
-						}
+				// A conflicting file has already had its expired runtime rules
+				// removed. Avoid starting a new visible operation every tick.
+				if signature := expiredRuleSignature(a.rewrites.Snapshot(), time.Now()); signature != "" && signature == a.expiryFallbackSignature {
+					if err := a.rewrites.CheckCurrent(); err != nil {
+						a.reportRuleExpiry(err)
+						return
 					}
-				} else {
-					a.rewriteWarning = ""
 				}
+				a.expireRulesAsync(time.Now(), a.reportRuleExpiry)
 			})
 		}
 	}
 }
 
+func expiredRuleSignature(state rewrite.State, now time.Time) string {
+	var expired []string
+	for _, c := range state.Connections {
+		if !c.ExpiresAt.After(now) {
+			expired = append(expired, c.ID+"/"+c.ExpiresAt.UTC().Format(time.RFC3339Nano))
+		}
+	}
+	return strings.Join(expired, "\x00")
+}
+
 func (a *App) expireRules(now time.Time) error {
+	tx, warning, err := a.beginRuleExpiry(now)
+	if err != nil {
+		return err
+	}
+	if tx.reload {
+		err = a.core.Reload()
+	}
+	if err == nil {
+		err = tx.commit()
+	}
+	if err == nil {
+		return warning
+	}
+	needReload, restoreErr := tx.rollback()
+	if restoreErr == nil && needReload {
+		restoreErr = a.core.Reload()
+	}
+	return errors.Join(warning, tx.wrap(err, restoreErr))
+}
+
+func (a *App) reportRuleExpiry(err error) {
+	if err == nil {
+		a.rewriteWarning = ""
+		return
+	}
+	a.rewriteWarning = "Temporary rule cleanup failed; inspect the rules file and application logs."
+	if a.model != nil {
+		switch {
+		case errors.Is(err, rewrite.ErrConflict):
+			a.model.Notice = "Agent 规则文件已被外部修改，请检查后重启"
+		case errors.Is(err, context.Canceled):
+			a.model.Notice = "Agent 临时规则清理已取消，将稍后重试"
+		default:
+			// Kernel diagnostics can contain subscription URLs or credentials.
+			a.model.Notice = "Agent 临时规则清理失败，将稍后重试；请检查配置与日志"
+		}
+		if a.win != nil {
+			a.win.Invalidate()
+		}
+	}
+}
+
+func (a *App) expireRulesAsync(now time.Time, done func(error)) {
+	var warning error
+	a.startGUIConfigOperation("正在清理过期规则", func() (*guiConfigTransaction, error) {
+		tx, issue, err := a.beginRuleExpiry(now)
+		warning = issue
+		return tx, err
+	}, func(err error) { done(errors.Join(warning, err)) })
+}
+
+// beginRuleExpiry runs on the application event loop. Expired rules already
+// stop matching in the kernel even if persistence or reload cannot complete.
+func (a *App) beginRuleExpiry(now time.Time) (*guiConfigTransaction, error, error) {
 	old := a.rewrites.Snapshot()
 	next := old
 	next.Connections = nil
@@ -1254,40 +1317,41 @@ func (a *App) expireRules(now time.Time) error {
 		}
 	}
 	if len(next.Connections) == len(old.Connections) {
-		return nil
+		return &guiConfigTransaction{commit: func() error { return nil }, rollback: func() (bool, error) { return false, nil }, wrap: func(err, _ error) error { return err }}, nil, nil
 	}
 	saved, err := a.rewrites.Replace(next, old.Revision)
 	if err != nil {
 		// Do not let a conflicting or unwritable state file keep an expired
 		// matcher active indefinitely. Compose omits expired rules even when
 		// the in-memory state still contains them. Avoid reloading every tick.
-		var expired []string
-		for _, c := range old.Connections {
-			if !c.ExpiresAt.After(now) {
-				expired = append(expired, c.ID+"/"+c.ExpiresAt.UTC().Format(time.RFC3339Nano))
-			}
-		}
-		signature := strings.Join(expired, "\x00")
-		if a.core != nil && a.core.Status().Running && signature != a.expiryFallbackSignature {
-			if reloadErr := a.core.Reload(); reloadErr != nil {
-				return errors.Join(err, fmt.Errorf("remove expired runtime rules: %w", reloadErr))
-			}
-			a.expiryFallbackSignature = signature
-		}
-		return err
+		signature := expiredRuleSignature(old, now)
+		reload := a.core != nil && a.core.Status().Running && signature != a.expiryFallbackSignature
+		return &guiConfigTransaction{
+			reload: reload,
+			commit: func() error {
+				if reload {
+					a.expiryFallbackSignature = signature
+				}
+				return nil
+			},
+			rollback: func() (bool, error) { return false, nil },
+			wrap:     func(cause, _ error) error { return fmt.Errorf("remove expired runtime rules: %w", cause) },
+		}, err, nil
 	}
 	a.expiryFallbackSignature = ""
-	if a.core != nil && a.core.Status().Running {
-		if err = a.core.Reload(); err != nil {
-			_, restoreErr := a.rewrites.Replace(old, saved.Revision)
-			if restoreErr == nil {
-				restoreErr = a.core.Reload()
-			}
+	running := a.core != nil && a.core.Status().Running
+	return &guiConfigTransaction{
+		reload: running,
+		commit: func() error { return nil },
+		rollback: func() (bool, error) {
+			_, err := a.rewrites.Replace(old, saved.Revision)
+			return err == nil && running, err
+		},
+		wrap: func(cause, restoreErr error) error {
 			if restoreErr != nil {
-				return errors.Join(err, fmt.Errorf("restore previous rules: %w", restoreErr))
+				return errors.Join(cause, fmt.Errorf("restore previous rules: %w", restoreErr))
 			}
-			return err
-		}
-	}
-	return nil
+			return cause
+		},
+	}, nil, nil
 }
