@@ -261,36 +261,54 @@ func (a *App) checkChainDraft(d chainDraft, checked validation.Result) error {
 }
 
 func (a *App) finishChain(d chainDraft, checked validation.Result) error {
-	if err := a.checkChainDraft(d, checked); err != nil {
+	tx, err := a.beginChainConnect(d, checked)
+	if err != nil {
 		return err
 	}
+	if err = a.core.Reload(); err == nil {
+		err = tx.commit()
+	}
+	if err == nil {
+		return nil
+	}
+	_, restoreErr := tx.rollback()
+	if restoreErr == nil {
+		restoreErr = a.core.Reload()
+	}
+	return tx.wrap(err, restoreErr)
+}
+
+func (a *App) beginChainConnect(d chainDraft, checked validation.Result) (*guiConfigTransaction, error) {
+	if err := a.checkChainDraft(d, checked); err != nil {
+		return nil, err
+	}
 	a.chain.Store(d.active)
-	rollback := func(cause error) error {
-		a.chain.Store(nil)
-		if err := a.core.Reload(); err != nil {
-			// The actual kernel configuration may be indeterminate after a
-			// failed apply and failed restoration. Keep a recoverable session
-			// marker instead of falsely reporting a clean disconnect.
-			a.chain.Store(d.active)
-			if a.model != nil {
-				a.model.Chain = ui.ChainState{On: true, Connected: true, Target: d.active.Spec.Target, Nodes: append([]ui.ProxyNode(nil), d.active.Nodes...), Warning: "恢复原代理配置失败，链路状态未知"}
+	return &guiConfigTransaction{
+		reload: true,
+		commit: func() error {
+			if err := a.checkChainRouting(d.active); err != nil {
+				return err
 			}
-			return errors.Join(cause, fmt.Errorf("恢复原代理配置失败: %w", err))
-		}
-		return cause
-	}
-	if err := a.core.Reload(); err != nil {
-		return rollback(err)
-	}
-	if err := a.checkChainRouting(d.active); err != nil {
-		return rollback(err)
-	}
-	_ = a.loadGroupsWithSelection(false)
-	if a.model != nil {
-		a.model.Chain = ui.ChainState{On: true, Connected: true, Target: d.active.Spec.Target, Nodes: append([]ui.ProxyNode(nil), d.active.Nodes...)}
-	}
-	a.refreshHome()
-	return nil
+			_ = a.loadGroupsWithSelection(false)
+			if a.model != nil {
+				a.model.Chain = ui.ChainState{On: true, Connected: true, Target: d.active.Spec.Target, Nodes: append([]ui.ProxyNode(nil), d.active.Nodes...)}
+			}
+			a.refreshHome()
+			return nil
+		},
+		rollback: func() (bool, error) { a.chain.Store(nil); return true, nil },
+		wrap: func(cause, restoreErr error) error {
+			if restoreErr != nil {
+				// Preserve a recovery marker if the running configuration is unknown.
+				a.chain.Store(d.active)
+				if a.model != nil {
+					a.model.Chain = ui.ChainState{On: true, Connected: true, Target: d.active.Spec.Target, Nodes: append([]ui.ProxyNode(nil), d.active.Nodes...), Warning: "恢复原代理配置失败，链路状态未知"}
+				}
+				return errors.Join(cause, fmt.Errorf("恢复原代理配置失败: %w", restoreErr))
+			}
+			return cause
+		},
+	}, nil
 }
 
 // checkChainRouting reports structural availability, not reachability.
@@ -336,69 +354,99 @@ func (a *App) connectChainAsync(target string, nodes []ui.ProxyNode, done func(e
 	go func() {
 		checked, err := validateConfigurations(context.Background(), a.dir, []validation.Config{{ID: draft.active.ProfileID, Body: draft.composed}})
 		a.runOnMain(func() {
-			if err == nil {
-				err = a.finishChain(draft, checked)
+			if err != nil {
+				done(err)
+				if a.win != nil {
+					a.win.Invalidate()
+				}
+				return
 			}
-			done(err)
-			if a.win != nil {
-				a.win.Invalidate()
-			}
+			a.startGUIConfigOperation("正在连接代理链", func() (*guiConfigTransaction, error) { return a.beginChainConnect(draft, checked) }, done)
 		})
 	}()
 }
 
 func (a *App) disconnectChain() error {
+	tx, err := a.beginChainDisconnect()
+	if err != nil {
+		return err
+	}
+	if tx.reload {
+		err = a.core.Reload()
+	}
+	if err == nil {
+		err = tx.commit()
+	}
+	if err == nil {
+		return nil
+	}
+	needReload, restoreErr := tx.rollback()
+	if restoreErr == nil && needReload {
+		restoreErr = a.core.Reload()
+	}
+	return tx.wrap(err, restoreErr)
+}
+
+func (a *App) disconnectChainAsync(done func(error)) {
+	a.startGUIConfigOperation("正在断开代理链", a.beginChainDisconnect, done)
+}
+
+func (a *App) beginChainDisconnect() (*guiConfigTransaction, error) {
 	a.chainDisconnectWarning = ""
 	active := a.chain.Load()
 	if active == nil {
-		return nil
+		return &guiConfigTransaction{commit: func() error { return nil }, rollback: func() (bool, error) { return false, nil }, wrap: func(err, _ error) error { return err }}, nil
 	}
 	if a.tunBusy {
-		return errors.New("虚拟网卡正在切换，请稍后重试")
+		return nil, errors.New("虚拟网卡正在切换，请稍后重试")
 	}
 	if a.core == nil || !a.core.Status().Running {
 		a.chain.Store(nil)
 		if a.model != nil {
 			a.model.Chain = ui.ChainState{}
 		}
-		return nil
+		return &guiConfigTransaction{commit: func() error { return nil }, rollback: func() (bool, error) { return false, nil }, wrap: func(err, _ error) error { return err }}, nil
 	}
 	a.chain.Store(nil)
-	if err := a.core.Reload(); err != nil {
-		a.chain.Store(active)
-		if restoreErr := a.core.Reload(); restoreErr != nil {
-			return errors.Join(err, fmt.Errorf("恢复代理链失败: %w", restoreErr))
-		}
-		return err
-	}
-	if err := a.core.Select(active.Spec.Target, active.Previous); err != nil {
-		group, groupErr := a.core.Group(active.Spec.Target)
-		found := false
-		if groupErr == nil {
-			for _, node := range group.Nodes {
-				if node.Name == active.Previous {
-					found = true
-					break
+	return &guiConfigTransaction{
+		reload: true,
+		commit: func() error {
+			if err := a.core.Select(active.Spec.Target, active.Previous); err != nil {
+				group, groupErr := a.core.Group(active.Spec.Target)
+				found := false
+				if groupErr == nil {
+					for _, node := range group.Nodes {
+						if node.Name == active.Previous {
+							found = true
+							break
+						}
+					}
+				}
+				if groupErr != nil || !found {
+					a.chainDisconnectWarning = "代理链已断开，但原代理组或节点已不存在，无法恢复原选择"
+				} else {
+					return fmt.Errorf("恢复原节点失败: %w", err)
 				}
 			}
-		}
-		if groupErr != nil || !found {
-			a.chainDisconnectWarning = "代理链已断开，但原代理组或节点已不存在，无法恢复原选择"
-		} else {
-			a.chain.Store(active)
-			if restoreErr := a.core.Reload(); restoreErr != nil {
-				return errors.Join(err, fmt.Errorf("恢复代理链失败: %w", restoreErr))
+			a.loadGroups()
+			if a.model != nil {
+				a.model.Chain = ui.ChainState{}
+				if a.chainDisconnectWarning != "" {
+					a.model.Notice = a.chainDisconnectWarning
+				}
 			}
-			return fmt.Errorf("恢复原节点失败: %w", err)
-		}
-	}
-	a.loadGroups()
-	if a.model != nil {
-		a.model.Chain = ui.ChainState{}
-		if a.chainDisconnectWarning != "" {
-			a.model.Notice = a.chainDisconnectWarning
-		}
-	}
-	a.refreshHome()
-	return nil
+			a.refreshHome()
+			return nil
+		},
+		rollback: func() (bool, error) { a.chain.Store(active); return true, nil },
+		wrap: func(cause, restoreErr error) error {
+			if restoreErr != nil {
+				if a.model != nil {
+					a.model.Chain = ui.ChainState{On: true, Connected: true, Target: active.Spec.Target, Nodes: append([]ui.ProxyNode(nil), active.Nodes...), Warning: "恢复代理链失败，链路状态未知"}
+				}
+				return errors.Join(cause, fmt.Errorf("恢复代理链失败: %w", restoreErr))
+			}
+			return cause
+		},
+	}, nil
 }

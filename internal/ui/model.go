@@ -23,6 +23,7 @@ type Hooks struct {
 	ChainAvailable                  func() bool
 	ConnectChainAsync               func(string, []ProxyNode, func(error))
 	DisconnectChain                 func() error
+	DisconnectChainAsync            func(func(error))
 	SystemDark                      func() bool
 	ApplyHotkeys                    func(Prefs) error
 	SetTUN                          func(on bool) error

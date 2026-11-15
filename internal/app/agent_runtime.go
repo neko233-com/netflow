@@ -81,6 +81,65 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		}
 		return agent.CancelApplyResult{Accepted: accepted}, nil
 	}
+	if (method == "chain-apply" || method == "chain-disconnect") && !a.headless {
+		var input agent.ApplyArgs
+		if method == "chain-apply" {
+			if err := decodeStrict(args, &input); err != nil {
+				return nil, err
+			}
+		} else {
+			var empty agent.Empty
+			if err := decodeStrict(args, &empty); err != nil {
+				return nil, err
+			}
+		}
+		type response struct {
+			value any
+			err   error
+		}
+		result := make(chan response, 1)
+		executed := false
+		a.runOnMain(func() {
+			executed = true
+			if err := ctx.Err(); err != nil {
+				result <- response{err: err}
+				return
+			}
+			if method == "chain-disconnect" {
+				a.disconnectChainAsync(func(err error) {
+					out := agent.ActionResult{OK: err == nil}
+					if a.chainDisconnectWarning != "" {
+						out.Warnings = []string{a.chainDisconnectWarning}
+					}
+					result <- response{value: out, err: err}
+				})
+				return
+			}
+			a.startGUIConfigOperation("正在连接代理链", func() (*guiConfigTransaction, error) {
+				p, ok := a.agentChainProposals[input.ProposalID]
+				delete(a.agentChainProposals, input.ProposalID)
+				if !ok || !p.expires.After(time.Now()) {
+					return nil, errors.New("chain proposal missing or expired; preview again")
+				}
+				return a.beginChainConnect(p.draft, p.checked)
+			}, func(err error) {
+				if err != nil {
+					result <- response{err: err}
+					return
+				}
+				result <- response{value: a.agentChainStatus()}
+			})
+		})
+		if !executed {
+			return nil, errors.New("desktop application is shutting down")
+		}
+		select {
+		case out := <-result:
+			return out.value, out.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if method == "kernel-option" && !a.headless {
 		var input agent.KernelOptionArgs
 		if err := decodeStrict(args, &input); err != nil {

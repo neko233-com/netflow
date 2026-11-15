@@ -56,3 +56,37 @@ func TestChainControlsCallBackendAndPreserveStateOnFailure(t *testing.T) {
 		t.Fatal("disconnect did not reach backend")
 	}
 }
+
+func TestChainDisconnectWaitsForAsyncResult(t *testing.T) {
+	for _, clear := range []bool{false, true} {
+		m := DemoModel()
+		m.Router.Replace("/proxies")
+		m.Chain = ChainState{On: true, Connected: true, Target: "Proxy", Nodes: []ProxyNode{{Name: "香港 01", SourceGroup: "Proxy"}, {Name: "香港 02", SourceGroup: "Proxy"}}}
+		var finish func(error)
+		calls := 0
+		m.Hooks.DisconnectChainAsync = func(done func(error)) { calls++; finish = done }
+		tt := renderModel(m, WindowWidth, WindowHeight, false)
+		button := "chain-connect"
+		if clear {
+			button = "chain-toggle"
+		}
+		if err := tt.Click(button); err != nil {
+			t.Fatal(err)
+		}
+		if finish == nil || !m.Chain.Connecting || !m.Chain.Connected {
+			t.Fatal("disconnect did not remain pending")
+		}
+		finish(errors.New("canceled"))
+		if m.Chain.Connecting || !m.Chain.Connected || m.Notice != "canceled" {
+			t.Fatal("failed disconnect changed chain state")
+		}
+		tt = renderModel(m, WindowWidth, WindowHeight, false)
+		if err := tt.Click(button); err != nil {
+			t.Fatal(err)
+		}
+		finish(nil)
+		if m.Chain.Connected || (clear && m.Chain.On) || calls != 2 {
+			t.Fatalf("successful disconnect not reflected: clear=%t calls=%d chain=%+v notice=%q", clear, calls, m.Chain, m.Notice)
+		}
+	}
+}

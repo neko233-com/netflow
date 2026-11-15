@@ -39,14 +39,8 @@ func (m *Model) proxyPage(c *mygoui.Context, pal Palette) {
 			}
 			if m.Chain.On {
 				if m.Chain.Connected {
-					if m.Hooks.DisconnectChain == nil {
-						m.Notice = "代理链服务不可用"
-						return
-					}
-					if err := m.Hooks.DisconnectChain(); err != nil {
-						m.Notice = err.Error()
-						return
-					}
+					m.disconnectChain(true)
+					return
 				}
 				m.Chain = ChainState{}
 			} else {
@@ -213,15 +207,7 @@ func (m *Model) chainPanel(c *mygoui.Context, pal Palette) {
 		b.Children(func() { mygoui.Text(c, label).FontSize(13) })
 		if b.Clicked() {
 			if m.Chain.Connected {
-				if m.Hooks.DisconnectChain == nil {
-					m.Notice = "代理链服务不可用"
-					return
-				}
-				if err := m.Hooks.DisconnectChain(); err != nil {
-					m.Notice = err.Error()
-					return
-				}
-				m.Chain.Connected = false
+				m.disconnectChain(false)
 			} else if ok {
 				if m.Hooks.ConnectChainAsync == nil {
 					m.Notice = "代理链服务不可用"
@@ -244,6 +230,34 @@ func (m *Model) chainPanel(c *mygoui.Context, pal Palette) {
 			m.Chain.Target = ""
 		}
 	})
+}
+
+func (m *Model) disconnectChain(clear bool) {
+	if m.Hooks.DisconnectChainAsync == nil && m.Hooks.DisconnectChain == nil {
+		m.Notice = "代理链服务不可用"
+		return
+	}
+	if m.Chain.Connecting {
+		return
+	}
+	m.Chain.Connecting = true
+	finish := func(err error) {
+		m.Chain.Connecting = false
+		if err != nil {
+			m.Notice = err.Error()
+			return
+		}
+		if clear {
+			m.Chain = ChainState{}
+		} else {
+			m.Chain.Connected = false
+		}
+	}
+	if m.Hooks.DisconnectChainAsync != nil {
+		m.Hooks.DisconnectChainAsync(finish)
+	} else {
+		finish(m.Hooks.DisconnectChain())
+	}
 }
 
 func (m *Model) resetProxyNavigation() {
