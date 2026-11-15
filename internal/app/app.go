@@ -176,6 +176,15 @@ func (a *App) Prepare() error {
 }
 
 func (a *App) prepare(ctx context.Context) error {
+	if err := a.prepareInitial(ctx); err != nil {
+		return err
+	}
+	return a.prepareKernel(ctx)
+}
+
+// prepareInitial constructs the model before the GUI event loop starts. No
+// window can observe it until prepareKernel has completed.
+func (a *App) prepareInitial(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("prepare context is required")
 	}
@@ -283,6 +292,14 @@ func (a *App) prepare(ctx context.Context) error {
 	if err := a.installCurrentProfile(); err != nil {
 		a.model.Notice = err.Error()
 	}
+	return nil
+}
+
+// prepareKernel may wait for remote rule or proxy providers. During GUI
+// startup it runs off the event loop while a separate loading window is shown.
+func (a *App) prepareKernel(ctx context.Context) error {
+	dir := a.dir
+	settings := a.settings
 	startCore := func() error {
 		if engine, ok := a.core.(interface {
 			StartContext(context.Context, string) error

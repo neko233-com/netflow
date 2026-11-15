@@ -44,14 +44,29 @@ func (a *App) Run() error {
 		return err
 	}
 	defer lock.Close()
-	if err := a.Prepare(); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := a.prepareInitial(ctx); err != nil {
 		return err
 	}
 	mygo.App.SetName("NetFlow")
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyRegular)
 	var quitting bool
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { quitting = true })
+	var loading *mygo.Window
+	var startupStarted bool
+	var startupErr error
+	startupDone := make(chan struct{})
+	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
+		quitting = true
+		cancel()
+	})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
+		// The worker owns the model until it signals completion. Cancel its
+		// provider requests before cleanup reads or modifies that state.
+		cancel()
+		if startupStarted {
+			<-startupDone
+		}
 		a.stopBackup()
 		a.releaseHotkeys()
 		if a.profileAutoStop != nil {
@@ -85,11 +100,54 @@ func (a *App) Run() error {
 	})
 	mygo.App.OnActivate(func(hasVisible bool) {
 		if !hasVisible {
-			a.showMain()
+			if loading != nil {
+				loading.Show()
+			} else {
+				a.showMain()
+			}
 		}
 	})
-	mygo.App.WhenReady(func() { a.ready(&quitting) })
-	return mygo.App.Run()
+	mygo.App.WhenReady(func() {
+		loading = mygo.NewWindow(mygo.WindowOptions{
+			Title: "NetFlow 正在启动", Width: 460, Height: 180,
+			UseContentSize: true,
+			Hidden:         a.model.Prefs.SilentStart || a.model.Prefs.Lightweight,
+			Content: mygoui.View(func(c *mygoui.Context) {
+				mygoui.Column(c).Fill().Center().Gap(12).Children(func() {
+					mygoui.Text(c, "正在启动 NetFlow").FontSize(20)
+					mygoui.Text(c, "正在准备内核和订阅资源，可关闭窗口取消启动。")
+				})
+			}),
+		})
+		loading.OnClose(func(e *mygo.CloseEvent) {
+			if !quitting {
+				e.PreventDefault()
+				mygo.App.Quit()
+			}
+		})
+		startupStarted = true
+		go func() {
+			startupErr = a.prepareKernel(ctx)
+			close(startupDone)
+			mygo.RunOnMain(func() {
+				if quitting {
+					return
+				}
+				if startupErr != nil {
+					mygo.App.Quit()
+					return
+				}
+				a.ready(&quitting)
+				loading.Destroy()
+				loading = nil
+			})
+		}()
+	})
+	runErr := mygo.App.Run()
+	if startupStarted {
+		<-startupDone
+	}
+	return errors.Join(runErr, startupErr)
 }
 
 func (a *App) ready(quitting *bool) {

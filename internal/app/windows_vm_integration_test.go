@@ -1981,6 +1981,143 @@ func vmHeadlessStartupCancellation(t *testing.T, appExe string) {
 	t.Log("headless parent disconnect canceled uncached provider before Agent startup")
 }
 
+// Exercise the actual native window while an uncached provider is stalled.
+// This runs in the isolated Windows guest and never enables TUN.
+func vmGUIStartupProvider(t *testing.T, appExe string) {
+	t.Helper()
+	for _, scenario := range []struct {
+		name   string
+		cancel bool
+		silent bool
+	}{{"cancel", true, false}, {"complete", false, false}, {"silent", false, true}} {
+		t.Run("GUIStartup/"+scenario.name, func(t *testing.T) {
+			entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var enteredOnce, canceledOnce, releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				enteredOnce.Do(func() { close(entered) })
+				select {
+				case <-r.Context().Done():
+					canceledOnce.Do(func() { close(canceled) })
+				case <-release:
+					_, _ = io.WriteString(w, "proxies: [{name: fresh, type: direct}]\n")
+				}
+			}))
+			defer provider.Close()
+			defer unblock()
+			dir := t.TempDir()
+			config := "mixed-port: 0\nport: 0\nsocks-port: 0\nlog-level: error\ndns: {enable: false}\nproxy-providers:\n  uncached: {type: http, url: '" + provider.URL + "', path: providers/startup-vm.yaml, interval: 3600, health-check: {enable: false}}\nrules: ['MATCH,DIRECT']\n"
+			if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if scenario.silent {
+				if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"prefs":"{\"SilentStart\":true}"}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			process := vmCommand(context.Background(), appExe)
+			// The normal VM helper sets STARTF_USESHOWWINDOW/SW_HIDE, which
+			// overrides an application's first ShowWindow call. Test the real
+			// desktop launch without that inherited hidden-window request.
+			process.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000 | 0x00004000}
+			process.Env = append(os.Environ(), "NETFLOW_CONFIG_DIR="+dir, "GOMAXPROCS=1")
+			if err := process.Start(); err != nil {
+				t.Fatal(err)
+			}
+			finished := make(chan error, 1)
+			go func() { finished <- process.Wait() }()
+			stopped := false
+			defer func() {
+				if !stopped {
+					_ = process.Process.Kill()
+					<-finished
+				}
+			}()
+			select {
+			case <-entered:
+			case <-time.After(20 * time.Second):
+				t.Fatal("GUI startup provider did not begin")
+			}
+			user32 := windows.NewLazySystemDLL("user32.dll")
+			enum, ownerPID := user32.NewProc("EnumWindows"), user32.NewProc("GetWindowThreadProcessId")
+			getTitle, isVisible := user32.NewProc("GetWindowTextW"), user32.NewProc("IsWindowVisible")
+			findLoading := func() (uintptr, bool) {
+				var found uintptr
+				var visible bool
+				callback := syscall.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+					var owner uint32
+					ownerPID.Call(hwnd, uintptr(unsafe.Pointer(&owner)))
+					if owner == uint32(process.Process.Pid) {
+						var title [128]uint16
+						getTitle.Call(hwnd, uintptr(unsafe.Pointer(&title[0])), uintptr(len(title)))
+						if windows.UTF16ToString(title[:]) == "NetFlow 正在启动" {
+							found = hwnd
+							shown, _, _ := isVisible.Call(hwnd)
+							visible = shown != 0
+						}
+					}
+					return 1
+				})
+				enum.Call(callback, 0)
+				return found, visible
+			}
+			var hwnd uintptr
+			var visible bool
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				hwnd, visible = findLoading()
+				if hwnd != 0 {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			if hwnd == 0 || visible == scenario.silent {
+				t.Fatalf("loading window hwnd=%v visible=%v silent=%v", hwnd, visible, scenario.silent)
+			}
+			if scenario.cancel {
+				posted, _, err := user32.NewProc("PostMessageW").Call(hwnd, 0x0010, 0, 0) // WM_CLOSE
+				if posted == 0 {
+					t.Fatalf("close loading window: %v", err)
+				}
+				select {
+				case <-canceled:
+				case <-time.After(10 * time.Second):
+					t.Fatal("closing GUI did not cancel provider")
+				}
+				select {
+				case err := <-finished:
+					stopped = true
+					if err != nil {
+						t.Fatalf("GUI canceled startup exit: %v", err)
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatal("GUI did not exit after startup cancellation")
+				}
+				return
+			}
+			unblock()
+			client := agent.Client{Dir: dir, Timeout: time.Second}
+			var status agent.Status
+			deadline = time.Now().Add(20 * time.Second)
+			for time.Now().Before(deadline) {
+				if client.Call(context.Background(), "status", nil, &status) == nil && status.Running {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if !status.Running {
+				t.Fatal("GUI did not finish startup after provider response")
+			}
+			if hwnd, _ := findLoading(); hwnd != 0 {
+				t.Fatal("loading window remained after startup")
+			}
+			if scenario.silent && vmVisibleWindows(uint32(process.Process.Pid)) != 0 {
+				t.Fatal("silent startup showed a window")
+			}
+		})
+	}
+}
+
 func vmHeadlessUncachedShutdown(t *testing.T, agentExe string) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -3194,6 +3331,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	vmHeadlessUncachedShutdown(t, agentExe)
 	vmCancelProfileApply(t, agentExe)
 	vmHeadlessStartupCancellation(t, filepath.Join(install, "NetFlow.exe"))
+	vmGUIStartupProvider(t, filepath.Join(install, "NetFlow.exe"))
 	vmHeadlessParentExit(t, agentExe, backupTarget)
 	t.Log("headless child restored networking after its CLI launcher was forcibly terminated")
 	vmGUIAutoStartTUN(t, filepath.Join(install, "NetFlow.exe"), agentExe, backupTarget)
