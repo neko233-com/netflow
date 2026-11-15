@@ -3756,6 +3756,139 @@ func vmHeadlessUncachedShutdown(t *testing.T, agentExe, operation string) {
 	t.Fatal("headless uncached-provider shutdown did not restore networking")
 }
 
+func vmHeadlessVergeScriptShutdown(t *testing.T, agentExe string) {
+	t.Helper()
+	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var enteredOnce, canceledOnce sync.Once
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enteredOnce.Do(func() { close(entered) })
+		select {
+		case <-r.Context().Done():
+			canceledOnce.Do(func() { close(canceled) })
+		case <-release:
+		}
+	}))
+	defer provider.Close()
+	defer close(release)
+	verge := t.TempDir()
+	if err := os.Mkdir(filepath.Join(verge, "profiles"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	base := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	files := map[string]string{
+		"profiles.yaml":       "current: p1\nitems:\n  - {uid: p1, type: local, name: Test, file: p1.yaml, option: {script: s1}}\n  - {uid: s1, type: script, file: profile.js}\n",
+		"profiles/p1.yaml":    base,
+		"profiles/profile.js": fmt.Sprintf(`function main(c){c["proxy-providers"]={slow:{type:"http",url:%q,path:"providers/script-shutdown.yaml",interval:3600,"health-check":{enable:false}}};return c}`, provider.URL),
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(verge, filepath.FromSlash(name)), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	importCtx, importCancel := context.WithTimeout(context.Background(), 40*time.Second)
+	output, importErr := vmCommand(importCtx, agentExe, "--config-dir", dir, "migrate-import", verge).CombinedOutput()
+	importCancel()
+	if importErr != nil {
+		t.Fatalf("headless script fixture import failed: %s: %v", output, importErr)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	process := vmCommand(ctx, agentExe, "--config-dir", dir, "serve")
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- process.Wait() }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			_ = process.Process.Kill()
+			<-finished
+		}
+	}()
+	client := agent.Client{Dir: dir, Timeout: 30 * time.Second}
+	deadline := time.Now().Add(90 * time.Second)
+	var status agent.Status
+	for time.Now().Before(deadline) {
+		if err := client.Call(context.Background(), "status", nil, &status); err == nil && status.TUN && !status.TUNPending {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if !status.TUN {
+		t.Fatalf("headless script TUN not ready: %+v", status)
+	}
+	var preview agent.VergeScriptPreview
+	if err := client.Call(context.Background(), "verge-script-preview", agent.VergeScriptPreviewArgs{Profile: true}, &preview); err != nil || preview.PreviewID == "" {
+		t.Fatalf("headless script preview failed: %+v %v", preview, err)
+	}
+	catalogBefore, err := os.ReadFile(filepath.Join(dir, "profiles.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configBefore, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationDone := make(chan error, 1)
+	go func() {
+		operationDone <- client.Call(context.Background(), "verge-script-apply", agent.ApplyArgs{ProposalID: preview.PreviewID}, nil)
+	}()
+	select {
+	case <-entered:
+	case err := <-operationDone:
+		t.Fatalf("script application finished before provider download: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("script provider download did not start")
+	}
+	var result agent.ActionResult
+	if err := client.Call(context.Background(), "shutdown", nil, &result); err != nil || !result.OK {
+		t.Fatalf("headless script shutdown acknowledgement: %+v %v", result, err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(15 * time.Second):
+		t.Fatal("headless script shutdown did not cancel provider")
+	}
+	select {
+	case err := <-finished:
+		stopped = true
+		if err != nil {
+			t.Fatalf("headless script shutdown: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("headless script shutdown remained blocked")
+	}
+	select {
+	case err := <-operationDone:
+		if err == nil {
+			t.Fatal("interrupted script application reported success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("interrupted script application remained blocked")
+	}
+	catalogAfter, e1 := os.ReadFile(filepath.Join(dir, "profiles.json"))
+	configAfter, e2 := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if e1 != nil || e2 != nil || !bytes.Equal(catalogBefore, catalogAfter) || !bytes.Equal(configBefore, configAfter) {
+		t.Fatalf("headless script cancellation did not restore catalog and configuration: %v %v", e1, e2)
+	}
+	deadline = time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, dns, err := vmNetworkSnapshot()
+		if err == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
+			t.Log("headless migrated script shutdown canceled provider, restored configuration, and restored TUN networking")
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatal("headless script shutdown did not restore networking")
+}
+
 func vmHeadlessParentExit(t *testing.T, agentExe, dir string) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
@@ -4852,6 +4985,7 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	vmHeadlessUncachedShutdown(t, agentExe, "mode")
 	vmHeadlessUncachedShutdown(t, agentExe, "kernel-option")
 	vmHeadlessUncachedShutdown(t, agentExe, "apply")
+	vmHeadlessVergeScriptShutdown(t, agentExe)
 	vmCancelProfileApply(t, agentExe)
 	vmGUIProfileSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), false)
 	vmGUIProfileSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), true)
