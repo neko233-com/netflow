@@ -380,6 +380,122 @@ func vmVerifyConnectionRule(t *testing.T, client agent.Client, dir, fakeIP strin
 	t.Log("connection rule preview described its match scope, retained the close choice, rejected a new matching flow and cleared successfully")
 }
 
+// The GUI event loop is suspended only inside the disposable Windows guest.
+// This prevents its cleanup ticker from reloading the worker, proving that a
+// temporary rule stops matching in the privileged TUN kernel itself.
+func vmVerifyRuleExpiryWhileGUIBlocked(t *testing.T, client agent.Client, dir, fakeIP string, hwnd uintptr) {
+	t.Helper()
+	held, err := net.DialTimeout("tcp", net.JoinHostPort(fakeIP, "18765"), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if _, err := io.WriteString(held, "GET /health HTTP/1.1\r\nHost: mode-alpha.netflow-test.example\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	port := strconv.Itoa(held.LocalAddr().(*net.TCPAddr).Port)
+	var id string
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline) && id == ""; {
+		var page agent.ConnectionsResult
+		if client.Call(context.Background(), "connections", agent.ConnectionsArgs{Limit: 500}, &page) == nil {
+			for _, item := range page.Connections {
+				if strings.EqualFold(item.Network, "tcp") && item.SourcePort == port && item.DestinationPort == "18765" {
+					id = item.ID
+					break
+				}
+			}
+		}
+		if id == "" {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if id == "" {
+		t.Fatal("expiry fixture connection not found")
+	}
+	var preview agent.Preview
+	change := agent.Change{Scope: "connection", Operation: "set", ConnectionID: id, Policy: "REJECT", TTLSeconds: 12}
+	if err := client.Call(context.Background(), "preview", change, &preview); err != nil || preview.ProposalID == "" {
+		t.Fatalf("expiry preview: %+v %v", preview, err)
+	}
+	var applied agent.ApplyResult
+	if err := client.Call(context.Background(), "apply", agent.ApplyArgs{ProposalID: preview.ProposalID}, &applied); err != nil || !applied.Active {
+		t.Fatalf("expiry apply: %+v %v", applied, err)
+	}
+	probe := func() (string, error) {
+		transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(fakeIP, "18765"))
+		}}
+		defer transport.CloseIdleConnections()
+		response, err := (&http.Client{Timeout: 5 * time.Second, Transport: transport}).Get("http://mode-alpha.netflow-test.example:18765/health")
+		if err != nil {
+			return "", err
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		return string(body), err
+	}
+	if body, err := probe(); err == nil {
+		t.Fatalf("temporary reject did not match before expiration: %q", body)
+	} else {
+		var networkErr net.Error
+		if errors.As(err, &networkErr) && networkErr.Timeout() {
+			t.Fatalf("temporary reject timed out: %v", err)
+		}
+	}
+	if time.Until(preview.ExpiresAt) < 2*time.Second {
+		t.Fatal("expiry fixture elapsed before GUI could be suspended")
+	}
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	var owner uint32
+	threadID, _, _ := user32.NewProc("GetWindowThreadProcessId").Call(hwnd, uintptr(unsafe.Pointer(&owner)))
+	if threadID == 0 {
+		t.Fatal("GUI thread not found")
+	}
+	thread, err := windows.OpenThread(windows.THREAD_SUSPEND_RESUME, false, uint32(threadID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(thread)
+	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+	count, _, suspendErr := kernel32.NewProc("SuspendThread").Call(uintptr(thread))
+	if uint32(count) == ^uint32(0) {
+		t.Fatalf("suspend isolated GUI thread: %v", suspendErr)
+	}
+	resumed := false
+	defer func() {
+		if !resumed {
+			_, _ = windows.ResumeThread(thread)
+		}
+	}()
+	if count != 0 {
+		t.Fatalf("isolated GUI thread already suspended: %d", count)
+	}
+	if delay := time.Until(preview.ExpiresAt.Add(300 * time.Millisecond)); delay > 0 {
+		time.Sleep(delay)
+	}
+	store, err := rewrite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range store.Snapshot().Connections {
+		if item.ID == id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("GUI cleanup ran before the blocked-thread test")
+	}
+	if body, err := probe(); err != nil || body != "OK" {
+		t.Fatalf("expired rule still affected TUN flow while GUI was blocked: %q %v", body, err)
+	}
+	if _, err := windows.ResumeThread(thread); err != nil {
+		t.Fatal(err)
+	}
+	resumed = true
+	t.Log("connection rule expired for new TUN traffic while GUI cleanup was suspended")
+}
+
 func vmAgentJunctionSafety(t *testing.T) {
 	t.Helper()
 	base := t.TempDir()
@@ -2506,6 +2622,7 @@ func vmGUIConfigSwitchCancellation(t *testing.T, guiExe string, scenario string)
 	checkForward(fakeIP)
 	if rules {
 		vmVerifyConnectionRule(t, client, dir, fakeIP)
+		vmVerifyRuleExpiryWhileGUIBlocked(t, client, dir, fakeIP, hwnd)
 		checkForward(fakeIP)
 	}
 	off := false

@@ -291,7 +291,7 @@ func (a *App) prepareInitial(ctx context.Context) error {
 		return fmt.Errorf("读取内核选项: %w", err)
 	}
 	a.syncTUNStack()
-	a.core.SetTransformer(a.composeRuntime)
+	a.core.SetTransformer(a.composeRuntimeForKernel)
 	a.core.SetProfileID(a.model.CurrentProfile)
 	if err := a.installCurrentProfile(); err != nil {
 		a.model.Notice = err.Error()

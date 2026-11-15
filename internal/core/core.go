@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
@@ -21,6 +22,7 @@ import (
 	"github.com/metacubex/mihomo/listener"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/tunnel"
+	"github.com/neko233-com/netflow/internal/ruleexpiry"
 	"github.com/neko233-com/netflow/internal/safepath"
 	"go.yaml.in/yaml/v3"
 )
@@ -458,10 +460,15 @@ func (c *Core) apply(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
+	var deadlines []time.Time
 	if c.transform != nil {
 		data, err = c.transform(data, c.profileID)
 		if err != nil {
 			return fmt.Errorf("compose agent rules: %w", err)
+		}
+		data, deadlines, err = ruleexpiry.Decode(data)
+		if err != nil {
+			return fmt.Errorf("invalid temporary rule metadata: %w", err)
 		}
 	}
 	// Apply a copy without a controller, then only enable the configured
@@ -478,6 +485,9 @@ func (c *Core) apply(ctx context.Context) error {
 	safeConfig, err := executor.ParseWithBytes(suppressed)
 	if err != nil {
 		return fmt.Errorf("parse config: %w", err)
+	}
+	if err := applyRuleExpirations(safeConfig.Rules, deadlines); err != nil {
+		return err
 	}
 	var pending []P.Provider
 	for _, p := range safeConfig.Providers {

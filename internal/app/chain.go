@@ -14,6 +14,7 @@ import (
 	"github.com/neko233-com/netflow/internal/kernelopts"
 	"github.com/neko233-com/netflow/internal/proxychain"
 	"github.com/neko233-com/netflow/internal/rewrite"
+	"github.com/neko233-com/netflow/internal/ruleexpiry"
 	"github.com/neko233-com/netflow/internal/safepath"
 	"github.com/neko233-com/netflow/internal/ui"
 	"github.com/neko233-com/netflow/internal/validation"
@@ -22,6 +23,39 @@ import (
 // composeRuntime is shared by kernel application and chain preflight so an
 // externally changed profile extension cannot bypass the validated snapshot.
 func (a *App) composeRuntime(base []byte, profileID string) ([]byte, error) {
+	var state *rewrite.State
+	if a.rewrites != nil {
+		value := a.rewrites.Snapshot()
+		state = &value
+	}
+	return a.composeRuntimeSnapshot(base, profileID, state, time.Now())
+}
+
+func (a *App) composeRuntimeForKernel(base []byte, profileID string) ([]byte, error) {
+	var state *rewrite.State
+	if a.rewrites != nil {
+		value := a.rewrites.Snapshot()
+		state = &value
+	}
+	now := time.Now()
+	composed, err := a.composeRuntimeSnapshot(base, profileID, state, now)
+	if err != nil {
+		return nil, err
+	}
+	var deadlines []time.Time
+	if state != nil {
+		// rewrite.Compose prepends matching connections in reverse order.
+		for i := len(state.Connections) - 1; i >= 0; i-- {
+			item := state.Connections[i]
+			if item.ProfileID == profileID && item.ExpiresAt.After(now) {
+				deadlines = append(deadlines, item.ExpiresAt)
+			}
+		}
+	}
+	return ruleexpiry.Encode(composed, deadlines)
+}
+
+func (a *App) composeRuntimeSnapshot(base []byte, profileID string, state *rewrite.State, now time.Time) ([]byte, error) {
 	guard := a.agentApplyGuard.Load()
 	var originalHash [32]byte
 	if guard != nil {
@@ -43,11 +77,9 @@ func (a *App) composeRuntime(base []byte, profileID string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a.rewrites != nil {
-		state := a.rewrites.Snapshot()
-		now := time.Now()
-		if rewrite.HasActive(state, profileID, now) {
-			base, _, err = rewrite.Compose(base, state, profileID, now)
+	if state != nil {
+		if rewrite.HasActive(*state, profileID, now) {
+			base, _, err = rewrite.Compose(base, *state, profileID, now)
 			if err != nil {
 				return nil, err
 			}

@@ -135,6 +135,9 @@ func (c *Core) Rules() []rules.Item {
 		if r == nil {
 			continue
 		}
+		if expiring, ok := r.(*expiryRule); ok && expiring.expired() {
+			continue
+		}
 		out = append(out, rules.Item{Type: r.RuleType().String(), Payload: r.Payload(), Proxy: r.Adapter()})
 	}
 	return out
