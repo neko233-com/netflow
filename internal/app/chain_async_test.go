@@ -68,7 +68,7 @@ func (e *controlledChainReload) CancelActiveApply(ctx context.Context) (bool, er
 }
 
 func TestGUIChainTransactionsAreCancelableAndResponsive(t *testing.T) {
-	for _, scenario := range []string{"connect-cancel", "connect-success", "connect-restore-fails", "disconnect-cancel", "disconnect-success", "disconnect-restore-fails", "agent-connect-cancel", "agent-disconnect-cancel"} {
+	for _, scenario := range []string{"connect-cancel", "connect-success", "connect-restore-fails", "disconnect-cancel", "disconnect-success", "disconnect-restore-fails", "agent-connect-cancel", "agent-disconnect-cancel", "headless-agent-connect-cancel", "headless-agent-disconnect-cancel", "headless-agent-connect-quit", "headless-agent-disconnect-quit"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("CI", "1")
 			dir := t.TempDir()
@@ -97,8 +97,8 @@ rules: ['MATCH,TARGET']
 			underlying := a.core
 			defer underlying.Stop()
 			nodes := []ui.ProxyNode{{Name: "entry", Provider: "source", SourceGroup: "TARGET"}, {Name: "exit", Provider: "source", SourceGroup: "TARGET"}}
-			disconnect := scenario == "disconnect-cancel" || scenario == "disconnect-success" || scenario == "disconnect-restore-fails" || scenario == "agent-disconnect-cancel"
-			agentCall := scenario == "agent-connect-cancel" || scenario == "agent-disconnect-cancel"
+			disconnect := scenario == "disconnect-cancel" || scenario == "disconnect-success" || scenario == "disconnect-restore-fails" || scenario == "agent-disconnect-cancel" || scenario == "headless-agent-disconnect-cancel" || scenario == "headless-agent-disconnect-quit"
+			agentCall := scenario == "agent-connect-cancel" || scenario == "agent-disconnect-cancel" || scenario == "headless-agent-connect-cancel" || scenario == "headless-agent-disconnect-cancel" || scenario == "headless-agent-connect-quit" || scenario == "headless-agent-disconnect-quit"
 			var proposal agent.ChainPreview
 			if disconnect {
 				draft, err := a.prepareChain("TARGET", nodes)
@@ -123,6 +123,7 @@ rules: ['MATCH,TARGET']
 			a.core = engine
 			d := newSerialDispatcher()
 			a.dispatch = d.call
+			a.headless = scenario == "headless-agent-connect-cancel" || scenario == "headless-agent-disconnect-cancel" || scenario == "headless-agent-connect-quit" || scenario == "headless-agent-disconnect-quit"
 			defer d.close()
 			result := make(chan error, 1)
 			if agentCall {
@@ -167,6 +168,8 @@ rules: ['MATCH,TARGET']
 			success := scenario == "connect-success" || scenario == "disconnect-success"
 			if success {
 				close(engine.release)
+			} else if scenario == "headless-agent-connect-quit" || scenario == "headless-agent-disconnect-quit" {
+				d.call(func() { a.guiOperation.quit = true; a.cancelGUIConfigOperation(a.guiOperation) })
 			} else if agentCall {
 				client := agent.Client{Dir: dir, Timeout: 5 * time.Second}
 				var response agent.CancelApplyResult

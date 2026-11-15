@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,7 +28,7 @@ import (
 )
 
 func TestGUIAgentRuleApplyRemainsResponsiveAndRollsBack(t *testing.T) {
-	for _, scenario := range []string{"global-cancel", "profile-cancel", "global-success", "agent-cancel", "quit", "external-rules", "external-options", "external-source-success", "external-source-cancel"} {
+	for _, scenario := range []string{"global-cancel", "profile-cancel", "global-success", "agent-cancel", "headless-agent-cancel", "quit", "external-rules", "external-options", "external-source-success", "external-source-cancel"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("CI", "1")
 			entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -76,6 +77,7 @@ func TestGUIAgentRuleApplyRemainsResponsiveAndRollsBack(t *testing.T) {
 			before := a.rewrites.Snapshot()
 			d := newSerialDispatcher()
 			a.dispatch = d.call
+			a.headless = scenario == "headless-agent-cancel"
 			defer d.close()
 			quitCalled := make(chan struct{})
 			if scenario == "quit" {
@@ -87,7 +89,7 @@ func TestGUIAgentRuleApplyRemainsResponsiveAndRollsBack(t *testing.T) {
 			}
 			result := make(chan response, 1)
 			client := agent.Client{Dir: dir, Timeout: 10 * time.Second}
-			if scenario == "agent-cancel" {
+			if scenario == "agent-cancel" || scenario == "headless-agent-cancel" {
 				if err := a.startAgent(); err != nil {
 					t.Fatal(err)
 				}
@@ -139,7 +141,7 @@ func TestGUIAgentRuleApplyRemainsResponsiveAndRollsBack(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if scenario == "agent-cancel" {
+				if scenario == "agent-cancel" || scenario == "headless-agent-cancel" {
 					var response agent.CancelApplyResult
 					if err := client.Call(context.Background(), "cancel-apply", nil, &response); err != nil || !response.Accepted {
 						t.Fatalf("Agent cancel: %+v %v", response, err)
@@ -272,7 +274,7 @@ func (e *asyncConnectionEngine) CancelActiveApply(context.Context) (bool, error)
 }
 
 func TestGUIConnectionRuleOnlyClosesAfterSuccessfulExplicitRequest(t *testing.T) {
-	for _, scenario := range []string{"success-close", "success-keep", "cancel-close", "connection-changed"} {
+	for _, scenario := range []string{"success-close", "success-keep", "cancel-close", "connection-changed", "headless-agent-success-close", "headless-agent-cancel-close"} {
 		t.Run(scenario, func(t *testing.T) {
 			dir := t.TempDir()
 			a := newProfileHarness(dir)
@@ -304,15 +306,25 @@ func TestGUIConnectionRuleOnlyClosesAfterSuccessfulExplicitRequest(t *testing.T)
 			}
 			d := newSerialDispatcher()
 			a.dispatch = d.call
+			a.headless = scenario == "headless-agent-success-close" || scenario == "headless-agent-cancel-close"
 			defer d.close()
 			type response struct {
 				value agent.ApplyResult
 				err   error
 			}
 			result := make(chan response, 1)
-			d.call(func() {
-				a.agentApplyAsync(preview.ProposalID, func(value agent.ApplyResult, err error) { result <- response{value, err} })
-			})
+			if a.headless {
+				input, _ := json.Marshal(agent.ApplyArgs{ProposalID: preview.ProposalID})
+				go func() {
+					value, err := a.dispatchAgent(context.Background(), "apply", input)
+					out, _ := value.(agent.ApplyResult)
+					result <- response{out, err}
+				}()
+			} else {
+				d.call(func() {
+					a.agentApplyAsync(preview.ProposalID, func(value agent.ApplyResult, err error) { result <- response{value, err} })
+				})
+			}
 			if scenario != "connection-changed" {
 				select {
 				case <-engine.started:
@@ -322,7 +334,12 @@ func TestGUIConnectionRuleOnlyClosesAfterSuccessfulExplicitRequest(t *testing.T)
 				if engine.closed.Load() != 0 {
 					t.Fatal("existing connection was closed before successful apply")
 				}
-				if scenario == "cancel-close" {
+				if scenario == "headless-agent-cancel-close" {
+					value, err := a.dispatchAgent(context.Background(), "cancel-apply", nil)
+					if err != nil || !value.(agent.CancelApplyResult).Accepted {
+						t.Fatalf("cancel: %v %v", value, err)
+					}
+				} else if scenario == "cancel-close" {
 					d.call(func() { a.cancelGUIConfigOperation(a.guiOperation) })
 				} else {
 					engine.releaseOnce.Do(func() { close(engine.release) })
@@ -334,15 +351,15 @@ func TestGUIConnectionRuleOnlyClosesAfterSuccessfulExplicitRequest(t *testing.T)
 			case <-time.After(5 * time.Second):
 				t.Fatal("connection rule transaction did not finish")
 			}
-			wantClosed := scenario == "success-close"
-			if (out.err == nil) != (scenario == "success-close" || scenario == "success-keep") {
+			wantClosed := scenario == "success-close" || scenario == "headless-agent-success-close"
+			if (out.err == nil) != (scenario == "success-close" || scenario == "success-keep" || scenario == "headless-agent-success-close") {
 				t.Fatalf("connection apply: %+v %v", out.value, out.err)
 			}
 			if out.value.ClosedConnection != wantClosed || (engine.closed.Load() != 0) != wantClosed {
 				t.Fatalf("unexpected close result: %+v calls=%d", out.value, engine.closed.Load())
 			}
 			state := a.rewrites.Snapshot()
-			if scenario == "cancel-close" || scenario == "connection-changed" {
+			if scenario == "cancel-close" || scenario == "headless-agent-cancel-close" || scenario == "connection-changed" {
 				if len(state.Connections) != 0 {
 					t.Fatal("failed connection rule remained applied")
 				}

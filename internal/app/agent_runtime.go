@@ -107,7 +107,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		}
 		return agent.CancelApplyResult{Accepted: accepted}, nil
 	}
-	if (method == "chain-apply" || method == "chain-disconnect") && !a.headless {
+	if method == "chain-apply" || method == "chain-disconnect" {
 		var input agent.ApplyArgs
 		if method == "chain-apply" {
 			if err := decodeStrict(args, &input); err != nil {
@@ -157,7 +157,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			})
 		})
 		if !executed {
-			return nil, errors.New("desktop application is shutting down")
+			return nil, errors.New("application is shutting down")
 		}
 		select {
 		case out := <-result:
@@ -166,7 +166,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			return nil, ctx.Err()
 		}
 	}
-	if method == "kernel-option" && !a.headless {
+	if method == "kernel-option" {
 		var input agent.KernelOptionArgs
 		if err := decodeStrict(args, &input); err != nil {
 			return nil, err
@@ -199,7 +199,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			})
 		})
 		if !executed {
-			return nil, errors.New("desktop application is shutting down")
+			return nil, errors.New("application is shutting down")
 		}
 		select {
 		case out := <-result:
@@ -208,7 +208,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			return nil, ctx.Err()
 		}
 	}
-	if method == "apply" && !a.headless {
+	if method == "apply" {
 		var input agent.ApplyArgs
 		if err := decodeStrict(args, &input); err != nil {
 			return nil, err
@@ -228,7 +228,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			a.agentApplyAsync(input.ProposalID, func(value agent.ApplyResult, err error) { result <- response{value, err} })
 		})
 		if !executed {
-			return nil, errors.New("desktop application is shutting down")
+			return nil, errors.New("application is shutting down")
 		}
 		select {
 		case out := <-result:
@@ -237,7 +237,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			return nil, ctx.Err()
 		}
 	}
-	if (method == "use-profile" || method == "mode") && !a.headless {
+	if method == "use-profile" || method == "mode" {
 		var start func(func(error))
 		if method == "use-profile" {
 			var input agent.ProfileArgs
@@ -267,7 +267,7 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 			start(func(err error) { result <- err })
 		})
 		if !executed {
-			return nil, errors.New("desktop application is shutting down")
+			return nil, errors.New("application is shutting down")
 		}
 		select {
 		case err := <-result:
@@ -543,11 +543,6 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 					}
 				}
 				completed <- err
-			}
-			if a.headless {
-				active, finishErr = a.finishVergeScriptCommit(ctx, ready)
-				finish(finishErr)
-				return
 			}
 			previous := a.guiOperation
 			a.startGUIConfigOperation("正在应用 Verge 脚本", func() (*guiConfigTransaction, error) {

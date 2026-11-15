@@ -31,6 +31,46 @@ function Protect-NetFlowDiagnostic([string]$Log, [string[]]$Secrets = @()) {
     }
     return $safe
 }
+function Invoke-NetFlowBoundedProcess([string]$Executable, [string[]]$Arguments, [int]$TimeoutSeconds = 20) {
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $Executable
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $start.StandardErrorEncoding = [Text.Encoding]::UTF8
+    foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $start
+    try {
+        if (-not $process.Start()) { throw 'Could not start validation subprocess' }
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill($true) } catch { }
+            [void]$process.WaitForExit(2000)
+            throw 'Validation subprocess timed out'
+        }
+        if (-not $stdout.Wait(2000) -or -not $stderr.Wait(2000)) { throw 'Validation subprocess output timed out' }
+        if ($stdout.Result.Length -gt 2097152 -or $stderr.Result.Length -gt 2097152) { throw 'Validation subprocess output exceeded limit' }
+        return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = $stdout.Result; Error = $stderr.Result }
+    } finally { $process.Dispose() }
+}
+function Save-NetFlowValidationResult([string]$Json, [string]$RunID, [string]$Path) {
+    if ($RunID -cnotmatch '^[0-9a-f]{32}$' -or $Json.Length -gt 2097152) { throw 'Invalid validation result identity or size' }
+    $record = ConvertFrom-Json -InputObject $Json -AsHashtable
+    if ($record -isnot [System.Collections.IDictionary] -or $record.id -cne $RunID -or $record.ok -isnot [bool] -or $record.output -isnot [string] -or ($record.ContainsKey('error') -and $record.error -isnot [string])) { throw 'Invalid validation result' }
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $writer = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false))
+        try { $writer.Write($Json) } finally { $writer.Dispose() }
+    } finally { $stream.Dispose() }
+    return $record
+}
+function Test-NetFlowMissingCopy([string]$ErrorText) {
+    return $ErrorText -match '(?i)(could not find the file|no such file or directory)'
+}
 function Assert-NetFlowReleaseCurrent {
     & python scripts/build_inputs.py verify
     if ($LASTEXITCODE -ne 0) { throw 'Cannot validate stale, modified or unrecorded release artifacts.' }
@@ -99,6 +139,31 @@ if ($TestPolicyOnly) {
         $rejected = $false
         try { Assert-NetFlowPayloadCurrent } catch { $rejected = $true }
         if (-not $rejected) { throw 'Changed binary hash policy was accepted' }
+        $testID = '0123456789abcdef0123456789abcdef'
+        $resultPath = Join-Path $testDir 'result.json'
+        $valid = @{ id = $testID; ok = $true; output = 'passed' } | ConvertTo-Json -Compress
+        $saved = Save-NetFlowValidationResult $valid $testID $resultPath
+        if (-not $saved.ok -or $saved.output -ne 'passed' -or [IO.File]::ReadAllText($resultPath) -cne $valid) { throw 'Validation result was not preserved' }
+        $rejected = $false
+        try { Save-NetFlowValidationResult $valid $testID $resultPath | Out-Null } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Existing validation result was overwritten' }
+        foreach ($invalid in @(
+            (@{ id = 'ffffffffffffffffffffffffffffffff'; ok = $true; output = '' } | ConvertTo-Json -Compress),
+            (@{ id = $testID; ok = 'true'; output = '' } | ConvertTo-Json -Compress),
+            (@{ id = $testID; ok = $true; output = 1 } | ConvertTo-Json -Compress),
+            ('x' * 2097153)
+        )) {
+            $rejected = $false
+            try { Save-NetFlowValidationResult $invalid $testID (Join-Path $testDir 'invalid.json') | Out-Null } catch { $rejected = $true }
+            if (-not $rejected) { throw 'Unsafe validation result accepted' }
+        }
+        if (-not (Test-NetFlowMissingCopy 'Could not find the file /missing in container') -or (Test-NetFlowMissingCopy 'daemon unavailable')) { throw 'Unsafe missing-result classification' }
+        $pwshPath = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
+        $command = Invoke-NetFlowBoundedProcess $pwshPath @('-NoProfile', '-Command', "[Console]::Out.Write('ok')") 10
+        if ($command.ExitCode -ne 0 -or $command.Output -cne 'ok') { throw 'Validation subprocess output failed' }
+        $timedOut = $false
+        try { Invoke-NetFlowBoundedProcess $pwshPath @('-NoProfile', '-Command', 'Start-Sleep -Seconds 8') 1 | Out-Null } catch { $timedOut = $_.Exception.Message -eq 'Validation subprocess timed out' }
+        if (-not $timedOut) { throw 'Validation subprocess timeout failed' }
     } finally {
         $resolved = (Resolve-Path -LiteralPath $testDir).Path
         $prefix = $testBuild.TrimEnd('\') + '\payload-policy-'
@@ -207,16 +272,21 @@ try {
     $guestStarted = $true
     $until = (Get-Date).AddMinutes($TimeoutMinutes)
     $bootAttempt = 1
+    $dockerPath = (Get-Command docker -CommandType Application | Select-Object -First 1).Source
     while ((Get-Date) -lt $until) {
-        $state = docker inspect --format '{{.State.Running}}' $container
+        $inspection = Invoke-NetFlowBoundedProcess $dockerPath @('inspect', '--format', '{{.State.Running}}', $container)
+        $state = $inspection.Output.Trim()
+        if ($inspection.ExitCode -ne 0 -or $state -notin @('true', 'false')) { throw 'Cannot inspect Windows validation guest' }
         if ($state -ne 'true') {
             # A result can be written immediately before the guest exits.
             # Preserve it before deciding whether a boot retry is safe.
             $localResult = Join-Path $repo "build/windows-vm-result-$runID.json"
-            docker cp "${container}:/storage/netflow-results/$runID.json" $localResult 2>$null
-            $hasResult = $LASTEXITCODE -eq 0
+            $recovery = Join-Path $repo "build/windows-vm-recovery-$runID.json"
+            $copy = Invoke-NetFlowBoundedProcess $dockerPath @('cp', "${container}:/storage/netflow-results/$runID.json", $recovery)
+            $hasResult = $copy.ExitCode -eq 0
             if ($hasResult) {
-                $record = Get-Content -Raw -LiteralPath $localResult | ConvertFrom-Json
+                $record = Save-NetFlowValidationResult ([IO.File]::ReadAllText($recovery, [Text.Encoding]::UTF8)) $runID $localResult
+                Remove-Item -LiteralPath $recovery -Force
                 $record.output
                 if (-not $record.ok) { throw "Windows validation failed: $($record.error)" }
                 Assert-NetFlowReleaseCurrent
@@ -224,6 +294,7 @@ try {
                 Write-Output "Windows validation passed: $runID"
                 return
             }
+            if (-not (Test-NetFlowMissingCopy $copy.Error)) { throw 'Could not recover the stopped guest result' }
             $logs = Protect-NetFlowDiagnostic (docker logs --tail 100 $container 2>&1 | Out-String) @($guestPassword)
             $logPath = Join-Path $repo "build/windows-vm-boot-$runID-attempt-$bootAttempt.log"
             [IO.File]::WriteAllText($logPath, $logs, [Text.UTF8Encoding]::new($false))
@@ -239,18 +310,18 @@ try {
             }
             throw 'Windows guest stopped before validation completed'
         }
-        $result = docker exec $container sh -c "test ! -f /storage/netflow-results/$runID.json || cat /storage/netflow-results/$runID.json"
-        if ($result) {
-            $record = $result | ConvertFrom-Json
-            docker cp "${container}:/storage/netflow-results/$runID.json" (Join-Path $repo "build/windows-vm-result-$runID.json")
-            if ($LASTEXITCODE -ne 0) { throw 'Could not preserve the validation result' }
+        $result = Invoke-NetFlowBoundedProcess $dockerPath @('exec', $container, 'sh', '-c', "test ! -f /storage/netflow-results/$runID.json || cat /storage/netflow-results/$runID.json")
+        if ($result.ExitCode -ne 0) { throw 'Could not read the Windows validation result' }
+        if ($result.Output) {
+            $record = Save-NetFlowValidationResult $result.Output $runID (Join-Path $repo "build/windows-vm-result-$runID.json")
             $record.output
             if (-not $record.ok) { throw "Windows validation failed: $($record.error)" }
             Assert-NetFlowReleaseCurrent
             Assert-NetFlowPayloadCurrent
             # Once a bootable disk has passed validation, the verified ISO is
             # no longer needed. Keep the virtual disk and all result records.
-            docker exec $container sh -c 'if test -f /storage/windows.system || test -f /storage/windows.boot; then rm -f -- /storage/netflow-media/win10x64-enterprise-ltsc-eval.iso /storage/netflow-media/win10x64-enterprise-ltsc-eval.iso.aria2; fi'
+            $cleanup = Invoke-NetFlowBoundedProcess $dockerPath @('exec', $container, 'sh', '-c', 'if test -f /storage/windows.system || test -f /storage/windows.boot; then rm -f -- /storage/netflow-media/win10x64-enterprise-ltsc-eval.iso /storage/netflow-media/win10x64-enterprise-ltsc-eval.iso.aria2; fi')
+            if ($cleanup.ExitCode -ne 0) { Write-Warning 'Could not remove cached installation media' }
             Write-Output "Windows validation passed: $runID"
             return
         }
@@ -264,10 +335,10 @@ try {
 } finally {
     if ($guestStarted) {
         try {
-            $owned = docker inspect --format '{{ index .Config.Labels "netflow.windows-vm" }}' $container 2>$null
-            if ($LASTEXITCODE -eq 0 -and $owned -eq '1') {
-                docker stop --timeout 30 $container | Out-Null
-                if ($LASTEXITCODE -ne 0) { Write-Warning 'Could not stop the owned validation guest' }
+            $owned = Invoke-NetFlowBoundedProcess $dockerPath @('inspect', '--format', '{{ index .Config.Labels "netflow.windows-vm" }}', $container) 10
+            if ($owned.ExitCode -eq 0 -and $owned.Output.Trim() -eq '1') {
+                $stopped = Invoke-NetFlowBoundedProcess $dockerPath @('stop', '--timeout', '30', $container) 40
+                if ($stopped.ExitCode -ne 0) { Write-Warning 'Could not stop the owned validation guest' }
             }
         } catch { Write-Warning "Could not stop the owned validation guest: $_" }
     }

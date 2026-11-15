@@ -24,7 +24,7 @@ import (
 )
 
 func TestGUIVergeScriptApplyCancellationAndRollback(t *testing.T) {
-	for _, scenario := range []string{"cancel", "context-cancel", "agent-cancel", "success", "external-catalog", "rollback-fails", "sensitive-error", "update-cancel"} {
+	for _, scenario := range []string{"cancel", "context-cancel", "agent-cancel", "headless-agent-cancel", "headless-quit", "success", "external-catalog", "rollback-fails", "sensitive-error", "update-cancel"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("CI", "1")
 			source := t.TempDir()
@@ -58,6 +58,7 @@ func TestGUIVergeScriptApplyCancellationAndRollback(t *testing.T) {
 			defer underlying.Stop()
 			d := newSerialDispatcher()
 			a.dispatch = d.call
+			a.headless = scenario == "headless-agent-cancel" || scenario == "headless-quit"
 			defer d.close()
 			previewArgs, _ := json.Marshal(agent.VergeScriptPreviewArgs{Profile: true})
 			previewCall := func(method string, args json.RawMessage) agent.VergeScriptPreview {
@@ -140,11 +141,13 @@ func TestGUIVergeScriptApplyCancellationAndRollback(t *testing.T) {
 				close(engine.release)
 			case "context-cancel":
 				cancel()
-			case "agent-cancel":
+			case "agent-cancel", "headless-agent-cancel":
 				v, err := a.dispatchAgent(context.Background(), "cancel-apply", json.RawMessage(`{}`))
 				if err != nil || !v.(agent.CancelApplyResult).Accepted {
 					t.Fatalf("cancel: %v %v", v, err)
 				}
+			case "headless-quit":
+				d.call(func() { op.quit = true; a.cancelGUIConfigOperation(op) })
 			default:
 				d.call(func() { a.cancelGUIConfigOperation(op) })
 			}

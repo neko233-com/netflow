@@ -22,7 +22,7 @@ import (
 )
 
 func TestGUIModeSwitchRemainsResponsiveAndRollsBack(t *testing.T) {
-	for _, scenario := range []string{"cancel", "agent-cancel", "success", "external-options"} {
+	for _, scenario := range []string{"cancel", "agent-cancel", "headless-agent-cancel", "success", "external-options"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("CI", "1")
 			entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -60,10 +60,11 @@ func TestGUIModeSwitchRemainsResponsiveAndRollsBack(t *testing.T) {
 			}
 			d := newSerialDispatcher()
 			a.dispatch = d.call
+			a.headless = scenario == "headless-agent-cancel"
 			defer d.close()
 			result := make(chan error, 1)
 			client := agent.Client{Dir: dir, Timeout: 10 * time.Second}
-			if scenario == "agent-cancel" {
+			if scenario == "agent-cancel" || scenario == "headless-agent-cancel" {
 				if err := a.startAgent(); err != nil {
 					t.Fatal(err)
 				}
@@ -99,7 +100,7 @@ func TestGUIModeSwitchRemainsResponsiveAndRollsBack(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if scenario == "agent-cancel" {
+				if scenario == "agent-cancel" || scenario == "headless-agent-cancel" {
 					var response agent.CancelApplyResult
 					if err := client.Call(context.Background(), "cancel-apply", nil, &response); err != nil || !response.Accepted {
 						t.Fatalf("Agent cancel: %+v %v", response, err)

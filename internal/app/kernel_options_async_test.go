@@ -21,7 +21,7 @@ import (
 )
 
 func TestGUIKernelOptionsRemainResponsiveAndRollback(t *testing.T) {
-	for _, scenario := range []string{"option-cancel", "ports-cancel", "agent-cancel", "option-success"} {
+	for _, scenario := range []string{"option-cancel", "ports-cancel", "agent-cancel", "headless-agent-cancel", "option-success"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("CI", "1")
 			entered, released, canceled := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -56,10 +56,11 @@ func TestGUIKernelOptionsRemainResponsiveAndRollback(t *testing.T) {
 			}
 			d := newSerialDispatcher()
 			a.dispatch = d.call
+			a.headless = scenario == "headless-agent-cancel"
 			defer d.close()
 			result := make(chan error, 1)
 			client := agent.Client{Dir: dir, Timeout: 10 * time.Second}
-			if scenario == "agent-cancel" {
+			if scenario == "agent-cancel" || scenario == "headless-agent-cancel" {
 				if err := a.startAgent(); err != nil {
 					t.Fatal(err)
 				}
@@ -87,7 +88,7 @@ func TestGUIKernelOptionsRemainResponsiveAndRollback(t *testing.T) {
 			}
 			if scenario == "option-success" {
 				unblock()
-			} else if scenario == "agent-cancel" {
+			} else if scenario == "agent-cancel" || scenario == "headless-agent-cancel" {
 				var response agent.CancelApplyResult
 				if err := client.Call(context.Background(), "cancel-apply", nil, &response); err != nil || !response.Accepted {
 					t.Fatalf("cancel: %+v %v", response, err)

@@ -3612,7 +3612,7 @@ func vmGUIStartupProvider(t *testing.T, appExe string) {
 	}
 }
 
-func vmHeadlessUncachedShutdown(t *testing.T, agentExe string) {
+func vmHeadlessUncachedShutdown(t *testing.T, agentExe, operation string) {
 	t.Helper()
 	beforeRoutes, beforeDNS, err := vmNetworkSnapshot()
 	if err != nil {
@@ -3651,7 +3651,7 @@ func vmHeadlessUncachedShutdown(t *testing.T, agentExe string) {
 			<-finished
 		}
 	}()
-	client := agent.Client{Dir: dir, Timeout: 5 * time.Second}
+	client := agent.Client{Dir: dir, Timeout: 30 * time.Second}
 	deadline := time.Now().Add(90 * time.Second)
 	var status agent.Status
 	for time.Now().Before(deadline) {
@@ -3667,8 +3667,25 @@ func vmHeadlessUncachedShutdown(t *testing.T, agentExe string) {
 	if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
 		t.Fatal(err)
 	}
-	modeDone := make(chan error, 1)
-	go func() { modeDone <- client.Call(context.Background(), "mode", agent.ModeArgs{Mode: "direct"}, nil) }()
+	var args any
+	switch operation {
+	case "mode":
+		args = agent.ModeArgs{Mode: "direct"}
+	case "kernel-option":
+		enabled := true
+		args = agent.KernelOptionArgs{Name: "ipv6", BoolValue: &enabled}
+	case "apply":
+		var preview agent.Preview
+		change := agent.Change{Scope: "global", Operation: "set", Layer: rewrite.Layer{Prepend: []string{"DOMAIN,headless-shutdown.netflow-test.example,REJECT"}}}
+		if err := client.Call(context.Background(), "preview", change, &preview); err != nil || preview.ProposalID == "" {
+			t.Fatalf("headless rule preview: %+v %v", preview, err)
+		}
+		args = agent.ApplyArgs{ProposalID: preview.ProposalID}
+	default:
+		t.Fatalf("unknown operation %q", operation)
+	}
+	operationDone := make(chan error, 1)
+	go func() { operationDone <- client.Call(context.Background(), operation, args, nil) }()
 	select {
 	case <-entered:
 	case <-time.After(15 * time.Second):
@@ -3707,22 +3724,31 @@ func vmHeadlessUncachedShutdown(t *testing.T, agentExe string) {
 		t.Fatal("headless shutdown remained blocked")
 	}
 	select {
-	case err := <-modeDone:
+	case err := <-operationDone:
 		if err == nil {
-			t.Fatal("interrupted mode change reported success")
+			t.Fatalf("interrupted %s reported success", operation)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("interrupted mode request remained blocked")
+		t.Fatalf("interrupted %s request remained blocked", operation)
 	}
 	options, err := kernelopts.Open(dir)
-	if err != nil || options.Snapshot().Mode != nil {
-		t.Fatalf("interrupted mode change was not rolled back: %v", err)
+	if err != nil || options.Snapshot().Mode != nil || options.Snapshot().IPv6 != nil {
+		t.Fatalf("interrupted kernel option was not rolled back: %v", err)
+	}
+	if operation == "apply" {
+		state, err := rewrite.Open(dir)
+		if err != nil || len(state.Snapshot().Global.Prepend) != 0 {
+			t.Fatalf("interrupted Agent rules were not rolled back: %v", err)
+		}
+	}
+	if body, err := os.ReadFile(configPath); err != nil || string(body) != config {
+		t.Fatalf("headless %s changed the external configuration: %v", operation, err)
 	}
 	deadline = time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		routes, dns, err := vmNetworkSnapshot()
 		if err == nil && reflect.DeepEqual(routes, beforeRoutes) && reflect.DeepEqual(dns, beforeDNS) {
-			t.Log("headless Agent status reported busy promptly; shutdown canceled initial provider, rolled back mode, and restored TUN networking")
+			t.Logf("headless %s shutdown canceled provider, rolled back state, and restored TUN networking", operation)
 			return
 		}
 		time.Sleep(time.Second)
@@ -4823,7 +4849,9 @@ func TestWindowsVMEndToEnd(t *testing.T) {
 	vmHeadlessRoundTrip(t, agentExe, backupTarget)
 	t.Log("installed headless CLI activated TUN, applied a rewrite without visible windows, and restored networking on shutdown")
 	vmProviderBusyTUN(t, agentExe)
-	vmHeadlessUncachedShutdown(t, agentExe)
+	vmHeadlessUncachedShutdown(t, agentExe, "mode")
+	vmHeadlessUncachedShutdown(t, agentExe, "kernel-option")
+	vmHeadlessUncachedShutdown(t, agentExe, "apply")
 	vmCancelProfileApply(t, agentExe)
 	vmGUIProfileSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), false)
 	vmGUIProfileSwitchCancellation(t, filepath.Join(install, "NetFlow.exe"), true)
