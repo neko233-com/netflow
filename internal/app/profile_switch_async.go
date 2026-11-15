@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	"github.com/neko233-com/netflow/internal/profile"
@@ -31,7 +32,7 @@ type guiProfileOperation struct {
 // useProfileAsync is called on the GUI event loop. Schedule the actual start
 // for a later event so the current view frame has finished using the model.
 func (a *App) useProfileAsync(uid string, done func(error)) {
-	if a.guiOperation != nil {
+	if a.guiProfileBusy() {
 		done(errors.New("配置正在应用，请稍后重试"))
 		return
 	}
@@ -74,7 +75,18 @@ func (a *App) useProfileAsync(uid string, done func(error)) {
 }
 
 func (a *App) cancelGUIProfileOperation(op *guiProfileOperation) {
-	if a.guiOperation != op || op.canceled {
+	if a.guiOperation != op {
+		return
+	}
+	if op.rollback {
+		// On an explicit quit, the restored on-disk configuration is already
+		// safe. Interrupt a stalled rollback so shutdown can stop the kernel.
+		if op.quit && op.cancelDone == nil {
+			a.requestGUIProfileCancellation(op)
+		}
+		return
+	}
+	if op.canceled {
 		return
 	}
 	op.canceled = true
@@ -85,11 +97,13 @@ func (a *App) cancelGUIProfileOperation(op *guiProfileOperation) {
 	if a.win != nil {
 		a.win.Invalidate()
 	}
-	// Do not interrupt the rollback; stopping the previous configuration's
-	// reload midway would leave the runtime less predictable on exit.
-	if a.guiBarrier.Load() != op || op.rollback {
+	if a.guiBarrier.Load() != op {
 		return
 	}
+	a.requestGUIProfileCancellation(op)
+}
+
+func (a *App) requestGUIProfileCancellation(op *guiProfileOperation) {
 	op.cancelDone = make(chan struct{})
 	go func(done, reloadDone chan struct{}) {
 		defer close(done)
@@ -144,37 +158,75 @@ func (a *App) finishGUIProfileReload(op *guiProfileOperation, tx *profileSwitch,
 	}
 	op.rollback = true
 	needReload, restoreErr := a.beginProfileSwitchRollback(tx)
-	if restoreErr != nil || !needReload {
+	if op.quit && restoreErr != nil {
+		log.Print("profile configuration rollback failed during quit; inspect the configuration before restarting")
+	}
+	if restoreErr != nil || !needReload || op.quit {
 		a.finishGUIProfileOperation(op, profileSwitchError(reloadErr, restoreErr))
 		return
 	}
+	op.reloadDone = make(chan struct{})
 	go func() {
 		err := a.core.Reload()
+		close(op.reloadDone)
 		a.runOnMainUnrestricted(func() {
-			a.finishGUIProfileOperation(op, profileSwitchError(reloadErr, err))
+			a.finishGUIProfileRollback(op, reloadErr, err)
 		})
 	}()
+}
+
+func (a *App) finishGUIProfileRollback(op *guiProfileOperation, cause, rollbackErr error) {
+	if op.cancelDone != nil {
+		done := op.cancelDone
+		op.cancelDone = nil
+		go func() {
+			<-done
+			a.runOnMainUnrestricted(func() { a.finishGUIProfileRollback(op, cause, rollbackErr) })
+		}()
+		return
+	}
+	a.finishGUIProfileOperation(op, profileSwitchError(cause, rollbackErr))
 }
 
 func (a *App) finishGUIProfileOperation(op *guiProfileOperation, err error) {
 	if a.guiOperation != op {
 		return
 	}
+	a.guiOperation = nil
+	if op.finished != nil {
+		op.finished(err)
+	}
+	if op.quit {
+		// Keep queued mutations behind the barrier until the event loop has
+		// actually stopped. The kernel may be only partly restored while the
+		// quit sequence is about to stop it.
+		a.guiBarrier.Store(op)
+		if a.model != nil {
+			a.model.OperationMessage = "正在退出"
+			a.model.OperationCancel = nil
+		}
+		a.quitAfterGUIOperation()
+		return
+	}
 	if a.model != nil {
 		a.model.OperationMessage = ""
 		a.model.OperationCancel = nil
 	}
-	a.guiOperation = nil
 	a.guiBarrier.CompareAndSwap(op, nil)
 	close(op.done)
-	if op.finished != nil {
-		op.finished(err)
-	}
 	if a.win != nil {
 		a.win.SetTitle("NetFlow")
 		a.win.Invalidate()
 	}
-	if op.quit {
-		a.quitAfterGUIOperation()
+}
+
+func (a *App) releaseGUIBarrierAfterExit() {
+	if op := a.guiBarrier.Swap(nil); op != nil {
+		close(op.done)
 	}
+}
+
+// Called only on the GUI event loop.
+func (a *App) guiProfileBusy() bool {
+	return a.guiOperation != nil || a.guiBarrier.Load() != nil
 }

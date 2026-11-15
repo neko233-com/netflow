@@ -90,7 +90,7 @@ func (a *App) releaseHotkeys() {
 }
 
 func (a *App) invokeHotkey(key string) {
-	if a.guiOperation != nil {
+	if a.guiProfileBusy() {
 		a.showMain()
 		return
 	}

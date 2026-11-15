@@ -137,6 +137,7 @@ type App struct {
 	headlessCancel      func()
 	guiOperation        *guiProfileOperation // event loop only
 	guiBarrier          atomic.Pointer[guiProfileOperation]
+	guiQuit             func() // optional event-loop quit hook
 }
 
 // New checks options and fills the M1 defaults. It does not start the

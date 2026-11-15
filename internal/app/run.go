@@ -150,6 +150,7 @@ func (a *App) Run() error {
 		}()
 	})
 	runErr := mygo.App.Run()
+	a.releaseGUIBarrierAfterExit()
 	if startupStarted {
 		<-startupDone
 	}
@@ -285,7 +286,7 @@ func (a *App) ready(quitting *bool) {
 }
 
 func (a *App) trayClick() {
-	if a.guiOperation != nil {
+	if a.guiProfileBusy() {
 		if a.win != nil {
 			a.win.Show()
 		}
@@ -309,7 +310,7 @@ func (a *App) showMain() {
 	if a.win == nil {
 		return
 	}
-	if a.guiOperation != nil {
+	if a.guiProfileBusy() {
 		a.win.Show()
 		return
 	}
@@ -322,7 +323,13 @@ func (a *App) showMain() {
 	a.win.Focus()
 }
 
-func (a *App) quitAfterGUIOperation() { mygo.App.Quit() }
+func (a *App) quitAfterGUIOperation() {
+	if a.guiQuit != nil {
+		a.guiQuit()
+		return
+	}
+	mygo.App.Quit()
+}
 
 func (a *App) setLightweight(on bool) error {
 	if a.model == nil || a.win == nil {

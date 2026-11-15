@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -344,5 +345,131 @@ func TestGUIProfileCancelRetriesUntilReloadRegisters(t *testing.T) {
 	}
 	if engine.ProfileID() != first.UID {
 		t.Fatal("previous profile id was not restored")
+	}
+}
+
+type quitRollbackSwitchEngine struct {
+	*switchTestEngine
+	stage                                                          atomic.Int32
+	firstOnce, rollbackOnce                                        sync.Once
+	firstStarted, rollbackStarted, firstCanceled, rollbackCanceled chan struct{}
+}
+
+func (e *quitRollbackSwitchEngine) Reload() error {
+	if e.stage.Add(1) == 1 {
+		close(e.firstStarted)
+		<-e.firstCanceled
+		return context.Canceled
+	}
+	close(e.rollbackStarted)
+	<-e.rollbackCanceled
+	return context.Canceled
+}
+
+func (e *quitRollbackSwitchEngine) CancelActiveApply(context.Context) (bool, error) {
+	if e.stage.Load() == 1 {
+		e.firstOnce.Do(func() { close(e.firstCanceled) })
+	} else {
+		e.rollbackOnce.Do(func() { close(e.rollbackCanceled) })
+	}
+	return true, nil
+}
+
+func TestGUIQuitCancelsOrSkipsStalledProfileRollback(t *testing.T) {
+	for _, quitDuringRollback := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rollback-started=%t", quitDuringRollback), func(t *testing.T) {
+			dir := t.TempDir()
+			a := newProfileHarness(dir)
+			first, err := a.profiles.ImportLocal("first.yaml", []byte("mode: rule\nrules: ['MATCH,DIRECT']\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := a.profiles.ImportLocal("second.yaml", []byte("mode: direct\nrules: ['MATCH,DIRECT']\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.loadProfiles()
+			if err := a.installCurrentProfile(); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine := &quitRollbackSwitchEngine{switchTestEngine: &switchTestEngine{running: true, dir: dir, id: first.UID},
+				firstStarted: make(chan struct{}), rollbackStarted: make(chan struct{}), firstCanceled: make(chan struct{}), rollbackCanceled: make(chan struct{})}
+			a.core = engine
+			d := newSerialDispatcher()
+			a.dispatch = d.call
+			defer d.close()
+			result := make(chan error, 1)
+			quitCalled := make(chan struct{})
+			a.guiQuit = func() { close(quitCalled) }
+			var operation *guiProfileOperation
+			d.call(func() {
+				a.useProfileAsync(second.UID, func(err error) { result <- err })
+				operation = a.guiOperation
+			})
+			select {
+			case <-engine.firstStarted:
+			case <-time.After(5 * time.Second):
+				t.Fatal("reload did not start")
+			}
+			gated := make(chan struct{})
+			go a.runOnMain(func() { close(gated) })
+			d.call(func() {
+				if !quitDuringRollback {
+					operation.quit = true
+				}
+				a.cancelGUIProfileOperation(operation)
+			})
+			if quitDuringRollback {
+				select {
+				case <-engine.rollbackStarted:
+				case <-time.After(5 * time.Second):
+					t.Fatal("rollback did not start")
+				}
+				d.call(func() { operation.quit = true; a.cancelGUIProfileOperation(operation) })
+				select {
+				case <-engine.rollbackCanceled:
+				case <-time.After(5 * time.Second):
+					t.Fatal("quit did not cancel rollback")
+				}
+			}
+			select {
+			case err := <-result:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("operation result: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("quit waited for profile operation")
+			}
+			select {
+			case <-quitCalled:
+			case <-time.After(5 * time.Second):
+				t.Fatal("GUI quit was not requested")
+			}
+			select {
+			case <-gated:
+				t.Fatal("queued mutation ran before the GUI event loop exited")
+			case <-time.After(100 * time.Millisecond):
+			}
+			d.call(func() { a.releaseGUIBarrierAfterExit() })
+			select {
+			case <-gated:
+			case <-time.After(5 * time.Second):
+				t.Fatal("queued callback did not leave the barrier after exit")
+			}
+			if !quitDuringRollback && engine.stage.Load() != 1 {
+				t.Fatal("quit unnecessarily started a rollback reload")
+			}
+			if engine.ProfileID() != first.UID {
+				t.Fatal("previous profile id was not restored")
+			}
+			after, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("previous config was not restored: %v", err)
+			}
+		})
 	}
 }
