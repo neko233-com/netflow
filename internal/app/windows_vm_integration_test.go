@@ -156,6 +156,13 @@ func requireDisposableVM(t *testing.T) {
 }
 
 func vmNetworkSnapshot() ([]string, map[uint64][]string, error) {
+	return vmNetworkSnapshotExceptTUNLinkLocal(0)
+}
+
+// Windows may regenerate a TUN adapter's IPv6 link-local address when the
+// adapter is reloaded. Compare every other route and DNS entry exactly, then
+// exercise forwarding separately; never suppress a physical-interface route.
+func vmNetworkSnapshotExceptTUNLinkLocal(tunIndex uint32) ([]string, map[uint64][]string, error) {
 	var table *windows.MibIpForwardTable2
 	if err := windows.GetIpForwardTable2(windows.AF_UNSPEC, &table); err != nil {
 		return nil, nil, err
@@ -163,6 +170,12 @@ func vmNetworkSnapshot() ([]string, map[uint64][]string, error) {
 	defer windows.FreeMibTable(unsafe.Pointer(table))
 	var routes []string
 	for _, r := range table.Rows() {
+		if tunIndex != 0 && r.InterfaceIndex == tunIndex && r.DestinationPrefix.Prefix.Family == windows.AF_INET6 && r.DestinationPrefix.PrefixLength == 128 {
+			addr := (*windows.RawSockaddrInet6)(unsafe.Pointer(&r.DestinationPrefix.Prefix))
+			if net.IP(addr.Addr[:]).IsLinkLocalUnicast() {
+				continue
+			}
+		}
 		routes = append(routes, fmt.Sprintf("%d/%d %v %v %d %d", r.InterfaceLuid, r.InterfaceIndex, r.DestinationPrefix, r.NextHop, r.Metric, r.Protocol))
 	}
 	sort.Strings(routes)
@@ -1695,8 +1708,32 @@ func vmCancelProfileApply(t *testing.T, agentExe string) {
 	}))
 	defer provider.Close()
 	defer close(release)
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsServer := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		answer := new(dns.Msg)
+		answer.SetReply(q)
+		for _, question := range q.Question {
+			if (question.Name == "cancel-alpha.netflow-test.example." || question.Name == "cancel-beta.netflow-test.example.") && question.Qtype == dns.TypeA {
+				answer.Answer = append(answer.Answer, &dns.A{Hdr: dns.RR_Header{Name: question.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 30}, A: net.ParseIP("10.233.42.1").To4()})
+			}
+		}
+		_ = w.WriteMsg(answer)
+	})}
+	go func() { _ = dnsServer.ActivateAndServe() }()
+	defer dnsServer.Shutdown()
+	dnsListener, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsAddress := dnsListener.LocalAddr().String()
+	if err := dnsListener.Close(); err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
-	base := "mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\ndns: {enable: false}\nrules: ['MATCH,DIRECT']\n"
+	base := fmt.Sprintf("mixed-port: 0\nport: 0\nsocks-port: 0\nmode: rule\nlog-level: error\nprofile: {store-fake-ip: false}\ndns: {enable: true, listen: '%s', enhanced-mode: fake-ip, nameserver: ['%s']}\nrules: ['MATCH,DIRECT']\n", dnsAddress, packet.LocalAddr().String())
 	next := base + "proxy-providers:\n  uncached: {type: http, url: '" + provider.URL + "', path: providers/cancel-vm.yaml, interval: 3600, health-check: {enable: false}}\n"
 	store := profile.NewStore(dir)
 	first, err := store.ImportLocal("first.yaml", []byte(base))
@@ -1734,10 +1771,48 @@ func vmCancelProfileApply(t *testing.T, agentExe string) {
 	if !status.TUN || status.ActiveProfile != first.UID {
 		t.Fatalf("initial TUN/profile: %+v", status)
 	}
-	activeRoutes, activeDNS, err := vmNetworkSnapshot()
+	tunInterface, err := net.InterfaceByName(tun.DeviceName())
+	if err != nil {
+		t.Fatalf("active TUN adapter: %v", err)
+	}
+	activeRoutes, activeDNS, err := vmNetworkSnapshotExceptTUNLinkLocal(uint32(tunInterface.Index))
 	if err != nil {
 		t.Fatal(err)
 	}
+	lookupFake := func(name string) string {
+		t.Helper()
+		query := new(dns.Msg)
+		query.SetQuestion(name, dns.TypeA)
+		answer, _, err := (&dns.Client{Net: "udp", Timeout: 5 * time.Second}).Exchange(query, dnsAddress)
+		if err != nil || answer == nil || len(answer.Answer) == 0 {
+			t.Fatalf("fake-IP lookup %s: %+v %v", name, answer, err)
+		}
+		record, ok := answer.Answer[0].(*dns.A)
+		if !ok || !strings.HasPrefix(record.A.String(), "198.18.") {
+			t.Fatalf("invalid fake-IP response: %+v", answer.Answer)
+		}
+		return record.A.String()
+	}
+	checkForward := func(fakeIP string) {
+		t.Helper()
+		transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(fakeIP, "18765"))
+		}}
+		defer transport.CloseIdleConnections()
+		client := &http.Client{Timeout: 6 * time.Second, Transport: transport}
+		response, err := client.Get("http://cancel-alpha.netflow-test.example:18765/health")
+		if err != nil {
+			t.Fatalf("TUN fake-IP forwarding: %v", err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil || string(body) != "OK" {
+			t.Fatalf("TUN forwarding response: %q %v", body, readErr)
+		}
+	}
+	alpha := lookupFake("cancel-alpha.netflow-test.example.")
+	beta := lookupFake("cancel-beta.netflow-test.example.")
+	checkForward(alpha)
 	configBefore, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -1791,10 +1866,23 @@ func vmCancelProfileApply(t *testing.T, agentExe string) {
 	if err != nil || catalog.Current != first.UID {
 		t.Fatalf("profile catalog rollback: %+v %v", catalog, err)
 	}
-	routes, dns, err := vmNetworkSnapshot()
-	if err != nil || !reflect.DeepEqual(routes, activeRoutes) || !reflect.DeepEqual(dns, activeDNS) {
-		t.Fatalf("cancel changed active TUN network: %v", err)
+	var routes []string
+	var dns map[uint64][]string
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		routes, dns, err = vmNetworkSnapshotExceptTUNLinkLocal(uint32(tunInterface.Index))
+		if err == nil && reflect.DeepEqual(routes, activeRoutes) && reflect.DeepEqual(dns, activeDNS) {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
+	if err != nil || !reflect.DeepEqual(routes, activeRoutes) || !reflect.DeepEqual(dns, activeDNS) {
+		t.Fatalf("cancel changed active TUN network: %v\nroutes before=%v after=%v\nDNS before=%v after=%v", err, activeRoutes, routes, activeDNS, dns)
+	}
+	if lookupFake("cancel-beta.netflow-test.example.") != beta || lookupFake("cancel-alpha.netflow-test.example.") != alpha {
+		t.Fatal("cancellation lost in-memory Fake-IP mappings")
+	}
+	checkForward(alpha)
 	var shutdown agent.ActionResult
 	if err := client.Call(context.Background(), "shutdown", nil, &shutdown); err != nil || !shutdown.OK {
 		t.Fatalf("shutdown: %+v %v", shutdown, err)
