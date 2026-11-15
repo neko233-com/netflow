@@ -124,7 +124,7 @@ func NewMCP(client Client) *mcp.Server {
 			err := c.Call(ctx, "restart-core", nil, &out)
 			return nil, out, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "netflow_cancel_apply", Description: "Request cancellation of the configuration application active when this request reaches the kernel. Accepted means cancellation was requested, not that rollback is complete; wait for the original operation and inspect status. Does not intentionally disable TUN."},
+	mcp.AddTool(s, &mcp.Tool{Name: "netflow_cancel_apply", Description: "Request cancellation of the active configuration application. A transaction already rolling back is not canceled again. Accepted means cancellation was requested, not that rollback is complete; wait for the original operation and inspect status. Does not intentionally disable TUN."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ Empty) (*mcp.CallToolResult, CancelApplyResult, error) {
 			var out CancelApplyResult
 			err := client.Call(ctx, "cancel-apply", nil, &out)

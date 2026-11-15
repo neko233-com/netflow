@@ -72,12 +72,17 @@ func (a *App) startGUIConfigOperation(message string, begin func() (*guiConfigTr
 		done(errors.New("虚拟网卡正在切换，请稍后重试"))
 		return
 	}
+	if !a.agentCancelGate.TryLock() {
+		done(errors.New("正在取消配置应用，请稍后重试"))
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	op := &guiConfigOperation{done: make(chan struct{}), ctx: ctx, cancel: cancel, finished: done}
 	a.guiOperation = op
 	// Block other actor mutations immediately, including the interval before
 	// the deferred begin callback runs. Begin itself uses the unrestricted path.
 	a.guiBarrier.Store(op)
+	a.agentCancelGate.Unlock()
 	if a.model != nil {
 		a.model.OperationMessage = message
 		a.model.OperationDetail = "正在等待内核完成配置应用。"

@@ -21,7 +21,7 @@ $agent = "$env:LOCALAPPDATA\Programs\NetFlow\netflow-agent.exe"
 
 Windows 开启 TUN 可能请求管理员授权；服务就绪后会输出包含 `ready`、`headless` 和 `tun` 的 JSON。在另一个终端可运行 `& $agent status`、`& $agent shutdown` 及下面的 Agent 命令；`shutdown` 确认收到关闭请求后返回，GUI 实例会拒绝此命令。等待 `serve` 进程退出，确认内核已停止并恢复路由。前台终端按 Ctrl+C 也会请求干净退出；若启动器意外退出，子进程会检测控制管道关闭并退出。测试和诊断时可以使用 `serve --tun=false` 启动内核而不启用 TUN，再用 `tun on` 显式开启；不会修改系统代理设置。
 
-GUI 或 headless 的配置应用长时间等待集合下载时，可在另一个终端运行 `& $agent cancel-apply`，或调用 MCP 的 `netflow_cancel_apply`。返回 `accepted: true` 表示已请求取消当时正在进行的配置应用，**不表示回滚已经完成**；等待原操作结束，再用 `status` 检查结果。返回 `false` 表示请求到达时没有可取消的应用。取消本身不主动关闭 TUN；应用和回滚仍可能影响已有连接。
+GUI 或 headless 的配置应用长时间等待集合下载时，可在另一个终端运行 `& $agent cancel-apply`，或调用 MCP 的 `netflow_cancel_apply`。返回 `accepted: true` 表示已请求取消当时正在进行的配置应用，**不表示回滚已经完成**；等待原操作结束，再用 `status` 检查结果。返回 `false` 表示请求到达时没有可取消的应用、事务已进入回滚或另一项取消正在处理。取消本身不主动关闭 TUN；应用和回滚仍可能影响已有连接。
 
 如果已批准脚本的存档或输出丢失而导致内核无法启动，可使用 `& $agent serve --recovery` 启动不启用 TUN 的恢复服务，再预览并应用关闭脚本的提案。恢复服务就绪 JSON 的 `core_running` 可能为 `false`；应用恢复设置后关闭该服务，再正常启动。不可在恢复模式中同时请求 `--tun=true`。
 

@@ -95,13 +95,46 @@ func (a *App) dispatchAgent(ctx context.Context, method string, args json.RawMes
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		if !a.agentCancelGate.TryLock() {
+			return agent.CancelApplyResult{Accepted: false}, nil
+		}
+		operation := a.guiBarrier.Load()
+		if operation != nil {
+			a.agentCancelGate.Unlock()
+			accepted := false
+			a.runOnMainUnrestricted(func() {
+				if ctx.Err() != nil || a.guiOperation != operation || operation.rollback || operation.canceled {
+					return
+				}
+				a.cancelGUIConfigOperation(operation)
+				accepted = true
+			})
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return agent.CancelApplyResult{Accepted: accepted}, nil
+		}
 		engine, ok := a.core.(interface {
 			CancelActiveApply(context.Context) (bool, error)
 		})
 		if !ok {
+			a.agentCancelGate.Unlock()
 			return nil, errors.New("kernel does not support canceling configuration application")
 		}
-		accepted, err := engine.CancelActiveApply(ctx)
+		// A remote cancellation may still be in flight after the caller leaves.
+		// Keep new transactions out until its worker-side deadline has passed.
+		deadline := time.Now().Add(2 * time.Second)
+		if earlier, ok := ctx.Deadline(); ok && earlier.Before(deadline) {
+			deadline = earlier
+		}
+		cancelCtx, stop := context.WithDeadline(ctx, deadline)
+		accepted, err := engine.CancelActiveApply(cancelCtx)
+		stop()
+		if err != nil && time.Until(deadline) > 0 {
+			time.AfterFunc(time.Until(deadline), a.agentCancelGate.Unlock)
+		} else {
+			a.agentCancelGate.Unlock()
+		}
 		if err != nil {
 			return nil, err
 		}

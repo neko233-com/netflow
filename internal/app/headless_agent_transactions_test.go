@@ -26,20 +26,30 @@ import (
 )
 
 func TestHeadlessAgentTransactionsRestoreStateOnShutdown(t *testing.T) {
-	for _, trigger := range []string{"shutdown", "request-cancel"} {
+	for _, trigger := range []string{"shutdown", "request-cancel", "repeat-cancel"} {
 		for _, operation := range []string{"mode", "kernel-option", "use-profile", "apply"} {
+			if trigger == "repeat-cancel" && operation != "mode" {
+				continue
+			}
 			t.Run(trigger+"/"+operation, func(t *testing.T) {
 				t.Setenv("CI", "1")
 				entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+				rollbackEntered, rollbackCanceled := make(chan struct{}), make(chan struct{})
 				var enteredOnce, canceledOnce, releaseOnce sync.Once
 				unblock := func() { releaseOnce.Do(func() { close(release) }) }
 				var requests atomic.Int32
 				provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					requests.Add(1)
+					number := requests.Add(1)
 					enteredOnce.Do(func() { close(entered) })
+					if number == 2 {
+						close(rollbackEntered)
+					}
 					select {
 					case <-r.Context().Done():
 						canceledOnce.Do(func() { close(canceled) })
+						if number == 2 {
+							close(rollbackCanceled)
+						}
 					case <-release:
 						_, _ = io.WriteString(w, "proxies: [{name: fresh, type: direct}]\n")
 					}
@@ -132,15 +142,36 @@ func TestHeadlessAgentTransactionsRestoreStateOnShutdown(t *testing.T) {
 					if err := client.Call(context.Background(), "shutdown", nil, &shutdown); err != nil || !shutdown.OK {
 						t.Fatalf("shutdown: %+v %v", shutdown, err)
 					}
-				} else {
+				} else if trigger == "request-cancel" {
 					cancelRequest()
+				} else {
+					var applied agent.CancelApplyResult
+					if err := client.Call(context.Background(), "cancel-apply", nil, &applied); err != nil || !applied.Accepted {
+						t.Fatalf("initial cancellation: %+v %v", applied, err)
+					}
 				}
 				select {
 				case <-canceled:
 				case <-time.After(10 * time.Second):
 					t.Fatal("provider was not canceled")
 				}
-				if trigger == "request-cancel" {
+				if trigger == "repeat-cancel" {
+					select {
+					case <-rollbackEntered:
+					case <-time.After(10 * time.Second):
+						t.Fatal("rollback provider did not start")
+					}
+					var applied agent.CancelApplyResult
+					if err := client.Call(context.Background(), "cancel-apply", nil, &applied); err != nil || applied.Accepted {
+						t.Fatalf("rollback cancellation: %+v %v", applied, err)
+					}
+					select {
+					case <-rollbackCanceled:
+						t.Fatal("rollback provider was canceled")
+					case <-time.After(100 * time.Millisecond):
+					}
+				}
+				if trigger != "shutdown" {
 					unblock()
 				}
 				select {
@@ -148,10 +179,10 @@ func TestHeadlessAgentTransactionsRestoreStateOnShutdown(t *testing.T) {
 				case <-time.After(5 * time.Second):
 					t.Fatal("queued mutation did not return")
 				}
-				if mutated.Load() != (trigger == "request-cancel") {
+				if mutated.Load() != (trigger != "shutdown") {
 					t.Fatalf("queued mutation state after %s: %t", trigger, mutated.Load())
 				}
-				if trigger == "request-cancel" {
+				if trigger != "shutdown" {
 					var shutdown agent.ActionResult
 					if err := client.Call(context.Background(), "shutdown", nil, &shutdown); err != nil || !shutdown.OK {
 						t.Fatalf("shutdown after request cancellation: %+v %v", shutdown, err)

@@ -142,7 +142,8 @@ type App struct {
 	headlessStopping    atomic.Bool
 	guiOperation        *guiConfigOperation // event loop only
 	guiBarrier          atomic.Pointer[guiConfigOperation]
-	guiQuit             func() // optional event-loop quit hook
+	agentCancelGate     sync.Mutex // serializes direct cancellation with transaction startup
+	guiQuit             func()     // optional event-loop quit hook
 }
 
 // New checks options and fills the M1 defaults. It does not start the
